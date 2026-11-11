@@ -1,0 +1,44 @@
+{
+  "name": "charlie",
+  "version": "0.0.1",
+  "description": "Charlie - multi-agent coding assistant (Phase 0)",
+  "main": "./out/main/index.js",
+  "author": "carlolomello",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "dist:mac": "electron-vite build && electron-builder --mac",
+    "dist:win": "electron-vite build && electron-builder --win",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test": "vitest run",
+    "engine": "tsx src/engine/cli.ts",
+    "charlie:doctor": "tsx src/engine/cli.ts doctor",
+    "models": "tsx src/engine/cli.ts models",
+    "probe": "tsx src/engine/cli.ts probe",
+    "smoke": "tsx src/engine/cli.ts smoke",
+    "mock": "node scripts/mock-router.mjs"
+  },
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "^3.0.90",
+    "ai": "7.0.169",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.3.0",
+    "electron": "^45.3.0",
+    "electron-builder": "^26.18.0",
+    "electron-vite": "^6.0.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  }
+}

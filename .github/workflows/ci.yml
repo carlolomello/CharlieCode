@@ -1,0 +1,59 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  engine:
+    name: engine (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: install
+        run: pnpm install --frozen-lockfile
+
+      - name: unit tests
+        run: pnpm test
+
+      - name: typecheck
+        run: pnpm typecheck
+
+      - name: build
+        run: pnpm build
+
+      # End-to-end against the mock OpenAI-compatible router: catalog, streaming,
+      # 429 handling, fallback and the capability probe. Runs on real Windows.
+      - name: engine e2e (mock router)
+        shell: bash
+        run: |
+          node scripts/mock-router.mjs 3999 &
+          MOCK_PID=$!
+          sleep 3
+
+          export CHARLIE_CONFIG_DIR="$RUNNER_TEMP/charlie-config"
+          export CHARLIE_BASE_URL="http://localhost:3999/v1"
+          export NO_COLOR=1
+
+          pnpm models
+          pnpm smoke "ci smoke" | tee smoke.txt
+          grep -q "mock" smoke.txt
+          pnpm probe --limit 3 | tee probe.txt
+          grep -q "echo-fast" probe.txt
+
+          kill $MOCK_PID || true
