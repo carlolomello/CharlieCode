@@ -2,6 +2,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { APICallError, streamText, type ModelMessage } from 'ai'
 import { findModel } from './catalog'
 import { resolveApiKey } from './config'
+import { getDetectedBaseUrl } from './discovery'
 import type { Platform } from './platform'
 import type {
   CharlieConfig,
@@ -26,13 +27,16 @@ export async function providerFor(
   provider: ProviderConfig
 ): Promise<CompatibleProvider> {
   const { apiKey } = await resolveApiKey(platform, provider)
-  const cacheKey = `${provider.id}|${provider.baseUrl}|${apiKey ?? ''}`
+  // The catalog may have discovered the router on a different port; chat calls
+  // must follow it, otherwise models load but inference hits a dead endpoint.
+  const baseUrl = getDetectedBaseUrl(provider.id) ?? provider.baseUrl
+  const cacheKey = `${provider.id}|${baseUrl}|${apiKey ?? ''}`
   const cached = providerCache.get(cacheKey)
   if (cached) return cached
 
   const instance = createOpenAICompatible({
     name: provider.id,
-    baseURL: provider.baseUrl,
+    baseURL: baseUrl,
     ...(apiKey ? { apiKey } : {})
   })
   providerCache.set(cacheKey, instance)

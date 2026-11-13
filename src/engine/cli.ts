@@ -9,6 +9,7 @@ import {
   resolveApiKey
 } from './config'
 import { createPlatform } from './platform'
+import { detectRouterBaseUrl } from './discovery'
 import { formatProbeTable, probeModels } from './probe'
 import { describeNetworkError } from './errors'
 import type { CharlieConfig, EffortLevel, ModelEntry } from './types'
@@ -106,9 +107,16 @@ async function commandDoctor(): Promise<void> {
       console.log(`  ${dim('stato')}       ${red('non raggiungibile')}`)
       console.log(`  ${dim('dettaglio')}    ${message}`)
       if (provider.kind === 'router') {
-        console.log(
-          `  ${dim('suggerimento')} avvia FreeLLMAPI (porta 3001) oppure imposta CHARLIE_BASE_URL`
-        )
+        const detected = await detectRouterBaseUrl(provider)
+        if (detected) {
+          console.log(
+            `  ${dim('rilevato')}     ${green(detected)} ${dim(`→ aggiorna "baseUrl" in ${platform.configPath(CONFIG_FILE)}`)}`
+          )
+        } else {
+          console.log(
+            `  ${dim('suggerimento')} avvia il router oppure imposta CHARLIE_BASE_URL`
+          )
+        }
       }
     }
   }

@@ -1,0 +1,52 @@
+name: release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (dmg x64 + arm64)
+            os: macos-latest
+            script: dist:mac
+            artifacts: release/*.dmg
+          - name: Windows (installer x64)
+            os: windows-latest
+            script: dist:win
+            artifacts: release/*.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm test
+
+      - name: build installer
+        run: pnpm ${{ matrix.script }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: charlie-${{ matrix.os }}
+          path: ${{ matrix.artifacts }}
+          if-no-files-found: error
+          retention-days: 14

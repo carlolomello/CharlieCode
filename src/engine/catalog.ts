@@ -1,4 +1,9 @@
 import { resolveApiKey } from './config'
+import {
+  detectRouterBaseUrl,
+  getDetectedBaseUrl,
+  rememberDetectedBaseUrl
+} from './discovery'
 import { describeNetworkError } from './errors'
 import type { Platform } from './platform'
 import type {
@@ -82,19 +87,64 @@ function declaredCaps(entry: unknown): Partial<ModelCaps> | undefined {
   }
 }
 
+async function requestModels(baseUrl: string, apiKey?: string): Promise<Response> {
+  return fetch(`${baseUrl.replace(/\/+$/, '')}/models`, {
+    headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
+    signal: AbortSignal.timeout(10_000)
+  })
+}
+
+export interface ProviderModelsResult {
+  models: ModelEntry[]
+  /** Human-readable note about models the router reported as unusable. */
+  notice?: string
+}
+
+const UNAVAILABLE_REASONS: Record<string, string> = {
+  no_key: 'nessuna key del provider',
+  no_models: 'nessun modello abilitato',
+  rate_limited: 'rate limit',
+  disabled: 'provider disabilitato'
+}
+
+function describeReason(reason: unknown): string {
+  if (typeof reason !== 'string') return 'motivo sconosciuto'
+  return UNAVAILABLE_REASONS[reason] ?? reason.replace(/_/g, ' ')
+}
+
 export async function fetchProviderModels(
   platform: Platform,
   provider: ProviderConfig
-): Promise<ModelEntry[]> {
+): Promise<ProviderModelsResult> {
   const { apiKey } = await resolveApiKey(platform, provider)
-  const url = `${provider.baseUrl.replace(/\/+$/, '')}/models`
 
-  const response = await fetch(url, {
-    headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
-    signal: AbortSignal.timeout(10_000)
-  }).catch((error: unknown) => {
-    throw new Error(`${provider.label}: ${describeNetworkError(error)}`)
-  })
+  let baseUrl = getDetectedBaseUrl(provider.id) ?? provider.baseUrl
+  let response: Response
+
+  try {
+    response = await requestModels(baseUrl, apiKey)
+  } catch (error) {
+    // A dead router is the single most common setup problem (wrong port).
+    // Before failing, look for the router on the usual ports.
+    if (provider.kind !== 'router') {
+      throw new Error(`${provider.label}: ${describeNetworkError(error)}`)
+    }
+
+    const detected = await detectRouterBaseUrl(provider)
+    if (!detected) {
+      throw new Error(
+        `${provider.label}: ${describeNetworkError(error)} (porte provate: ${provider.baseUrl})`
+      )
+    }
+
+    rememberDetectedBaseUrl(provider.id, detected)
+    baseUrl = detected
+    response = await requestModels(detected, apiKey).catch((retryError: unknown) => {
+      throw new Error(`${provider.label}: ${describeNetworkError(retryError)}`)
+    })
+  }
+
+  const url = `${baseUrl.replace(/\/+$/, '')}/models`
 
   if (!response.ok) {
     const body = (await response.text().catch(() => '')).slice(0, 200)
@@ -107,14 +157,22 @@ export async function fetchProviderModels(
 
   const entries = Array.isArray(rawList) ? rawList : []
   const models: ModelEntry[] = []
+  const unavailable: string[] = []
 
   for (const raw of entries) {
     const id = normalizeModelId(raw)
     if (!id || !isChatModel(id)) continue
 
+    const record = asRecord(raw)
+    // Routers like FreeLLMAPI tell us which models are actually usable right
+    // now. Showing the rest would produce 503s on the first message.
+    if (record?.available === false) {
+      unavailable.push(describeReason(record.unavailable_reason))
+      continue
+    }
+
     const guessed = guessCaps(id)
     const declared = declaredCaps(raw) ?? {}
-    const record = asRecord(raw)
     const label =
       (typeof record?.name === 'string' && record.name) ||
       (typeof record?.display_name === 'string' && record.display_name) ||
@@ -136,7 +194,18 @@ export async function fetchProviderModels(
     })
   }
 
-  return models
+  let notice: string | undefined
+  if (unavailable.length > 0) {
+    const counts = new Map<string, number>()
+    for (const reason of unavailable) counts.set(reason, (counts.get(reason) ?? 0) + 1)
+    const detail = [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([reason, count]) => `${reason} (${count})`)
+      .join(', ')
+    notice = `${unavailable.length} modelli nascosti: ${detail}. Aggiungi le provider key nella dashboard del router.`
+  }
+
+  return { models, notice }
 }
 
 export async function loadCatalog(
@@ -154,7 +223,11 @@ export async function loadCatalog(
     const provider = enabled[index]
     if (!provider) return
     if (result.status === 'fulfilled') {
-      models.push(...applyOverrides(result.value.models, config))
+      const { models: providerModels, notice } = result.value.models
+      if (notice) {
+        errors.push({ providerId: provider.id, providerLabel: provider.label, message: notice })
+      }
+      models.push(...applyOverrides(providerModels, config))
     } else {
       errors.push({
         providerId: provider.id,
