@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { resolveCandidates } from './client'
-import type { CharlieConfig, ModelEntry } from './types'
+import type { CharlieCodeConfig, ModelEntry } from './types'
 
 const provider = {
   id: 'freellmapi',
@@ -23,7 +23,7 @@ function model(id: string): ModelEntry {
   }
 }
 
-const config: CharlieConfig = {
+const config: CharlieCodeConfig = {
   version: 1,
   providers: [provider],
   modelOverrides: {},

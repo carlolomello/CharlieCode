@@ -34,7 +34,7 @@ export default function App() {
   const refreshModels = useCallback(async (): Promise<void> => {
     setLoadingModels(true)
     try {
-      const response = await window.charlie.models()
+      const response = await window.charliecode.models()
       setModels(response.models)
       setErrors(response.errors)
       setModelKey((current) => {
@@ -52,12 +52,12 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    void window.charlie.info().then(setInfo)
+    void window.charliecode.info().then(setInfo)
     void refreshModels()
   }, [refreshModels])
 
   useEffect(() => {
-    const unsubscribe = window.charlie.onChatEvent(({ requestId, event }: ChatEventEnvelope) => {
+    const unsubscribe = window.charliecode.onChatEvent(({ requestId, event }: ChatEventEnvelope) => {
       setItems((previous) =>
         previous.map((item) => {
           if (item.id !== requestId) return item
@@ -131,7 +131,7 @@ export default function App() {
     setFatal(null)
 
     try {
-      const result = await window.charlie.startChat({
+      const result = await window.charliecode.startChat({
         requestId,
         modelKey,
         effort,
@@ -161,7 +161,7 @@ export default function App() {
 
   const stop = useCallback(async (): Promise<void> => {
     if (!streamingId) return
-    await window.charlie.stopChat(streamingId)
+    await window.charliecode.stopChat(streamingId)
   }, [streamingId])
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -179,7 +179,7 @@ export default function App() {
         <div className="brand">
           <span className="brand-mark">C</span>
           <div>
-            <div className="brand-name">Charlie</div>
+            <div className="brand-name">CharlieCode</div>
             <div className="brand-sub">
               phase 0 · {info?.platform ?? '…'} · engine {info?.version ?? ''}
             </div>
@@ -239,7 +239,7 @@ export default function App() {
           <section className="setup">
             <h1>Nessun modello disponibile</h1>
             <p>
-              Charlie parla con qualsiasi endpoint OpenAI-compatible. Il default è FreeLLMAPI in
+              CharlieCode parla con qualsiasi endpoint OpenAI-compatible. Il default è FreeLLMAPI in
               locale: senza router e senza key non ci sono modelli.
             </p>
             <ol>
@@ -250,7 +250,7 @@ export default function App() {
                 Aggiungi key free nella dashboard (Google AI Studio, Groq, Cerebras, OpenRouter)
               </li>
               <li>
-                Salva la unified key in <code>{info?.credentialsPath ?? '~/.charlie/credentials.json'}</code>
+                Salva la unified key in <code>{info?.credentialsPath ?? '~/.charliecode/credentials.json'}</code>
                 :
                 <pre>{`{ "freellmapi": { "apiKey": "freellmapi-..." } }`}</pre>
               </li>
@@ -259,11 +259,11 @@ export default function App() {
               </li>
             </ol>
             <div className="setup-actions">
-              <button onClick={() => void window.charlie.openConfigDir()}>Apri cartella config</button>
+              <button onClick={() => void window.charliecode.openConfigDir()}>Apri cartella config</button>
             </div>
             <p className="muted">
               In alternativa: <code>export FREELLMAPI_KEY=…</code> — oppure verifica da terminale con{' '}
-              <code>pnpm charlie:doctor</code>.
+              <code>pnpm charliecode:doctor</code>.
             </p>
           </section>
         ) : items.length === 0 ? (

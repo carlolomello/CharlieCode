@@ -46,8 +46,8 @@ jobs:
           MOCK_PID=$!
           sleep 3
 
-          export CHARLIE_CONFIG_DIR="$RUNNER_TEMP/charlie-config"
-          export CHARLIE_BASE_URL="http://localhost:3999/v1"
+          export CHARLIECODE_CONFIG_DIR="$RUNNER_TEMP/charliecode-config"
+          export CHARLIECODE_BASE_URL="http://localhost:3999/v1"
           export NO_COLOR=1
 
           pnpm models

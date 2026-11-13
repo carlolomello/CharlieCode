@@ -5,7 +5,7 @@ import { resolveApiKey } from './config'
 import { getDetectedBaseUrl } from './discovery'
 import type { Platform } from './platform'
 import type {
-  CharlieConfig,
+  CharlieCodeConfig,
   EffortLevel,
   EngineEvent,
   ModelEntry,
@@ -117,7 +117,7 @@ function toModelMessages(messages: StreamRequest['messages']): ModelMessage[] {
 
 export interface ChatDeps {
   platform: Platform
-  config: CharlieConfig
+  config: CharlieCodeConfig
   models: ModelEntry[]
 }
 
@@ -150,7 +150,7 @@ export function resolveCandidates(
   return { candidates }
 }
 
-function resolveEffort(request: StreamRequest, model: ModelEntry, config: CharlieConfig): EffortLevel {
+function resolveEffort(request: StreamRequest, model: ModelEntry, config: CharlieCodeConfig): EffortLevel {
   return request.effort ?? model.effort ?? config.effort
 }
 

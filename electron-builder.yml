@@ -1,5 +1,5 @@
-appId: co.charlie.app
-productName: Charlie
+appId: co.charliecode.app
+productName: CharlieCode
 directories:
   output: release
 files:

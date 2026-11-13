@@ -36,7 +36,7 @@ export interface ModelOverride {
   caps?: Partial<ModelCaps>
 }
 
-export interface CharlieConfig {
+export interface CharlieCodeConfig {
   version: 1
   providers: ProviderConfig[]
   /** Keyed by `providerId::modelId` (or bare `modelId`). */

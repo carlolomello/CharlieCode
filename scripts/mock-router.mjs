@@ -8,7 +8,7 @@
  *
  * Usage:
  *   node scripts/mock-router.mjs [port]
- *   CHARLIE_BASE_URL=http://localhost:3999/v1 pnpm models
+ *   CHARLIECODE_BASE_URL=http://localhost:3999/v1 pnpm models
  */
 
 import { createServer } from 'node:http'
@@ -127,7 +127,7 @@ async function streamChat(res, body) {
 function nonStreamingChat(res, body) {
   const model = body.model ?? 'mock/echo-fast'
   const wantsTools = Array.isArray(body.tools) && body.tools.length > 0
-  const toolName = body.tools?.[0]?.function?.name ?? 'charlie_ping'
+  const toolName = body.tools?.[0]?.function?.name ?? 'charliecode_ping'
 
   if (wantsTools) {
     sendJson(res, 200, {

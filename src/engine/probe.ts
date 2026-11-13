@@ -5,7 +5,7 @@ import { findModel } from './catalog'
 import { providerFor, resetProviderCache } from './client'
 import { loadConfig, saveConfig } from './config'
 import type { Platform } from './platform'
-import type { CharlieConfig, ModelEntry, ProbeResult } from './types'
+import type { CharlieCodeConfig, ModelEntry, ProbeResult } from './types'
 
 export const PROBE_REPORT_FILE = 'probe-report.json'
 
@@ -24,7 +24,7 @@ function sleep(ms: number): Promise<void> {
 
 async function probeOne(
   platform: Platform,
-  config: CharlieConfig,
+  config: CharlieCodeConfig,
   model: ModelEntry,
   timeoutMs: number
 ): Promise<ProbeResult> {
@@ -51,9 +51,9 @@ async function probeOne(
     const result = await generateText({
       model: compat.chatModel(model.id),
       prompt:
-        'You are a capability probe. Call the tool `charlie_ping` exactly once with nonce="hello". Do not reply with text.',
+        'You are a capability probe. Call the tool `charliecode_ping` exactly once with nonce="hello". Do not reply with text.',
       tools: {
-        charlie_ping: tool({
+        charliecode_ping: tool({
           description: 'Ping tool used to detect native tool-calling support.',
           inputSchema: z.object({ nonce: z.string().describe('A nonce to echo back') })
         })
@@ -88,7 +88,7 @@ async function probeOne(
  */
 export async function probeModels(
   platform: Platform,
-  config: CharlieConfig,
+  config: CharlieCodeConfig,
   models: ModelEntry[],
   options: ProbeOptions = {}
 ): Promise<ProbeResult[]> {
@@ -123,7 +123,7 @@ export async function probeModels(
   )
 
   if (options.saveOverrides) {
-    const next: CharlieConfig = { ...config, modelOverrides: { ...config.modelOverrides } }
+    const next: CharlieCodeConfig = { ...config, modelOverrides: { ...config.modelOverrides } }
     for (const result of results) {
       if (!result.ok) continue
       const existing = next.modelOverrides[result.modelKey] ?? {}

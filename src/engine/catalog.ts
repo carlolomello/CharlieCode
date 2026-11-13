@@ -9,7 +9,7 @@ import type { Platform } from './platform'
 import type {
   CatalogError,
   CatalogResult,
-  CharlieConfig,
+  CharlieCodeConfig,
   ModelCaps,
   ModelEntry,
   ProviderConfig
@@ -210,7 +210,7 @@ export async function fetchProviderModels(
 
 export async function loadCatalog(
   platform: Platform,
-  config: CharlieConfig
+  config: CharlieCodeConfig
 ): Promise<CatalogResult> {
   const enabled = config.providers.filter((p) => p.enabled)
   const errors: CatalogError[] = []
@@ -245,7 +245,7 @@ export async function loadCatalog(
   return { models, errors }
 }
 
-export function applyOverrides(models: ModelEntry[], config: CharlieConfig): ModelEntry[] {
+export function applyOverrides(models: ModelEntry[], config: CharlieCodeConfig): ModelEntry[] {
   return models.map((model) => {
     const override = config.modelOverrides[model.key] ?? config.modelOverrides[model.id]
     if (!override) {

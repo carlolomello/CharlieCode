@@ -17,7 +17,7 @@ export interface Platform {
   id: string
   isWindows: boolean
   homeDir: string
-  /** Root of user configuration: `<home>/.charlie` unless CHARLIE_CONFIG_DIR is set. */
+  /** Root of user configuration: `<home>/.charliecode` unless CHARLIECODE_CONFIG_DIR is set. */
   configDir: string
   pathSep: string
   eol: '\n' | '\r\n'
@@ -50,7 +50,7 @@ export function createPlatform(options: PlatformOptions = {}): Platform {
   // Path handling follows the *emulated* platform, not the host: this is what
   // lets the Windows code paths be unit-tested from macOS and on CI.
   const paths = isWindows ? win32 : posix
-  const configDir = env.CHARLIE_CONFIG_DIR ?? paths.join(homeDir, '.charlie')
+  const configDir = env.CHARLIECODE_CONFIG_DIR ?? paths.join(homeDir, '.charliecode')
 
   return {
     id,

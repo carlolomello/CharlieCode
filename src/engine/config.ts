@@ -2,12 +2,12 @@ import { existsSync } from 'node:fs'
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Platform } from './platform'
-import type { CharlieConfig, ProviderConfig } from './types'
+import type { CharlieCodeConfig, ProviderConfig } from './types'
 
 export const CONFIG_FILE = 'config.json'
 export const CREDENTIALS_FILE = 'credentials.json'
 
-export const DEFAULT_CONFIG: CharlieConfig = {
+export const DEFAULT_CONFIG: CharlieCodeConfig = {
   version: 1,
   providers: [
     {
@@ -24,7 +24,7 @@ export const DEFAULT_CONFIG: CharlieConfig = {
   effort: 'none'
 }
 
-export function defaultConfig(): CharlieConfig {
+export function defaultConfig(): CharlieCodeConfig {
   return structuredClone(DEFAULT_CONFIG)
 }
 
@@ -32,7 +32,7 @@ export async function ensureConfigDir(platform: Platform): Promise<void> {
   await mkdir(platform.configDir, { recursive: true })
 }
 
-function mergeConfig(partial: Partial<CharlieConfig>): CharlieConfig {
+function mergeConfig(partial: Partial<CharlieCodeConfig>): CharlieCodeConfig {
   const base = defaultConfig()
   const providers: ProviderConfig[] = [...(partial.providers ?? [])]
 
@@ -53,7 +53,7 @@ function mergeConfig(partial: Partial<CharlieConfig>): CharlieConfig {
 }
 
 export interface LoadConfigResult {
-  config: CharlieConfig
+  config: CharlieCodeConfig
   path: string
   created: boolean
 }
@@ -69,7 +69,7 @@ export async function loadConfig(platform: Platform): Promise<LoadConfigResult> 
 
   const raw = await readFile(path, 'utf8')
   try {
-    const config = applyEnvOverrides(mergeConfig(JSON.parse(raw) as Partial<CharlieConfig>))
+    const config = applyEnvOverrides(mergeConfig(JSON.parse(raw) as Partial<CharlieCodeConfig>))
     return { config, path, created: false }
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
@@ -78,11 +78,11 @@ export async function loadConfig(platform: Platform): Promise<LoadConfigResult> 
 }
 
 /**
- * `CHARLIE_BASE_URL` lets you point the app at another router (LAN, remote
+ * `CHARLIECODE_BASE_URL` lets you point the app at another router (LAN, remote
  * gateway, test fixture) without editing the config file.
  */
-function applyEnvOverrides(config: CharlieConfig): CharlieConfig {
-  const baseUrl = process.env.CHARLIE_BASE_URL
+function applyEnvOverrides(config: CharlieCodeConfig): CharlieCodeConfig {
+  const baseUrl = process.env.CHARLIECODE_BASE_URL
   if (!baseUrl) return config
   return {
     ...config,
@@ -92,7 +92,7 @@ function applyEnvOverrides(config: CharlieConfig): CharlieConfig {
   }
 }
 
-export async function saveConfig(platform: Platform, config: CharlieConfig): Promise<string> {
+export async function saveConfig(platform: Platform, config: CharlieCodeConfig): Promise<string> {
   await ensureConfigDir(platform)
   const path = platform.configPath(CONFIG_FILE)
   await writeFile(path, `${JSON.stringify(config, null, 2)}\n`, 'utf8')
@@ -100,7 +100,7 @@ export async function saveConfig(platform: Platform, config: CharlieConfig): Pro
 }
 
 /**
- * `CHARLIE_CONFIG_DIR` exists so tests and CI never touch the real user config.
+ * `CHARLIECODE_CONFIG_DIR` exists so tests and CI never touch the real user config.
  */
 export function configDirFor(platform: Platform, ...segments: string[]): string {
   return join(platform.configDir, ...segments)
@@ -131,9 +131,9 @@ export async function resolveApiKey(
   platform: Platform,
   provider: ProviderConfig
 ): Promise<ApiKeyResolution> {
-  const globalOverride = process.env.CHARLIE_API_KEY
+  const globalOverride = process.env.CHARLIECODE_API_KEY
   if (globalOverride) {
-    return { apiKey: globalOverride, source: 'env', hint: 'da CHARLIE_API_KEY' }
+    return { apiKey: globalOverride, source: 'env', hint: 'da CHARLIECODE_API_KEY' }
   }
 
   if (provider.apiKeyEnv) {
@@ -162,7 +162,7 @@ export async function resolveApiKey(
 
   return {
     source: 'none',
-    hint: `imposta ${provider.apiKeyEnv ?? 'CHARLIE_API_KEY'} oppure ${platform.configPath(CREDENTIALS_FILE)}`
+    hint: `imposta ${provider.apiKeyEnv ?? 'CHARLIECODE_API_KEY'} oppure ${platform.configPath(CREDENTIALS_FILE)}`
   }
 }
 

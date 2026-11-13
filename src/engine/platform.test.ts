@@ -12,8 +12,8 @@ describe('createPlatform', () => {
     expect(platform.shell.command).toBe('cmd.exe')
     expect(platform.eol).toBe('\r\n')
     expect(platform.pathSep).toBe('\\')
-    expect(platform.configDir).toBe('C:\\Users\\carlo\\.charlie')
-    expect(platform.configPath('config.json')).toBe('C:\\Users\\carlo\\.charlie\\config.json')
+    expect(platform.configDir).toBe('C:\\Users\\carlo\\.charliecode')
+    expect(platform.configPath('config.json')).toBe('C:\\Users\\carlo\\.charliecode\\config.json')
   })
 
   it('emula macOS: zsh, slash, LF', () => {
@@ -22,19 +22,19 @@ describe('createPlatform', () => {
     expect(platform.isWindows).toBe(false)
     expect(platform.shell.command).toBe('/bin/zsh')
     expect(platform.eol).toBe('\n')
-    expect(platform.configDir).toBe('/Users/carlo/.charlie')
+    expect(platform.configDir).toBe('/Users/carlo/.charliecode')
   })
 
-  it('rispetta CHARLIE_CONFIG_DIR su entrambe le piattaforme', () => {
+  it('rispetta CHARLIECODE_CONFIG_DIR su entrambe le piattaforme', () => {
     expect(
-      createPlatform({ id: 'darwin', env: { HOME: '/Users/carlo', CHARLIE_CONFIG_DIR: '/tmp/x' } })
+      createPlatform({ id: 'darwin', env: { HOME: '/Users/carlo', CHARLIECODE_CONFIG_DIR: '/tmp/x' } })
         .configDir
     ).toBe('/tmp/x')
 
     expect(
       createPlatform({
         id: 'win32',
-        env: { USERPROFILE: 'C:\\Users\\carlo', CHARLIE_CONFIG_DIR: 'D:\\temp\\x' }
+        env: { USERPROFILE: 'C:\\Users\\carlo', CHARLIECODE_CONFIG_DIR: 'D:\\temp\\x' }
       }).configDir
     ).toBe('D:\\temp\\x')
   })

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyOverrides, findModel, guessCaps, isChatModel } from './catalog'
-import type { CharlieConfig, ModelEntry } from './types'
+import type { CharlieCodeConfig, ModelEntry } from './types'
 
 describe('isChatModel', () => {
   it('scarta embedding e modelli media', () => {
@@ -35,7 +35,7 @@ const baseModel: ModelEntry = {
   effort: 'none'
 }
 
-function config(overrides: CharlieConfig['modelOverrides']): CharlieConfig {
+function config(overrides: CharlieCodeConfig['modelOverrides']): CharlieCodeConfig {
   return {
     version: 1,
     providers: [],

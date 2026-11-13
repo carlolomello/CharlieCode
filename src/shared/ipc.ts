@@ -34,7 +34,7 @@ export interface ChatEventEnvelope {
   event: EngineEvent
 }
 
-export interface CharlieApi {
+export interface CharlieCodeApi {
   info(): Promise<AppInfo>
   models(): Promise<ModelsResponse>
   startChat(payload: ChatStartPayload): Promise<{ ok: boolean; error?: string }>

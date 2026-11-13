@@ -17,7 +17,7 @@ function createWindow(): BrowserWindow {
     minHeight: 600,
     show: false,
     backgroundColor: '#0e1116',
-    title: 'Charlie',
+    title: 'CharlieCode',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -34,11 +34,11 @@ function createWindow(): BrowserWindow {
   })
 
   window.webContents.on('did-finish-load', () => {
-    console.log('[charlie] renderer loaded')
+    console.log('[charliecode] renderer loaded')
   })
 
   window.webContents.on('render-process-gone', (_event, details) => {
-    console.error('[charlie] renderer crashed:', details.reason)
+    console.error('[charliecode] renderer crashed:', details.reason)
   })
 
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -51,8 +51,8 @@ function createWindow(): BrowserWindow {
 }
 
 function registerIpc(): void {
-  ipcMain.handle('charlie:info', (): AppInfo => {
-    console.log('[charlie] renderer connected')
+  ipcMain.handle('charliecode:info', (): AppInfo => {
+    console.log('[charliecode] renderer connected')
     const { path } = { path: platform.configPath(CONFIG_FILE) }
     return {
       version: app.getVersion(),
@@ -64,14 +64,14 @@ function registerIpc(): void {
     }
   })
 
-  ipcMain.handle('charlie:models', async (): Promise<ModelsResponse> => {
+  ipcMain.handle('charliecode:models', async (): Promise<ModelsResponse> => {
     const { config } = await loadConfig(platform)
     const { models, errors } = await loadCatalog(platform, config)
     return { models, errors }
   })
 
   ipcMain.handle(
-    'charlie:chat:start',
+    'charliecode:chat:start',
     async (event, payload: ChatStartPayload): Promise<{ ok: boolean; error?: string }> => {
       if (inFlight.has(payload.requestId)) {
         return { ok: false, error: 'Richiesta già in corso' }
@@ -102,11 +102,11 @@ function registerIpc(): void {
 
           for await (const engineEvent of stream) {
             if (sender.isDestroyed()) break
-            sender.send('charlie:chat:event', { requestId: payload.requestId, event: engineEvent })
+            sender.send('charliecode:chat:event', { requestId: payload.requestId, event: engineEvent })
           }
         } catch (error) {
           if (!sender.isDestroyed()) {
-            sender.send('charlie:chat:event', {
+            sender.send('charliecode:chat:event', {
               requestId: payload.requestId,
               event: {
                 type: 'error',
@@ -117,7 +117,7 @@ function registerIpc(): void {
         } finally {
           inFlight.delete(payload.requestId)
           if (!sender.isDestroyed()) {
-            sender.send('charlie:chat:end', { requestId: payload.requestId })
+            sender.send('charliecode:chat:end', { requestId: payload.requestId })
           }
         }
       })()
@@ -126,12 +126,12 @@ function registerIpc(): void {
     }
   )
 
-  ipcMain.handle('charlie:chat:stop', (_event, requestId: string): void => {
+  ipcMain.handle('charliecode:chat:stop', (_event, requestId: string): void => {
     inFlight.get(requestId)?.abort()
     inFlight.delete(requestId)
   })
 
-  ipcMain.handle('charlie:open-config', async (): Promise<void> => {
+  ipcMain.handle('charliecode:open-config', async (): Promise<void> => {
     await shell.openPath(platform.configDir)
   })
 }

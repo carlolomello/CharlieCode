@@ -12,7 +12,7 @@ import { createPlatform } from './platform'
 import { detectRouterBaseUrl } from './discovery'
 import { formatProbeTable, probeModels } from './probe'
 import { describeNetworkError } from './errors'
-import type { CharlieConfig, EffortLevel, ModelEntry } from './types'
+import type { CharlieCodeConfig, EffortLevel, ModelEntry } from './types'
 
 const useColor = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR
 const paint = (code: number) => (text: string) => (useColor ? `\x1b[${code}m${text}\x1b[0m` : text)
@@ -42,7 +42,7 @@ function fail(message: string): never {
   process.exit(1)
 }
 
-function resolveModel(config: CharlieConfig, models: ModelEntry[]): ModelEntry {
+function resolveModel(config: CharlieCodeConfig, models: ModelEntry[]): ModelEntry {
   const explicit = flag('--model')
   if (explicit) {
     const model = findModel(models, explicit)
@@ -55,7 +55,7 @@ function resolveModel(config: CharlieConfig, models: ModelEntry[]): ModelEntry {
   }
   const withTools = models.find((model) => model.caps.tools)
   const fallback = withTools ?? models[0]
-  if (!fallback) fail('Nessun modello disponibile: controlla il router e le API key (pnpm charlie:doctor).')
+  if (!fallback) fail('Nessun modello disponibile: controlla il router e le API key (pnpm charliecode:doctor).')
   return fallback
 }
 
@@ -63,7 +63,7 @@ async function commandDoctor(): Promise<void> {
   const platform = createPlatform()
   const { config, path, created } = await loadConfig(platform)
 
-  console.log(bold('\nCharlie · doctor'))
+  console.log(bold('\nCharlieCode · doctor'))
   console.log(`${dim('piattaforma')}      ${platform.id}`)
   console.log(`${dim('config dir')}     ${platform.configDir}`)
   console.log(`${dim('config file')}    ${path}${created ? green(' (creato ora)') : ''}`)
@@ -114,7 +114,7 @@ async function commandDoctor(): Promise<void> {
           )
         } else {
           console.log(
-            `  ${dim('suggerimento')} avvia il router oppure imposta CHARLIE_BASE_URL`
+            `  ${dim('suggerimento')} avvia il router oppure imposta CHARLIECODE_BASE_URL`
           )
         }
       }
@@ -152,7 +152,7 @@ async function commandModels(): Promise<void> {
   }
 
   if (models.length === 0) {
-    fail('Catalog vuoto. Esegui `pnpm charlie:doctor`.')
+    fail('Catalog vuoto. Esegui `pnpm charliecode:doctor`.')
   }
 
   const limit = has('--all') ? models.length : 40
@@ -233,7 +233,7 @@ async function commandProbe(): Promise<void> {
   const { models, errors } = await loadCatalog(platform, config)
   for (const error of errors) console.error(dim(`${yellow('!')} ${error.providerLabel}: ${error.message}`))
 
-  if (models.length === 0) fail('Catalog vuoto. Esegui `pnpm charlie:doctor`.')
+  if (models.length === 0) fail('Catalog vuoto. Esegui `pnpm charliecode:doctor`.')
 
   const limit = Number(flag('--limit') ?? 8)
   const modelKeys = flag('--model') ? [flag('--model') as string] : undefined
@@ -262,7 +262,7 @@ async function commandProbe(): Promise<void> {
 
 function printHelp(): void {
   console.log(`
-${bold('Charlie')} · engine CLI (Phase 0)
+${bold('CharlieCode')} · engine CLI (Phase 0)
 
 ${bold('Comandi')}
   doctor                 stato config, key e raggiungibilità provider
@@ -273,9 +273,9 @@ ${bold('Comandi')}
                          matrice capacità reali (tool calling) dei modelli
 
 ${bold('Ambiente')}
-  CHARLIE_CONFIG_DIR     cambia la cartella config (default ~/.charlie)
+  CHARLIECODE_CONFIG_DIR     cambia la cartella config (default ~/.charliecode)
   FREELLMAPI_KEY         unified key di FreeLLMAPI
-  CHARLIE_API_KEY        key valida per qualsiasi provider
+  CHARLIECODE_API_KEY        key valida per qualsiasi provider
 `)
 }
 

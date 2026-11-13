@@ -1,8 +1,8 @@
-import type { CharlieApi } from '../shared/ipc'
+import type { CharlieCodeApi } from '../shared/ipc'
 
 declare global {
   interface Window {
-    charlie: CharlieApi
+    charliecode: CharlieCodeApi
   }
 }
 
