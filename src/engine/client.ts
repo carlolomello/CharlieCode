@@ -112,7 +112,29 @@ function toUsage(usage: {
 }
 
 function toModelMessages(messages: StreamRequest['messages']): ModelMessage[] {
-  return messages.map((message) => ({ role: message.role, content: message.content }))
+  return messages.map((message) => {
+    if (message.role === 'assistant') {
+      return { role: 'assistant' as const, content: message.content }
+    }
+
+    const images = message.images ?? []
+    if (images.length === 0) {
+      return { role: 'user' as const, content: message.content }
+    }
+
+    // OpenAI-compatible vision: text first, then the image parts.
+    return {
+      role: 'user' as const,
+      content: [
+        ...(message.content ? [{ type: 'text' as const, text: message.content }] : []),
+        ...images.map((image) => ({
+          type: 'file' as const,
+          mediaType: image.mediaType,
+          data: { type: 'data' as const, data: image.data }
+        }))
+      ]
+    }
+  })
 }
 
 export interface ChatDeps {

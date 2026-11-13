@@ -11,6 +11,16 @@ export const DEFAULT_CONFIG: CharlieCodeConfig = {
   version: 1,
   providers: [
     {
+      // Free by default: Zen serves deepseek-v4.1-flash-free at cost 0. It needs
+      // either a free API key or falls back on Zen's anonymous free allowance.
+      id: 'zen',
+      label: 'OpenCode Zen',
+      baseUrl: 'https://opencode.ai/zen/v1',
+      kind: 'direct',
+      enabled: true,
+      apiKeyEnv: 'ZEN_API_KEY'
+    },
+    {
       id: 'freellmapi',
       label: 'FreeLLMAPI (local)',
       baseUrl: 'http://localhost:3001/v1',
@@ -20,8 +30,10 @@ export const DEFAULT_CONFIG: CharlieCodeConfig = {
     }
   ],
   modelOverrides: {},
-  fallbackModels: [],
-  effort: 'none'
+  defaultModel: 'zen::deepseek-v4.1-flash-free',
+  fallbackModels: ['freellmapi::auto'],
+  effort: 'none',
+  recentWorkspaces: []
 }
 
 export function defaultConfig(): CharlieCodeConfig {
@@ -46,9 +58,11 @@ function mergeConfig(partial: Partial<CharlieCodeConfig>): CharlieCodeConfig {
     version: 1,
     providers,
     modelOverrides: partial.modelOverrides ?? {},
-    defaultModel: partial.defaultModel,
-    fallbackModels: partial.fallbackModels ?? [],
-    effort: partial.effort ?? base.effort
+    defaultModel: partial.defaultModel ?? base.defaultModel,
+    fallbackModels: partial.fallbackModels ?? base.fallbackModels,
+    effort: partial.effort ?? base.effort,
+    workspace: partial.workspace,
+    recentWorkspaces: partial.recentWorkspaces ?? []
   }
 }
 
@@ -175,6 +189,21 @@ export async function writeCredentials(
   const path = platform.configPath(CREDENTIALS_FILE)
   const existing = await readCredentials(platform)
   existing[providerId] = { apiKey }
+  await writeFile(path, `${JSON.stringify(existing, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+  if (!platform.isWindows) {
+    await chmod(path, 0o600).catch(() => undefined)
+  }
+  return path
+}
+
+export async function deleteCredential(
+  platform: Platform,
+  providerId: string
+): Promise<string> {
+  await ensureConfigDir(platform)
+  const path = platform.configPath(CREDENTIALS_FILE)
+  const existing = await readCredentials(platform)
+  delete existing[providerId]
   await writeFile(path, `${JSON.stringify(existing, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
   if (!platform.isWindows) {
     await chmod(path, 0o600).catch(() => undefined)

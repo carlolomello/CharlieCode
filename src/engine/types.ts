@@ -45,6 +45,10 @@ export interface CharlieCodeConfig {
   /** Ordered candidates used when the requested model fails. */
   fallbackModels: string[]
   effort: EffortLevel
+  /** Project directory currently open in the app. */
+  workspace?: string
+  /** Most recently opened project directories, newest first. */
+  recentWorkspaces: string[]
 }
 
 export interface ModelEntry {
@@ -70,9 +74,32 @@ export interface CatalogResult {
   errors: CatalogError[]
 }
 
+export interface AttachmentRef {
+  id: string
+  name: string
+  mime: string
+  size: number
+  kind: 'image' | 'text'
+  /** Path on disk, relative to the config dir, so sessions stay portable. */
+  path?: string
+}
+
+export interface IncomingAttachment {
+  name: string
+  mime: string
+  kind: 'image' | 'text'
+  size: number
+  /** data URL for images, raw text for documents. */
+  data: string
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
+  /** Images already encoded as base64 (no data: prefix). */
+  images?: { mediaType: string; data: string }[]
+  /** Attachments that produced `content`/`images`; metadata only. */
+  attachments?: AttachmentRef[]
 }
 
 export interface StreamRequest {

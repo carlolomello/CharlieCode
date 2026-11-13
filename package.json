@@ -1,10 +1,10 @@
 {
   "name": "charliecode",
   "version": "0.0.1",
-  "description": "CharlieCode - multi-agent coding assistant (Phase 0)",
+  "description": "CharlieCode - multi-agent desktop coding assistant",
   "main": "./out/main/index.js",
   "author": "carlolomello",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "private": true,
   "scripts": {
     "dev": "electron-vite dev",

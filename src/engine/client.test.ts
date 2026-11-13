@@ -28,7 +28,8 @@ const config: CharlieCodeConfig = {
   providers: [provider],
   modelOverrides: {},
   fallbackModels: ['freellmapi::second', 'freellmapi::missing'],
-  effort: 'none'
+  effort: 'none',
+  recentWorkspaces: []
 }
 
 const models = [model('first'), model('second'), model('third')]

@@ -41,7 +41,8 @@ function config(overrides: CharlieCodeConfig['modelOverrides']): CharlieCodeConf
     providers: [],
     modelOverrides: overrides,
     fallbackModels: [],
-    effort: 'none'
+    effort: 'none',
+    recentWorkspaces: []
   }
 }
 
