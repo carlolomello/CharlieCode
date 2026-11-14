@@ -9,6 +9,7 @@ asar: true
 
 mac:
   category: public.app-category.developer-tools
+  icon: build/icon.icns
   # Ad-hoc signing ("-") keeps the unsigned arm64 build launchable on Apple
   # Silicon; hardened runtime requires a real Developer ID, so it stays off.
   identity: '-'
