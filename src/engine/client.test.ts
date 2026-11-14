@@ -19,7 +19,8 @@ function model(id: string): ModelEntry {
     label: id,
     caps: { tools: true, vision: false, contextWindow: 32768 },
     capsConfidence: 'guess',
-    effort: 'none'
+    effort: 'none',
+    efforts: ['none', 'low', 'high']
   }
 }
 
@@ -29,7 +30,8 @@ const config: CharlieCodeConfig = {
   modelOverrides: {},
   fallbackModels: ['freellmapi::second', 'freellmapi::missing'],
   effort: 'none',
-  recentWorkspaces: []
+  recentWorkspaces: [],
+  agents: { maxSteps: 24, subagentMaxSteps: 12, autoApprove: [], autoApproveCommands: [] }
 }
 
 const models = [model('first'), model('second'), model('third')]

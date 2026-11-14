@@ -19,7 +19,8 @@
     "models": "tsx src/engine/cli.ts models",
     "probe": "tsx src/engine/cli.ts probe",
     "smoke": "tsx src/engine/cli.ts smoke",
-    "mock": "node scripts/mock-router.mjs"
+    "mock": "node scripts/mock-router.mjs",
+    "mascot": "tsx --tsconfig tsconfig.web.json scripts/preview-mascot.tsx"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.90",

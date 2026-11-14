@@ -33,7 +33,21 @@ export type CapsConfidence = 'guess' | 'probed' | 'manual'
 export interface ModelOverride {
   label?: string
   effort?: EffortLevel
+  /** Levels the picker may offer; defaults to what the model supports. */
+  efforts?: EffortLevel[]
   caps?: Partial<ModelCaps>
+}
+
+export interface AgentSettings {
+  /** Tool-calling steps the main agent may take in a single turn. */
+  maxSteps: number
+  /** Model used by subagents; defaults to the current model. */
+  subagentModel?: string
+  subagentMaxSteps: number
+  /** Tools auto-approved without asking (read-only ones by default). */
+  autoApprove: string[]
+  /** Bash prefixes auto-approved, e.g. "git status". */
+  autoApproveCommands: string[]
 }
 
 export interface CharlieCodeConfig {
@@ -49,6 +63,8 @@ export interface CharlieCodeConfig {
   workspace?: string
   /** Most recently opened project directories, newest first. */
   recentWorkspaces: string[]
+  /** Tool loop + multi-agent settings. */
+  agents: AgentSettings
 }
 
 export interface ModelEntry {
@@ -61,6 +77,8 @@ export interface ModelEntry {
   caps: ModelCaps
   capsConfidence: CapsConfidence
   effort: EffortLevel
+  /** Levels the picker offers for this model. */
+  efforts: EffortLevel[]
 }
 
 export interface CatalogError {
@@ -118,9 +136,86 @@ export interface TokenUsage {
   totalTokens?: number
 }
 
+/** A change a tool wants to make, rendered by the UI and the permission prompt. */
+export interface FileDiff {
+  path: string
+  /** Path relative to the workspace when possible. */
+  displayPath: string
+  added: number
+  removed: number
+  created?: boolean
+  deleted?: boolean
+  unified: string
+}
+
+export interface PermissionRequest {
+  id: string
+  tool: string
+  title: string
+  detail: string
+  risk: 'low' | 'medium' | 'high'
+  diff?: FileDiff
+  /** Command shown verbatim to the user (bash). */
+  command?: string
+}
+
+export type PermissionDecision = 'allow' | 'allow-always' | 'deny'
+
+export interface ToolLog {
+  id: string
+  name: string
+  title: string
+  input?: unknown
+  status: 'running' | 'ok' | 'error' | 'denied'
+  summary?: string
+  output?: string
+  diff?: FileDiff
+  ms?: number
+  agentId?: string
+  agentName?: string
+}
+
 export type EngineEvent =
   | { type: 'start'; modelKey: string; label: string; fallbackFrom?: string }
-  | { type: 'delta'; text: string }
+  | { type: 'delta'; text: string; agentId?: string }
+  | { type: 'step'; index: number; agentId?: string }
+  | {
+      type: 'tool-call'
+      id: string
+      name: string
+      title: string
+      input?: unknown
+      agentId?: string
+      agentName?: string
+    }
+  | {
+      type: 'tool-result'
+      id: string
+      name: string
+      ok: boolean
+      denied?: boolean
+      summary: string
+      output?: string
+      diff?: FileDiff
+      ms: number
+      agentId?: string
+      agentName?: string
+    }
+  | {
+      type: 'subagent-start'
+      agentId: string
+      name: string
+      description: string
+      modelKey: string
+    }
+  | {
+      type: 'subagent-end'
+      agentId: string
+      name: string
+      ok: boolean
+      summary: string
+      ms: number
+    }
   | {
       type: 'done'
       modelKey: string
@@ -128,6 +223,8 @@ export type EngineEvent =
       ttftMs: number
       usage?: TokenUsage
       aborted?: boolean
+      steps?: number
+      toolCalls?: number
     }
   | { type: 'error'; message: string; modelKey?: string }
 

@@ -1,4 +1,4 @@
-import type { AttachmentRef, EffortLevel } from './types'
+import type { AttachmentRef, EffortLevel, ToolLog } from './types'
 
 /**
  * Pure data shapes for the transcript.
@@ -21,6 +21,8 @@ export interface StoredMessage {
   meta?: string
   /** Images and documents sent with this turn (metadata only). */
   attachments?: AttachmentRef[]
+  /** Tools the model ran in this turn, with diffs and subagent activity. */
+  tools?: ToolLog[]
 }
 
 export interface SessionHeader {

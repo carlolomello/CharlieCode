@@ -8,9 +8,12 @@ import type {
   ChatStartPayload,
   ChatStartResult,
   ModelsResponse,
-  ProviderStatus
+  PermissionEnvelope,
+  ProviderStatus,
+  RoutersStatus
 } from '../shared/ipc'
 import type { Session, SessionSummary } from '../engine/sessions'
+import type { PermissionDecision } from '../engine/types'
 
 const api: CharlieCodeApi = {
   info: () => ipcRenderer.invoke('charliecode:info') as Promise<AppInfo>,
@@ -34,6 +37,12 @@ const api: CharlieCodeApi = {
     ipcRenderer.invoke('charliecode:providers:add', payload) as Promise<ProviderStatus[]>,
   openGlobalAgents: () =>
     ipcRenderer.invoke('charliecode:agents:open-global') as Promise<void>,
+
+  routers: () => ipcRenderer.invoke('charliecode:routers:status') as Promise<RoutersStatus>,
+  launchRuntime: (id: 'freellmapi' | 'ollama') =>
+    ipcRenderer.invoke('charliecode:routers:launch', id) as Promise<boolean>,
+  openExternal: (url: string) =>
+    ipcRenderer.invoke('charliecode:open-external', url) as Promise<void>,
 
   listSessions: () => ipcRenderer.invoke('charliecode:sessions:list') as Promise<SessionSummary[]>,
   loadSession: (id: string) =>
@@ -67,6 +76,19 @@ const api: CharlieCodeApi = {
       ipcRenderer.removeListener('charliecode:chat:session', listener)
     }
   },
+
+  onPermission: (callback: (envelope: PermissionEnvelope) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, envelope: PermissionEnvelope): void => {
+      callback(envelope)
+    }
+    ipcRenderer.on('charliecode:chat:permission', listener)
+    return () => {
+      ipcRenderer.removeListener('charliecode:chat:permission', listener)
+    }
+  },
+
+  respondPermission: (permissionId: string, decision: PermissionDecision) =>
+    ipcRenderer.invoke('charliecode:chat:permission-response', permissionId, decision) as Promise<void>,
 
   openConfigDir: () => ipcRenderer.invoke('charliecode:open-config') as Promise<void>
 }

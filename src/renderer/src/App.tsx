@@ -1,10 +1,33 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import type { IncomingAttachment } from '../../engine/types'
 import type { Session, SessionSummary, StoredMessage } from '../../engine/session-types'
-import type { AttachmentRef, CatalogError, EffortLevel, ModelEntry } from '../../engine/types'
-import type { AppInfo, ChatEventEnvelope, ProviderStatus } from '../../shared/ipc'
+import type {
+  AttachmentRef,
+  CatalogError,
+  EffortLevel,
+  ModelEntry,
+  PermissionDecision,
+  PermissionRequest,
+  ToolLog
+} from '../../engine/types'
+import type {
+  AppInfo,
+  ChatEventEnvelope,
+  PermissionEnvelope,
+  ProviderStatus,
+  RoutersStatus
+} from '../../shared/ipc'
+import { Mascot, MascotDesk, type MascotMood } from './components/Mascot'
+import { PermissionModal } from './components/PermissionModal'
+import { SetupWizard } from './components/SetupWizard'
+import { ToolActivity, type SubagentRun } from './components/ToolActivity'
 
-type ChatItem = StoredMessage & { pending?: boolean; requestId?: string }
+type ChatItem = StoredMessage & {
+  pending?: boolean
+  requestId?: string
+  tools?: ToolLog[]
+  subagents?: SubagentRun[]
+}
 
 interface PendingAttachment extends IncomingAttachment {
   localId: string
@@ -53,7 +76,12 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-const EFFORTS: EffortLevel[] = ['none', 'low', 'high', 'max']
+const EFFORT_LABEL: Record<EffortLevel, string> = {
+  none: 'nessuno',
+  low: 'basso',
+  high: 'alto',
+  max: 'massimo'
+}
 
 function shortKey(key: string): string {
   return key.length > 46 ? `${key.slice(0, 45)}…` : key
@@ -105,8 +133,13 @@ export default function App() {
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
   const [attachError, setAttachError] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
+  const [permission, setPermission] = useState<PermissionEnvelope | null>(null)
+  const [wizardOpen, setWizardOpen] = useState(false)
+  const [routers, setRouters] = useState<RoutersStatus | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const permissionQueue = useRef<PermissionEnvelope[]>([])
+  const permissionRef = useRef<PermissionEnvelope | null>(null)
 
   const refreshSessions = useCallback(async (): Promise<void> => {
     setSessions(await window.charliecode.listSessions())
@@ -114,6 +147,14 @@ export default function App() {
 
   const refreshProviders = useCallback(async (): Promise<void> => {
     setProviders(await window.charliecode.providers())
+  }, [])
+
+  const refreshRouters = useCallback(async (): Promise<void> => {
+    try {
+      setRouters(await window.charliecode.routers())
+    } catch {
+      setRouters(null)
+    }
   }, [])
 
   const refreshModels = useCallback(async (): Promise<void> => {
@@ -148,7 +189,8 @@ export default function App() {
     void refreshModels()
     void refreshProviders()
     void refreshSessions()
-  }, [refreshModels, refreshProviders, refreshSessions])
+    void refreshRouters()
+  }, [refreshModels, refreshProviders, refreshRouters, refreshSessions])
 
   useEffect(() => {
     const unsubscribe = window.charliecode.onChatEvent(({ requestId, event }: ChatEventEnvelope) => {
@@ -164,13 +206,77 @@ export default function App() {
                 meta: event.fallbackFrom ? `fallback da ${event.fallbackFrom}` : item.meta
               }
             case 'delta':
+              // Subagent text belongs to its own card, not to the main answer.
+              if (event.agentId) return item
               return { ...item, content: item.content + event.text }
+            case 'tool-call':
+              return {
+                ...item,
+                tools: [
+                  ...(item.tools ?? []),
+                  {
+                    id: event.id,
+                    name: event.name,
+                    title: event.title,
+                    input: event.input,
+                    status: 'running',
+                    ...(event.agentId ? { agentId: event.agentId } : {}),
+                    ...(event.agentName ? { agentName: event.agentName } : {})
+                  }
+                ]
+              }
+            case 'tool-result':
+              return {
+                ...item,
+                tools: (item.tools ?? []).map((log) =>
+                  log.id === event.id
+                    ? {
+                        ...log,
+                        status: event.denied ? 'denied' : event.ok ? 'ok' : 'error',
+                        summary: event.summary,
+                        ...(event.output ? { output: event.output } : {}),
+                        ...(event.diff ? { diff: event.diff } : {}),
+                        ms: event.ms
+                      }
+                    : log
+                )
+              }
+            case 'subagent-start':
+              return {
+                ...item,
+                subagents: [
+                  ...(item.subagents ?? []),
+                  {
+                    agentId: event.agentId,
+                    name: event.name,
+                    description: event.description,
+                    modelKey: event.modelKey,
+                    status: 'running'
+                  }
+                ]
+              }
+            case 'subagent-end':
+              return {
+                ...item,
+                subagents: (item.subagents ?? []).map((run) =>
+                  run.agentId === event.agentId
+                    ? {
+                        ...run,
+                        status: event.ok ? 'ok' : 'error',
+                        summary: event.summary,
+                        ms: event.ms
+                      }
+                    : run
+                )
+              }
             case 'done':
               return {
                 ...item,
                 pending: false,
                 meta: [
                   item.meta,
+                  event.steps ? `${event.steps} step` : undefined,
+                  event.toolCalls ? `${event.toolCalls} tool` : undefined,
                   `ttft ${event.ttftMs}ms`,
                   `totale ${event.ms}ms`,
                   event.usage?.outputTokens ? `${event.usage.outputTokens} token` : undefined,
@@ -189,7 +295,23 @@ export default function App() {
 
       if (event.type === 'done' || event.type === 'error') {
         setStreamingId((current) => (current === requestId ? null : current))
+        // A finished request cannot answer a permission prompt any more.
+        if (permissionRef.current?.requestId === requestId) {
+          const next = permissionQueue.current.shift() ?? null
+          permissionRef.current = next
+          setPermission(next)
+        }
       }
+    })
+
+    const unsubscribePermission = window.charliecode.onPermission((envelope: PermissionEnvelope) => {
+      // Keep one prompt on screen at a time; the rest wait their turn.
+      if (permissionRef.current) {
+        permissionQueue.current.push(envelope)
+        return
+      }
+      permissionRef.current = envelope
+      setPermission(envelope)
     })
 
     const unsubscribeSession = window.charliecode.onChatSession(({ sessionId: id, title }) => {
@@ -210,6 +332,7 @@ export default function App() {
 
     return () => {
       unsubscribe()
+      unsubscribePermission()
       unsubscribeSession()
     }
   }, [refreshSessions])
@@ -223,6 +346,36 @@ export default function App() {
     () => models.find((model) => model.key === modelKey),
     [models, modelKey]
   )
+
+  // The picker only offers levels the model actually accepts.
+  const effortOptions = useMemo<EffortLevel[]>(
+    () => (selectedModel?.efforts?.length ? selectedModel.efforts : ['none']),
+    [selectedModel]
+  )
+
+  useEffect(() => {
+    if (!effortOptions.includes(effort)) setEffort(effortOptions[0] ?? 'none')
+  }, [effortOptions, effort])
+
+  const decidePermission = useCallback(
+    async (decision: PermissionDecision): Promise<void> => {
+      const current = permissionRef.current
+      if (!current) return
+      await window.charliecode.respondPermission(current.request.id, decision)
+      const next = permissionQueue.current.shift() ?? null
+      permissionRef.current = next
+      setPermission(next)
+    },
+    []
+  )
+
+  const mood: MascotMood = permission
+    ? 'worried'
+    : streamingId
+      ? 'thinking'
+      : items.length > 0
+        ? 'happy'
+        : 'idle'
 
   const groupedModels = useMemo(() => {
     const groups = new Map<string, ModelEntry[]>()
@@ -241,6 +394,9 @@ export default function App() {
     setAttachments([])
     setAttachError(null)
     setStreamingId(null)
+    permissionRef.current = null
+    permissionQueue.current = []
+    setPermission(null)
   }, [])
 
   const pickWorkspace = useCallback(async (): Promise<void> => {
@@ -443,6 +599,9 @@ export default function App() {
   const stop = useCallback(async (): Promise<void> => {
     if (!streamingId) return
     await window.charliecode.stopChat(streamingId)
+    permissionRef.current = null
+    permissionQueue.current = []
+    setPermission(null)
   }, [streamingId])
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -488,12 +647,41 @@ export default function App() {
 
   const needsSetup = models.length === 0 && !loadingModels
 
+  const wizardSetKey = useCallback(
+    async (providerId: string, key: string): Promise<void> => {
+      setProviders(await window.charliecode.setProviderKey(providerId, key))
+      await refreshModels()
+    },
+    [refreshModels]
+  )
+
+  const wizardToggle = useCallback(
+    async (providerId: string, enabled: boolean): Promise<void> => {
+      setProviders(await window.charliecode.toggleProvider(providerId, enabled))
+      await refreshModels()
+    },
+    [refreshModels]
+  )
+
+  const wizardAddProvider = useCallback(
+    async (payload: {
+      id: string
+      label: string
+      baseUrl: string
+      kind: 'direct' | 'router'
+    }): Promise<void> => {
+      setProviders(await window.charliecode.addProvider(payload))
+      await refreshModels()
+    },
+    [refreshModels]
+  )
+
   return (
-    <div className="app">
+    <div className={`app ${info?.platform === 'darwin' ? 'darwin' : ''}`}>
       <aside className="sidebar">
         <div className="sidebar-top">
           <div className="brand">
-            <span className="brand-mark">C</span>
+            <Mascot size={38} mood={mood} />
             <div>
               <div className="brand-name">CharlieCode</div>
               <div className="brand-sub">v{info?.version ?? '0.0.1'}</div>
@@ -555,6 +743,9 @@ export default function App() {
         </div>
 
         <div className="sidebar-bottom">
+          <button className="primary wide" onClick={() => setWizardOpen(true)}>
+            ✦ Collega un modello
+          </button>
           <button className="ghost wide" onClick={() => setSettingsOpen(true)}>
             ⚙ Provider e chiavi
           </button>
@@ -563,6 +754,8 @@ export default function App() {
           </button>
           <div className="sidebar-foot">
             {info?.platform ?? '…'} · {providers.filter((provider) => provider.enabled).length} provider
+            {routers?.ollama.running ? ' · ollama ✓' : ''}
+            {routers?.freellmapi.running ? ' · router ✓' : ''}
           </div>
         </div>
       </aside>
@@ -594,10 +787,11 @@ export default function App() {
               value={effort}
               onChange={(event) => setEffort(event.target.value as EffortLevel)}
               title="Livello di effort (reasoning) passato al provider"
+              disabled={effortOptions.length <= 1}
             >
-              {EFFORTS.map((level) => (
+              {effortOptions.map((level) => (
                 <option key={level} value={level}>
-                  effort: {level}
+                  effort: {EFFORT_LABEL[level]}
                 </option>
               ))}
             </select>
@@ -635,52 +829,51 @@ export default function App() {
         <main className="scroll" ref={scrollRef}>
           {needsSetup ? (
             <section className="setup">
+              <Mascot size={120} mood="worried" className="setup-mascot" />
               <h1>Nessun modello disponibile</h1>
               <p>
-                CharlieCode parla con qualsiasi endpoint OpenAI-compatible. Apri{' '}
-                <strong>Provider e chiavi</strong> e aggiungi una API key, oppure avvia FreeLLMAPI
-                in locale.
+                CharlieCode parla con qualsiasi endpoint OpenAI-compatible. Apri la procedura
+                guidata: ti collega a un modello gratuito in meno di un minuto.
               </p>
-              <ol>
-                <li>
-                  <strong>OpenCode Zen</strong> — incolla una key in{' '}
-                  <code>Provider e chiavi</code>: il modello{' '}
-                  <code>deepseek-v4.1-flash-free</code> è gratuito.
-                </li>
-                <li>
-                  <strong>FreeLLMAPI</strong> — avvialo (porta <code>31415</code> desktop,{' '}
-                  <code>3001</code> Docker), aggiungi le key dei provider nella sua dashboard e
-                  incolla qui la unified key.
-                </li>
-                <li>
-                  <strong>Qualsiasi altra API</strong> — aggiungi un provider con base URL e key.
-                </li>
-              </ol>
               <div className="setup-actions">
-                <button className="primary" onClick={() => setSettingsOpen(true)}>
-                  Apri provider e chiavi
+                <button className="primary" onClick={() => setWizardOpen(true)}>
+                  ✦ Collega un modello
+                </button>
+                <button className="ghost" onClick={() => setSettingsOpen(true)}>
+                  Preferisco inserire la key a mano
                 </button>
               </div>
             </section>
           ) : items.length === 0 ? (
             <section className="empty">
-              <h1>{workspace ? baseName(workspace) : 'Pronto.'}</h1>
+              <Mascot size={140} mood={mood} className="empty-mascot" />
+              <h1>{workspace ? baseName(workspace) : 'Ciao, sono Charlie.'}</h1>
               <p className="muted">
                 {models.length} modelli · {sessions.length} chat salvate
                 {workspace ? ` · progetto ${workspace}` : ' · nessun progetto selezionato'}
               </p>
+              <p className="empty-lead">
+                Posso leggere, cercare, modificare ed eseguire comandi nel progetto — e mostrarti
+                ogni diff prima di applicarlo. Per lavori grandi lancio subagenti in parallelo.
+              </p>
               <div className="hints">
-                <button onClick={() => setInput('Presentati in due righe e dimmi che modello sei.')}>
-                  Chi sei?
+                <button onClick={() => void pickWorkspace()}>Scegli un progetto</button>
+                <button
+                  onClick={() =>
+                    setInput(
+                      'Esplora questo progetto: leggi AGENTS.md e il package.json, poi spiegami com’è organizzato.'
+                    )
+                  }
+                >
+                  Esplora il progetto
                 </button>
                 <button
                   onClick={() =>
-                    setInput('Leggi il file AGENTS.md del progetto e riassumi le regole che devo seguire.')
+                    setInput('Usa un subagente explorer per trovare dove viene gestita l’autenticazione.')
                   }
                 >
-                  Leggi AGENTS.md
+                  Prova un subagente
                 </button>
-                <button onClick={() => void pickWorkspace()}>Scegli un progetto</button>
               </div>
             </section>
           ) : (
@@ -713,10 +906,29 @@ export default function App() {
                   <div className="message-body">
                     {item.content || (item.pending || (item.attachments?.length ?? 0) > 0 ? '' : '—')}
                   </div>
+                  {item.role === 'assistant' && (
+                    <ToolActivity
+                      logs={item.tools ?? []}
+                      subagents={item.subagents ?? []}
+                      busy={Boolean(item.pending)}
+                    />
+                  )}
                   {item.error && <div className="message-error">{item.error}</div>}
                   {item.meta && <div className="message-meta">{item.meta}</div>}
                 </article>
               ))}
+            </div>
+          )}
+
+          {streamingId && (
+            <div className="working-wrap">
+              <div className="working-badge">
+                <MascotDesk width={118} mood="thinking" />
+                <div className="working-text">
+                  <strong>Charlie sta lavorando</strong>
+                  <span>strumenti, diff e subagenti in corso…</span>
+                </div>
+              </div>
             </div>
           )}
         </main>
@@ -826,6 +1038,24 @@ export default function App() {
           </div>
         </footer>
       </div>
+
+      {permission && (
+        <PermissionModal request={permission.request} onDecide={(decision) => void decidePermission(decision)} />
+      )}
+
+      {wizardOpen && (
+        <SetupWizard
+          providers={providers}
+          onRefreshRouters={refreshRouters}
+          onSetKey={wizardSetKey}
+          onToggleProvider={wizardToggle}
+          onAddProvider={wizardAddProvider}
+          onClose={() => {
+            setWizardOpen(false)
+            void refreshRouters()
+          }}
+        />
+      )}
 
       {settingsOpen && (
         <div className="overlay" onClick={() => setSettingsOpen(false)}>

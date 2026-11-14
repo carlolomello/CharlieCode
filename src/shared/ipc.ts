@@ -1,6 +1,13 @@
 import type { IncomingAttachment } from '../engine/types'
 import type { Session, SessionSummary } from '../engine/session-types'
-import type { CatalogError, EffortLevel, EngineEvent, ModelEntry } from '../engine/types'
+import type {
+  CatalogError,
+  EffortLevel,
+  EngineEvent,
+  ModelEntry,
+  PermissionDecision,
+  PermissionRequest
+} from '../engine/types'
 
 export interface AppInfo {
   version: string
@@ -56,6 +63,36 @@ export interface AddProviderPayload {
   kind: 'router' | 'direct'
 }
 
+/** A local runtime CharlieCode can detect, launch and talk to. */
+export interface LocalRuntime {
+  id: 'freellmapi' | 'ollama'
+  label: string
+  running: boolean
+  installed: boolean
+  /** Base URL to use when it is running, e.g. http://localhost:31415/v1 */
+  baseUrl: string
+  hint: string
+}
+
+export interface DetectedLocal {
+  id: string
+  label: string
+  baseUrl: string
+  models?: number
+  needsKey: boolean
+  docs?: string
+  startCommand?: string
+  container?: string
+}
+
+export interface RoutersStatus {
+  freellmapi: LocalRuntime
+  ollama: LocalRuntime
+  /** Every local OpenAI-compatible endpoint that answered right now. */
+  detected: DetectedLocal[]
+  docker: boolean
+}
+
 export interface ChatStartResult {
   ok: boolean
   error?: string
@@ -74,6 +111,11 @@ export interface ChatSessionEnvelope {
   updatedAt: string
 }
 
+export interface PermissionEnvelope {
+  requestId: string
+  request: PermissionRequest
+}
+
 export interface CharlieCodeApi {
   info(): Promise<AppInfo>
   models(): Promise<ModelsResponse>
@@ -88,6 +130,10 @@ export interface CharlieCodeApi {
   addProvider(payload: AddProviderPayload): Promise<ProviderStatus[]>
   openGlobalAgents(): Promise<void>
 
+  routers(): Promise<RoutersStatus>
+  launchRuntime(id: 'freellmapi' | 'ollama'): Promise<boolean>
+  openExternal(url: string): Promise<void>
+
   listSessions(): Promise<SessionSummary[]>
   loadSession(id: string): Promise<Session | null>
   deleteSession(id: string): Promise<boolean>
@@ -97,6 +143,8 @@ export interface CharlieCodeApi {
   stopChat(requestId: string): Promise<void>
   onChatEvent(callback: (envelope: ChatEventEnvelope) => void): () => void
   onChatSession(callback: (envelope: ChatSessionEnvelope) => void): () => void
+  onPermission(callback: (envelope: PermissionEnvelope) => void): () => void
+  respondPermission(permissionId: string, decision: PermissionDecision): Promise<void>
 
   openConfigDir(): Promise<void>
 }

@@ -1,11 +1,13 @@
+import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { writeFile } from 'node:fs/promises'
+import { rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { buildSystemPrompt, runAgent } from '../engine/agent'
 import { globalAgentsPath, loadProjectContext } from '../engine/agents'
-import { materializeHistory, saveAttachments } from '../engine/attachments'
+import { attachmentsDir, materializeHistory, saveAttachments } from '../engine/attachments'
 import { loadCatalog } from '../engine/catalog'
-import { resetProviderCache, streamChat } from '../engine/client'
+import { resetProviderCache } from '../engine/client'
 import {
   CONFIG_FILE,
   CREDENTIALS_FILE,
@@ -16,6 +18,12 @@ import {
   saveConfig,
   writeCredentials
 } from '../engine/config'
+import {
+  deleteAgentContext,
+  readAgentContext,
+  writeAgentContext
+} from '../engine/context-store'
+import { dockerAvailable, hasBinary, probeEndpoint, scanLocalEndpoints } from '../engine/local'
 import { createPlatform } from '../engine/platform'
 import {
   appendMessage,
@@ -27,36 +35,64 @@ import {
   updateSession,
   type SessionSummary
 } from '../engine/sessions'
-import type { CharlieCodeConfig } from '../engine/types'
+import { toolLogFromEvent } from '../engine/tools'
+import type { CharlieCodeConfig, PermissionDecision, PermissionRequest, ToolLog } from '../engine/types'
 import type {
   AddProviderPayload,
   AppInfo,
   ChatStartPayload,
+  DetectedLocal,
   ModelsResponse,
-  ProviderStatus
+  ProviderStatus,
+  RoutersStatus
 } from '../shared/ipc'
 
 const platform = createPlatform()
 const inFlight = new Map<string, AbortController>()
 
-const BASE_SYSTEM_PROMPT = `Sei CharlieCode, un assistente di programmazione che lavora dentro il progetto dell'utente.
+/** Permission prompts waiting for the renderer: permissionId → resolver. */
+const permissionResolvers = new Map<string, (decision: PermissionDecision) => void>()
+const permissionRequests = new Map<string, string>()
 
-Regole:
-- Rispondi nella lingua dell'utente.
-- Quando citi file o comandi usa path relativi al progetto.
-- Se non sai qualcosa, dillo invece di inventare.
-- Non proporre modifiche distruttive senza avvisare.
-- Il contesto del progetto è limitato a ciò che l'utente ha aperto: non assumere di poter leggere file che non ti sono stati mostrati.`
+const OPEN_EXTERNAL_HOSTS = [
+  'openrouter.ai',
+  'opencode.ai',
+  'github.com',
+  'ollama.com',
+  'lmstudio.ai',
+  'aistudio.google.com',
+  'console.groq.com',
+  'cloud.cerebras.ai',
+  'console.mistral.ai',
+  'docs.vllm.ai',
+  'huggingface.co',
+  'freellmapi.com'
+]
+
+function isAllowedExternal(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false
+    if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') return true
+    return OPEN_EXTERNAL_HOSTS.some(
+      (host) => parsed.hostname === host || parsed.hostname.endsWith(`.${host}`)
+    )
+  } catch {
+    return false
+  }
+}
 
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
-    width: 1280,
-    height: 860,
-    minWidth: 960,
-    minHeight: 620,
+    width: 1320,
+    height: 880,
+    minWidth: 980,
+    minHeight: 640,
     show: false,
     backgroundColor: '#0e1116',
     title: 'CharlieCode',
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 16, y: 18 } } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -68,13 +104,23 @@ function createWindow(): BrowserWindow {
   window.once('ready-to-show', () => window.show())
 
   window.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url)
+    if (isAllowedExternal(url)) void shell.openExternal(url)
     return { action: 'deny' }
   })
 
   window.webContents.on('did-finish-load', () => {
     console.log('[charliecode] renderer loaded')
   })
+
+  // In dev, surface renderer errors in the terminal: a React crash otherwise
+  // only shows up in a DevTools window nobody opened.
+  if (process.env.ELECTRON_RENDERER_URL) {
+    window.webContents.on('console-message', (event) => {
+      if (event.level === 'error' || event.level === 'warning') {
+        console.log(`[renderer:${event.level}] ${event.message} (${event.sourceId}:${event.lineNumber})`)
+      }
+    })
+  }
 
   window.webContents.on('render-process-gone', (_event, details) => {
     console.error('[charliecode] renderer crashed:', details.reason)
@@ -112,9 +158,78 @@ function rememberWorkspace(config: CharlieCodeConfig, workspace: string): Charli
   return { ...config, workspace, recentWorkspaces: recent.slice(0, 8) }
 }
 
+/** Wires one permission request to the renderer and waits for the answer. */
+async function askUser(
+  sender: Electron.WebContents,
+  requestId: string,
+  request: PermissionRequest,
+  config: CharlieCodeConfig
+): Promise<PermissionDecision> {
+  if (sender.isDestroyed()) return 'deny'
+
+  const decision = await new Promise<PermissionDecision>((resolve) => {
+    const timer = setTimeout(() => {
+      permissionResolvers.delete(request.id)
+      permissionRequests.delete(request.id)
+      resolve('deny')
+    }, 10 * 60 * 1000)
+
+    permissionResolvers.set(request.id, (value) => {
+      clearTimeout(timer)
+      permissionResolvers.delete(request.id)
+      permissionRequests.delete(request.id)
+      resolve(value)
+    })
+    permissionRequests.set(request.id, requestId)
+    sender.send('charliecode:chat:permission', { requestId, request })
+  })
+
+  if (decision === 'allow-always') {
+    const next: CharlieCodeConfig = structuredClone(config)
+    if (request.tool === 'bash' && request.command) {
+      const prefix = request.command.trim().split(/\s+/).slice(0, 2).join(' ')
+      if (prefix && !next.agents.autoApproveCommands.includes(prefix)) {
+        next.agents.autoApproveCommands.push(prefix)
+      }
+    } else if (!next.agents.autoApprove.includes(request.tool)) {
+      next.agents.autoApprove.push(request.tool)
+    }
+    await saveConfig(platform, next)
+  }
+
+  return decision
+}
+
+function launchRuntime(id: 'freellmapi' | 'ollama'): boolean {
+  try {
+    if (platform.id === 'darwin') {
+      const name = id === 'freellmapi' ? 'FreeLLMAPI' : 'Ollama'
+      const child = spawn('open', ['-a', name], { detached: true, stdio: 'ignore' })
+      child.unref()
+      return true
+    }
+    if (platform.isWindows) {
+      const command = id === 'freellmapi' ? 'FreeLLMAPI' : 'ollama'
+      const child = spawn('cmd.exe', ['/c', 'start', '', command], {
+        detached: true,
+        stdio: 'ignore'
+      })
+      child.unref()
+      return true
+    }
+    const child = spawn(id === 'freellmapi' ? 'freellmapi' : 'ollama', ['serve'], {
+      detached: true,
+      stdio: 'ignore'
+    })
+    child.unref()
+    return true
+  } catch {
+    return false
+  }
+}
+
 function registerIpc(): void {
   ipcMain.handle('charliecode:info', async (): Promise<AppInfo> => {
-    console.log('[charliecode] renderer connected')
     const { config } = await loadConfig(platform)
     return {
       version: app.getVersion(),
@@ -154,12 +269,15 @@ function registerIpc(): void {
     return { path: picked }
   })
 
-  ipcMain.handle('charliecode:workspace:use', async (_event, path: string): Promise<{ path?: string }> => {
-    if (!path) return {}
-    const { config } = await loadConfig(platform)
-    await saveConfig(platform, rememberWorkspace(config, path))
-    return { path }
-  })
+  ipcMain.handle(
+    'charliecode:workspace:use',
+    async (_event, path: string): Promise<{ path?: string }> => {
+      if (!path) return {}
+      const { config } = await loadConfig(platform)
+      await saveConfig(platform, rememberWorkspace(config, path))
+      return { path }
+    }
+  )
 
   ipcMain.handle('charliecode:workspace:open', async (): Promise<void> => {
     const { config } = await loadConfig(platform)
@@ -205,7 +323,9 @@ function registerIpc(): void {
       const id = payload.id.trim().toLowerCase().replace(/[^a-z0-9._-]/g, '-')
       const baseUrl = payload.baseUrl.trim().replace(/\/+$/, '')
       if (!id) throw new Error('Serve un id per il provider.')
-      if (!/^https?:\/\//i.test(baseUrl)) throw new Error('La base URL deve iniziare con http:// o https://')
+      if (!/^https?:\/\//i.test(baseUrl)) {
+        throw new Error('La base URL deve iniziare con http:// o https://')
+      }
 
       const { config } = await loadConfig(platform)
       if (config.providers.some((provider) => provider.id === id)) {
@@ -251,6 +371,63 @@ hanno priorità su queste.
     await shell.openPath(path)
   })
 
+  ipcMain.handle('charliecode:routers:status', async (): Promise<RoutersStatus> => {
+    const freePrimary = await probeEndpoint('http://127.0.0.1:31415/v1')
+    const freeFallback = freePrimary.ok
+      ? freePrimary
+      : await probeEndpoint('http://127.0.0.1:3001/v1')
+    const ollamaProbe = await probeEndpoint('http://localhost:11434/v1')
+    const detected = await scanLocalEndpoints()
+
+    const freellmapiInstalled =
+      platform.id === 'darwin'
+        ? existsSync('/Applications/FreeLLMAPI.app')
+        : existsSync(join(process.env.LOCALAPPDATA ?? '', 'Programs', 'freellmapi', 'FreeLLMAPI.exe'))
+
+    return {
+      freellmapi: {
+        id: 'freellmapi',
+        label: 'FreeLLMAPI',
+        running: freeFallback.ok,
+        installed: freellmapiInstalled,
+        baseUrl: freeFallback.baseUrl,
+        hint: freeFallback.ok
+          ? `${freeFallback.models ?? '?'} modelli dal router locale`
+          : 'Router locale non in esecuzione'
+      },
+      ollama: {
+        id: 'ollama',
+        label: 'Ollama',
+        running: ollamaProbe.ok,
+        installed: hasBinary('ollama') || existsSync('/Applications/Ollama.app'),
+        baseUrl: ollamaProbe.baseUrl,
+        hint: ollamaProbe.ok
+          ? `${ollamaProbe.models ?? '?'} modelli locali`
+          : 'Nessun modello locale in ascolto su 11434'
+      },
+      detected: detected.map((entry): DetectedLocal => ({
+        id: entry.preset.id,
+        label: entry.preset.label,
+        baseUrl: entry.preset.baseUrl,
+        models: entry.models,
+        needsKey: entry.preset.needsKey,
+        docs: entry.preset.docs,
+        startCommand: entry.preset.startCommand,
+        container: entry.preset.container
+      })),
+      docker: await dockerAvailable()
+    }
+  })
+
+  ipcMain.handle('charliecode:routers:launch', (_event, id: 'freellmapi' | 'ollama'): boolean => {
+    return launchRuntime(id)
+  })
+
+  ipcMain.handle('charliecode:open-external', async (_event, url: string): Promise<void> => {
+    if (!isAllowedExternal(url)) throw new Error(`URL non consentito: ${url}`)
+    await shell.openExternal(url)
+  })
+
   ipcMain.handle('charliecode:sessions:list', async (): Promise<SessionSummary[]> => {
     return listSessions(platform)
   })
@@ -260,13 +437,20 @@ hanno priorità su queste.
   })
 
   ipcMain.handle('charliecode:sessions:delete', async (_event, id: string): Promise<boolean> => {
-    return deleteSession(platform, id)
+    const removed = await deleteSession(platform, id)
+    await deleteAgentContext(platform, id)
+    await rm(attachmentsDir(platform, id, ''), { recursive: true, force: true }).catch(() => undefined)
+    return removed
   })
 
   ipcMain.handle('charliecode:sessions:rename', async (_event, id: string, title: string) => {
     const trimmed = title.trim()
     if (!trimmed) return null
     return (await updateSession(platform, id, { title: trimmed })) ?? null
+  })
+
+  ipcMain.handle('charliecode:chat:permission-response', (_event, permissionId: string, decision: PermissionDecision): void => {
+    permissionResolvers.get(permissionId)?.(decision)
   })
 
   ipcMain.handle(
@@ -283,8 +467,6 @@ hanno priorità su queste.
       inFlight.set(payload.requestId, controller)
       const sender = event.sender
 
-      // The main process owns the conversation: it persists the user turn,
-      // streams, then persists the assistant turn. The renderer only renders.
       const { config } = await loadConfig(platform)
       const session =
         (payload.sessionId ? await readSession(platform, payload.sessionId) : undefined) ??
@@ -332,56 +514,78 @@ hanno priorità su queste.
         let meta: string | undefined
         let failure: string | undefined
         let aborted = false
+        let logs: ToolLog[] = []
+        let contextMessages: import('ai').ModelMessage[] | undefined
+        const workspace = payload.workspacePath ?? config.workspace
 
         try {
           const { models } = await loadCatalog(platform, config)
           const stored = (await readSession(platform, session.id)) ?? session
-          const history = await materializeHistory(platform, toChatHistory(stored))
-          const context = await loadProjectContext(
-            platform,
-            payload.workspacePath ?? config.workspace
-          )
-          const system = [BASE_SYSTEM_PROMPT, context.system].filter(Boolean).join('\n\n')
+          const savedContext = await readAgentContext(platform, session.id)
+          const history =
+            savedContext.length > 0
+              ? savedContext
+              : await materializeHistory(platform, toChatHistory(stored))
+          const projectContext = await loadProjectContext(platform, workspace)
+          const system =
+            payload.system ?? buildSystemPrompt(projectContext.system, workspace)
 
-          const stream = streamChat(
+          const result = await runAgent(
             {
               modelKey: payload.modelKey,
-              messages: history,
-              system: payload.system ?? system,
+              messages: [],
+              system,
               effort: payload.effort,
               maxOutputTokens: payload.maxOutputTokens,
               signal: controller.signal
             },
-            { platform, config, models }
+            {
+              platform,
+              config,
+              models,
+              workspace,
+              modelMessages: history,
+              maxSteps: config.agents.maxSteps,
+              subagentMaxSteps: config.agents.subagentMaxSteps,
+              askPermission: (request) =>
+                askUser(sender, payload.requestId, request, config),
+              emit: (engineEvent) => {
+                if (engineEvent.type === 'tool-call' || engineEvent.type === 'tool-result') {
+                  logs = toolLogFromEvent(engineEvent, logs)
+                }
+                if (engineEvent.type === 'start') usedModel = engineEvent.modelKey
+                if (engineEvent.type === 'done') {
+                  aborted = Boolean(engineEvent.aborted)
+                  meta = [
+                    meta,
+                    engineEvent.steps ? `${engineEvent.steps} step` : undefined,
+                    engineEvent.toolCalls ? `${engineEvent.toolCalls} tool` : undefined,
+                    `ttft ${engineEvent.ttftMs}ms`,
+                    `totale ${engineEvent.ms}ms`,
+                    engineEvent.usage?.outputTokens
+                      ? `${engineEvent.usage.outputTokens} token`
+                      : undefined,
+                    aborted ? 'interrotto' : undefined
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')
+                }
+                if (engineEvent.type === 'error') failure = engineEvent.message
+                if (!sender.isDestroyed()) {
+                  sender.send('charliecode:chat:event', {
+                    requestId: payload.requestId,
+                    event: engineEvent
+                  })
+                }
+              }
+            }
           )
 
-          for await (const engineEvent of stream) {
-            if (sender.isDestroyed()) break
-
-            if (engineEvent.type === 'start') {
-              usedModel = engineEvent.modelKey
-              if (engineEvent.fallbackFrom) meta = `fallback da ${engineEvent.fallbackFrom}`
-            }
-            if (engineEvent.type === 'delta') text += engineEvent.text
-            if (engineEvent.type === 'done') {
-              aborted = Boolean(engineEvent.aborted)
-              meta = [
-                meta,
-                `ttft ${engineEvent.ttftMs}ms`,
-                `totale ${engineEvent.ms}ms`,
-                engineEvent.usage?.outputTokens ? `${engineEvent.usage.outputTokens} token` : undefined,
-                aborted ? 'interrotto' : undefined
-              ]
-                .filter(Boolean)
-                .join(' · ')
-            }
-            if (engineEvent.type === 'error') failure = engineEvent.message
-
-            sender.send('charliecode:chat:event', {
-              requestId: payload.requestId,
-              event: engineEvent
-            })
-          }
+          text = result.text
+          usedModel = result.modelKey || usedModel
+          aborted = result.aborted
+          if (result.error) failure = result.error
+          if (result.messages.length > 0) contextMessages = result.messages
         } catch (error) {
           failure = error instanceof Error ? error.message : String(error)
           if (!sender.isDestroyed()) {
@@ -393,8 +597,12 @@ hanno priorità su queste.
         } finally {
           inFlight.delete(payload.requestId)
 
-          // Persist even a partial or failed turn: the conversation the user
-          // saw on screen must be the conversation on disk.
+          // A stopped request must not leave the UI waiting for a permission.
+          for (const [permissionId, requestId] of permissionRequests) {
+            if (requestId !== payload.requestId) continue
+            permissionResolvers.get(permissionId)?.('deny')
+          }
+
           try {
             await appendMessage(platform, session.id, {
               id: payload.assistantMessageId,
@@ -403,8 +611,12 @@ hanno priorità su queste.
               createdAt: new Date().toISOString(),
               modelKey: usedModel,
               error: failure,
-              meta
+              meta,
+              ...(logs.length > 0 ? { tools: logs } : {})
             })
+            if (contextMessages) {
+              await writeAgentContext(platform, session.id, contextMessages)
+            }
             const saved = await readSession(platform, session.id)
             if (!sender.isDestroyed()) {
               sender.send('charliecode:chat:session', {
@@ -428,6 +640,10 @@ hanno priorità su queste.
   ipcMain.handle('charliecode:chat:stop', (_event, requestId: string): void => {
     inFlight.get(requestId)?.abort()
     inFlight.delete(requestId)
+    for (const [permissionId, owner] of permissionRequests) {
+      if (owner !== requestId) continue
+      permissionResolvers.get(permissionId)?.('deny')
+    }
   })
 
   ipcMain.handle('charliecode:open-config', async (): Promise<void> => {

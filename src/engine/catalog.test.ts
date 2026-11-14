@@ -1,6 +1,22 @@
 import { describe, expect, it } from 'vitest'
-import { applyOverrides, findModel, guessCaps, isChatModel } from './catalog'
+import { applyOverrides, findModel, guessCaps, guessEfforts, isChatModel } from './catalog'
 import type { CharlieCodeConfig, ModelEntry } from './types'
+
+describe('guessEfforts', () => {
+  it('offre tutti i livelli ai modelli di ragionamento', () => {
+    expect(guessEfforts('deepseek-v4.1-flash')).toEqual(['none', 'low', 'high', 'max'])
+    expect(guessEfforts('gpt-5-thinking')).toEqual(['none', 'low', 'high', 'max'])
+  })
+
+  it('limita i modelli leggeri al solo none', () => {
+    expect(guessEfforts('llama-3.2-3b')).toEqual(['none'])
+    expect(guessEfforts('deepseek-v4.1-flash-free')).toEqual(['none'])
+  })
+
+  it('dà low/high ai modelli generici', () => {
+    expect(guessEfforts('mistral-large')).toEqual(['none', 'low', 'high'])
+  })
+})
 
 describe('isChatModel', () => {
   it('scarta embedding e modelli media', () => {
@@ -32,7 +48,8 @@ const baseModel: ModelEntry = {
   label: 'Mock Echo Fast',
   caps: { tools: true, vision: false, contextWindow: 32768 },
   capsConfidence: 'guess',
-  effort: 'none'
+  effort: 'none',
+  efforts: ['none', 'low', 'high']
 }
 
 function config(overrides: CharlieCodeConfig['modelOverrides']): CharlieCodeConfig {
@@ -42,7 +59,8 @@ function config(overrides: CharlieCodeConfig['modelOverrides']): CharlieCodeConf
     modelOverrides: overrides,
     fallbackModels: [],
     effort: 'none',
-    recentWorkspaces: []
+    recentWorkspaces: [],
+    agents: { maxSteps: 24, subagentMaxSteps: 12, autoApprove: [], autoApproveCommands: [] }
   }
 }
 

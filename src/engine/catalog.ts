@@ -8,6 +8,7 @@ import { describeNetworkError } from './errors'
 import type { Platform } from './platform'
 import type {
   CatalogError,
+  EffortLevel,
   CatalogResult,
   CharlieCodeConfig,
   ModelCaps,
@@ -22,6 +23,24 @@ const VISION_MODEL =
   /(vision|llava|pixtral|gemini|gpt-4o|gpt-4\.1|gpt-5|claude|qwen[\w.-]*vl|internvl|molmo|phi[\w.-]*vision|llama[\w.-]*vision)/i
 
 const DEFAULT_CONTEXT = 32_768
+
+/**
+ * Effort is a provider-side knob (`reasoning_effort`), so it only makes sense
+ * for models that actually reason. Offering "max" on a small chat model is how
+ * you get confusing 400s, so the picker only lists what the model supports.
+ */
+const REASONING_MODEL =
+  /(reasoning|thinking|think|deepseek-r|deepseek-v4|gpt-5|gpt-6|o1|o3|o4|glm-5|qwen3|gemini-3|gemini-4|claude-(opus|sonnet)-[5-9]|grok-4|kimi-k2|minimax|nemotron|ling-|ernie|seed-oss|step-3|magistral)/i
+
+const LIGHT_MODEL = /(nano|mini|lite|small|flash-free|:free$|-free$|1b|1\.7b|3b|4b|7b|8b|9b|12b)/i
+
+export function guessEfforts(id: string): EffortLevel[] {
+  // Free-tier aliases are routed by an aggregator that ignores reasoning_effort.
+  if (/(:free|-free)$/i.test(id)) return ['none']
+  if (REASONING_MODEL.test(id)) return ['none', 'low', 'high', 'max']
+  if (LIGHT_MODEL.test(id)) return ['none']
+  return ['none', 'low', 'high']
+}
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : undefined
@@ -190,7 +209,8 @@ export async function fetchProviderModels(
         contextWindow: contextFromEntry(raw, guessed.contextWindow)
       },
       capsConfidence: declared.tools !== undefined ? 'probed' : 'guess',
-      effort: 'none'
+      effort: 'none',
+      efforts: guessEfforts(id)
     })
   }
 
@@ -256,7 +276,8 @@ export function applyOverrides(models: ModelEntry[], config: CharlieCodeConfig):
       label: override.label ?? model.label,
       caps: { ...model.caps, ...override.caps },
       capsConfidence: override.caps ? 'manual' : model.capsConfidence,
-      effort: override.effort ?? config.effort
+      effort: override.effort ?? config.effort,
+      efforts: override.efforts ?? model.efforts
     }
   })
 }

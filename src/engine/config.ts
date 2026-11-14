@@ -27,13 +27,36 @@ export const DEFAULT_CONFIG: CharlieCodeConfig = {
       kind: 'router',
       enabled: true,
       apiKeyEnv: 'FREELLMAPI_KEY'
+    },
+    {
+      // Ships disabled: the wizard enables it as soon as the user pastes a key.
+      id: 'openrouter',
+      label: 'OpenRouter',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      kind: 'direct',
+      enabled: false,
+      apiKeyEnv: 'OPENROUTER_API_KEY'
+    },
+    {
+      // Local runtime, no key needed. Enabled by the wizard once Ollama answers.
+      id: 'ollama',
+      label: 'Ollama (locale)',
+      baseUrl: 'http://localhost:11434/v1',
+      kind: 'direct',
+      enabled: false
     }
   ],
   modelOverrides: {},
   defaultModel: 'zen::deepseek-v4.1-flash-free',
   fallbackModels: ['freellmapi::auto'],
   effort: 'none',
-  recentWorkspaces: []
+  recentWorkspaces: [],
+  agents: {
+    maxSteps: 24,
+    subagentMaxSteps: 12,
+    autoApprove: ['read', 'ls', 'glob', 'grep'],
+    autoApproveCommands: []
+  }
 }
 
 export function defaultConfig(): CharlieCodeConfig {
@@ -62,7 +85,13 @@ function mergeConfig(partial: Partial<CharlieCodeConfig>): CharlieCodeConfig {
     fallbackModels: partial.fallbackModels ?? base.fallbackModels,
     effort: partial.effort ?? base.effort,
     workspace: partial.workspace,
-    recentWorkspaces: partial.recentWorkspaces ?? []
+    recentWorkspaces: partial.recentWorkspaces ?? [],
+    agents: {
+      ...base.agents,
+      ...(partial.agents ?? {}),
+      autoApprove: partial.agents?.autoApprove ?? base.agents.autoApprove,
+      autoApproveCommands: partial.agents?.autoApproveCommands ?? base.agents.autoApproveCommands
+    }
   }
 }
 
