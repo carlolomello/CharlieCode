@@ -3,18 +3,14 @@ import { applyOverrides, findModel, guessCaps, guessEfforts, isChatModel } from 
 import type { CharlieCodeConfig, ModelEntry } from './types'
 
 describe('guessEfforts', () => {
-  it('offre tutti i livelli ai modelli di ragionamento', () => {
+  it('offre tutti i livelli ai modelli che supportano reasoning', () => {
     expect(guessEfforts('deepseek-v4.1-flash')).toEqual(['none', 'low', 'high', 'max'])
     expect(guessEfforts('gpt-5-thinking')).toEqual(['none', 'low', 'high', 'max'])
+    expect(guessEfforts('deepseek-v4.1-flash-free')).toEqual(['none', 'low', 'high', 'max'])
   })
 
-  it('limita i modelli leggeri al solo none', () => {
-    expect(guessEfforts('llama-3.2-3b')).toEqual(['none'])
-    expect(guessEfforts('deepseek-v4.1-flash-free')).toEqual(['none'])
-  })
-
-  it('dà low/high ai modelli generici', () => {
-    expect(guessEfforts('mistral-large')).toEqual(['none', 'low', 'high'])
+  it('limita i modelli ultraleggeri senza reasoning a none', () => {
+    expect(guessEfforts('gpt-4o-mini')).toEqual(['none'])
   })
 })
 

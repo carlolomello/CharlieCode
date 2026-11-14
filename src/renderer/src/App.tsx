@@ -77,7 +77,7 @@ function formatBytes(bytes: number): string {
 }
 
 const EFFORT_LABEL: Record<EffortLevel, string> = {
-  none: 'nessuno',
+  none: 'default',
   low: 'basso',
   high: 'alto',
   max: 'massimo'
@@ -117,6 +117,7 @@ export default function App() {
   const [errors, setErrors] = useState<CatalogError[]>([])
   const [loadingModels, setLoadingModels] = useState(true)
   const [providers, setProviders] = useState<ProviderStatus[]>([])
+  const [autoApprove, setAutoApprove] = useState<{ tools: string[]; commands: string[] } | null>(null)
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [items, setItems] = useState<ChatItem[]>([])
@@ -136,6 +137,8 @@ export default function App() {
   const [permission, setPermission] = useState<PermissionEnvelope | null>(null)
   const [wizardOpen, setWizardOpen] = useState(false)
   const [routers, setRouters] = useState<RoutersStatus | null>(null)
+  const [newToolDraft, setNewToolDraft] = useState('')
+  const [newCommandDraft, setNewCommandDraft] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const permissionQueue = useRef<PermissionEnvelope[]>([])
@@ -154,6 +157,14 @@ export default function App() {
       setRouters(await window.charliecode.routers())
     } catch {
       setRouters(null)
+    }
+  }, [])
+
+  const refreshAutoApprove = useCallback(async (): Promise<void> => {
+    try {
+      setAutoApprove(await window.charliecode.autoApprove())
+    } catch {
+      setAutoApprove(null)
     }
   }, [])
 
@@ -190,7 +201,8 @@ export default function App() {
     void refreshProviders()
     void refreshSessions()
     void refreshRouters()
-  }, [refreshModels, refreshProviders, refreshRouters, refreshSessions])
+    void refreshAutoApprove()
+  }, [refreshModels, refreshProviders, refreshRouters, refreshSessions, refreshAutoApprove])
 
   useEffect(() => {
     const unsubscribe = window.charliecode.onChatEvent(({ requestId, event }: ChatEventEnvelope) => {
@@ -676,6 +688,31 @@ export default function App() {
     [refreshModels]
   )
 
+  const addAutoApprove = useCallback(
+    async (tool?: string, command?: boolean): Promise<void> => {
+      const entry = (tool ?? '').trim()
+      if (!entry) return
+      const next = await window.charliecode.setAutoApprove({
+        tool: command ? undefined : entry,
+        command: command ? entry : undefined
+      })
+      setAutoApprove(next)
+    },
+    []
+  )
+
+  const removeAutoApprove = useCallback(
+    async (entry: string, command?: boolean): Promise<void> => {
+      const next = await window.charliecode.setAutoApprove({
+        tool: command ? undefined : entry,
+        command: command ? entry : undefined,
+        remove: true
+      })
+      setAutoApprove(next)
+    },
+    []
+  )
+
   return (
     <div className={`app ${info?.platform === 'darwin' ? 'darwin' : ''}`}>
       <aside className="sidebar">
@@ -1159,6 +1196,69 @@ export default function App() {
               >
                 Aggiungi
               </button>
+            </div>
+
+            <h3>Permessi automatici</h3>
+            <p className="muted small">
+              Tool e comandi che CharlieCode esegue senza chiedere. I tool di sola
+              lettura partono già approvati; aggiungi un comando bash per
+              approvare tutti i suoi figli, es. <code>git status</code>.
+            </p>
+            <div className="auto-approve">
+              <div className="auto-approve-group">
+                <div className="auto-approve-label">Tool</div>
+                <div className="auto-approve-chips">
+                  {(autoApprove?.tools ?? []).map((tool) => (
+                    <span key={tool} className="chip">
+                      {tool}
+                      <button
+                        className="ghost danger-text"
+                        onClick={() => void removeAutoApprove(tool)}
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  ))}
+                  <input
+                    placeholder="es. write"
+                    value={newToolDraft}
+                    onChange={(event) => setNewToolDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') void addAutoApprove()
+                    }}
+                  />
+                  <button className="ghost" onClick={() => void addAutoApprove()}>
+                    Aggiungi
+                  </button>
+                </div>
+              </div>
+              <div className="auto-approve-group">
+                <div className="auto-approve-label">Comandi bash</div>
+                <div className="auto-approve-chips">
+                  {(autoApprove?.commands ?? []).map((command) => (
+                    <span key={command} className="chip">
+                      {command}
+                      <button
+                        className="ghost danger-text"
+                        onClick={() => void removeAutoApprove(command, true)}
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  ))}
+                  <input
+                    placeholder="es. git status"
+                    value={newCommandDraft}
+                    onChange={(event) => setNewCommandDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') void addAutoApprove(undefined, true)
+                    }}
+                  />
+                  <button className="ghost" onClick={() => void addAutoApprove(undefined, true)}>
+                    Aggiungi
+                  </button>
+                </div>
+              </div>
             </div>
 
             <h3>Istruzioni del progetto</h3>

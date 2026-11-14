@@ -740,6 +740,63 @@ button.ghost:hover,
   line-height: 1.55;
 }
 
+/* ---------- auto-approve ---------- */
+
+.auto-approve {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 10px 0 18px;
+}
+
+.auto-approve-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: #161c26;
+  border: 1px solid #23304a;
+  border-radius: 10px;
+}
+
+.auto-approve-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.auto-approve-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  background: #1f2a3a;
+  border: 1px solid #2c3a56;
+  border-radius: 999px;
+  padding: 3px 9px 3px 11px;
+  color: var(--text);
+}
+
+.chip button {
+  font-size: 10px;
+  padding: 1px 5px;
+}
+
+.auto-approve-chips input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  min-width: 130px;
+}
+
 .provider-list {
   display: flex;
   flex-direction: column;

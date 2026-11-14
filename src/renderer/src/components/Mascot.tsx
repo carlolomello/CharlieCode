@@ -103,6 +103,7 @@ function Torso(): React.JSX.Element {
       {px(12, 16, 3, 1, SHIRT_DARK)}
       {px(17, 16, 3, 1, SHIRT_DARK)}
       {px(15, 16, 2, 1, SKIN_SHADE)}
+      {px(14, 15, 4, 1, SKIN)}
       {px(11, 17, 10, 7, SHIRT)}
       {px(11, 17, 10, 1, SHIRT_EDGE)}
       {px(13, 18, 6, 1, SHIRT_DARK)}

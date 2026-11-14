@@ -649,6 +649,41 @@ hanno priorità su queste.
   ipcMain.handle('charliecode:open-config', async (): Promise<void> => {
     await shell.openPath(platform.configDir)
   })
+
+  /** The list of tools and bash prefixes that never ask the user. */
+  ipcMain.handle('charliecode:agents:auto-approve', async () => {
+    const { config } = await loadConfig(platform)
+    return {
+      tools: [...config.agents.autoApprove].sort(),
+      commands: [...config.agents.autoApproveCommands].sort()
+    }
+  })
+
+  ipcMain.handle(
+    'charliecode:agents:auto-approve:set',
+    async (
+      _event,
+      payload: { tool?: string; command?: string; remove?: boolean }
+    ): Promise<{ tools: string[]; commands: string[] }> => {
+      const { config } = await loadConfig(platform)
+      const next: CharlieCodeConfig = structuredClone(config)
+      const list = payload.command ? next.agents.autoApproveCommands : next.agents.autoApprove
+      const entry = (payload.command ?? payload.tool ?? '').trim()
+
+      if (payload.remove) {
+        const index = list.indexOf(entry)
+        if (index > -1) list.splice(index, 1)
+      } else if (entry) {
+        if (!list.includes(entry)) list.push(entry)
+      }
+
+      await saveConfig(platform, next)
+      return {
+        tools: [...next.agents.autoApprove].sort(),
+        commands: [...next.agents.autoApproveCommands].sort()
+      }
+    }
+  )
 }
 
 app.whenReady().then(() => {

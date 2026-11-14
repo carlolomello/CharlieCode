@@ -147,4 +147,9 @@ export interface CharlieCodeApi {
   respondPermission(permissionId: string, decision: PermissionDecision): Promise<void>
 
   openConfigDir(): Promise<void>
+  autoApprove(): Promise<{ tools: string[]; commands: string[] }>
+  setAutoApprove(payload: { tool?: string; command?: string; remove?: boolean }): Promise<{
+    tools: string[]
+    commands: string[]
+  }>
 }

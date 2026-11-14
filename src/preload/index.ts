@@ -90,7 +90,18 @@ const api: CharlieCodeApi = {
   respondPermission: (permissionId: string, decision: PermissionDecision) =>
     ipcRenderer.invoke('charliecode:chat:permission-response', permissionId, decision) as Promise<void>,
 
-  openConfigDir: () => ipcRenderer.invoke('charliecode:open-config') as Promise<void>
+  openConfigDir: () => ipcRenderer.invoke('charliecode:open-config') as Promise<void>,
+
+  autoApprove: () =>
+    ipcRenderer.invoke('charliecode:agents:auto-approve') as Promise<{
+      tools: string[]
+      commands: string[]
+    }>,
+  setAutoApprove: (payload: { tool?: string; command?: string; remove?: boolean }) =>
+    ipcRenderer.invoke('charliecode:agents:auto-approve:set', payload) as Promise<{
+      tools: string[]
+      commands: string[]
+    }>
 }
 
 contextBridge.exposeInMainWorld('charliecode', api)

@@ -35,11 +35,9 @@ const REASONING_MODEL =
 const LIGHT_MODEL = /(nano|mini|lite|small|flash-free|:free$|-free$|1b|1\.7b|3b|4b|7b|8b|9b|12b)/i
 
 export function guessEfforts(id: string): EffortLevel[] {
-  // Free-tier aliases are routed by an aggregator that ignores reasoning_effort.
-  if (/(:free|-free)$/i.test(id)) return ['none']
   if (REASONING_MODEL.test(id)) return ['none', 'low', 'high', 'max']
-  if (LIGHT_MODEL.test(id)) return ['none']
-  return ['none', 'low', 'high']
+  if (/^(gpt-4o-mini|claude-3-5-haiku|gemini-1\.5-flash|deepseek-chat)$/i.test(id)) return ['none']
+  return ['none', 'low', 'high', 'max']
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -170,7 +168,16 @@ export async function fetchProviderModels(
     throw new Error(`${url} → ${response.status} ${response.statusText}${body ? `: ${body}` : ''}`)
   }
 
-  const body: unknown = await response.json()
+  const text = await response.text()
+  let body: unknown
+  try {
+    body = JSON.parse(text)
+  } catch {
+    const snippet = text.replace(/<[^>]+>/g, '').trim().slice(0, 160)
+    throw new Error(
+      `${provider.label} ha risposto con HTML anziché JSON (${response.status})${snippet ? `: ${snippet}` : ''}. Verifica che il router sia in ascolto sulla porta corretta.`
+    )
+  }
   const bodyRecord = asRecord(body)
   const rawList = bodyRecord?.data ?? bodyRecord?.models ?? (Array.isArray(body) ? body : [])
 

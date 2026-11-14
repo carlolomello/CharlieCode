@@ -4,7 +4,7 @@ A desktop coding agent with a GUI — multi-agent, plan mode, local workspaces, 
 
 No account. No subscription. Your keys stay on your machine.
 
-> **Status: Phase 0 + local workspace.** Model catalog, streaming chat, stop, retry/fallback, project picker, saved sessions, `AGENTS.md` and image/document attachments are implemented and tested. Tools, permissions, skills, plugins and the multi-agent orchestrator are the next phases — see [Roadmap](#roadmap). This README marks clearly what works today and what is planned.
+> **Status: a working agent.** Model catalog, streaming chat, stop, retry/fallback, project picker, saved sessions, `AGENTS.md` and attachments work. The agent can read, search, write and run commands in your project — every write shows a unified diff and goes through a permission gate — and it delegates scoped jobs to subagents. Skills, plugins/MCP, plan mode and browser control are the next phases — see [Roadmap](#roadmap). This README marks clearly what works today and what is planned.
 
 ---
 
@@ -208,9 +208,14 @@ You can also add OpenCode Zen **inside** FreeLLMAPI (Keys → OpenCode Zen). The
 ## Using the app
 
 - **Projects** — pick a local folder from the sidebar. The app remembers the last one and the recent list; every chat is tied to its project.
-- **Sessions** — every conversation is saved under `~/.charliecode/sessions` as JSONL, listed in the sidebar with rename and delete. Closing the app never loses a chat.
+- **Sessions** — every conversation is saved under `~/.charliecode/sessions` as JSONL, listed in the sidebar with rename and delete. Closing the app never loses a chat. The full model context (tool calls included) lives beside it in `<id>.context.json`, so a resumed chat keeps working instead of replaying a transcript the model can no longer call tools from.
+- **Tools** — `read`, `ls`, `glob`, `grep`, `write`, `edit`, `bash` and `task`. Each call appears as a card with its arguments and a short result; failures are shown, not swallowed.
+- **Diffs before writes** — every `write`/`edit` produces a unified diff, rendered in the chat. You see exactly what changes before the file on disk does.
+- **Permissions** — destructive tools ask first: *allow once*, *allow always* (per tool, or per command prefix for `bash`), or *deny*. Allow-always is remembered in `config.json`, and the settings drawer lets you revoke it.
+- **Multi-agent** — the `task` tool spawns isolated subagents (`explorer` read-only, `reviewer` analysis, `implementer` write), up to depth 2, and several can run in parallel. Each one streams its own activity card; the main agent gets a compact report back.
+- **Local models** — Ollama, LM Studio and vLLM are detected and probed like any other provider, so a container with an LLM in it is a first-class backend.
 - **Model picker** — grouped by provider, `★` marks free models, `deepseek-v4.1-flash-free` is preselected when available.
-- **Effort** — `none` / `low` / `high` / `max`, forwarded as `reasoning_effort` when the provider supports it.
+- **Effort** — per model, because not every model accepts the same levels: free-tier aliases get `none`, reasoning models get `none`/`low`/`high`/`max`, light models get `none`, everything else `none`/`low`/`high`. Forwarded as `reasoning_effort`, overridable per model in `config.json`.
 - **Attachments** — drag files onto the composer, paste a screenshot, or use **+ Allega**. Images go to vision models, documents (markdown, code, JSON, CSV…) are inlined as fenced blocks.
 - **Project instructions** — `AGENTS.md`, `CHARLIECODE.md` and `CLAUDE.md` in the project root plus a global `~/.charliecode/AGENTS.md` are injected into the system prompt.
 - **Providers** — the drawer lets you paste keys, disable a provider, or add any OpenAI-compatible endpoint.
@@ -263,13 +268,19 @@ src/
     discovery  router port auto-detection
     client     streaming, retry, fallback chain, provider cache
     probe      real tool-calling detection
+    local      Ollama / LM Studio / vLLM presets and probing
+    agent      the agent loop, system prompt, subagents
+    tools      read/ls/glob/grep/write/edit/bash/task + permission helpers
+    diff       unified diff generation
+    context-store  model context sidecar per session
+    sessions   JSONL persistence
     errors     network errors turned into actionable messages
     cli        doctor / models / smoke / probe
   main/       Electron main process, IPC, abort controllers
   preload/    typed contextBridge
   shared/     IPC types
-  renderer/   React 19 + Vite
-scripts/      mock OpenAI-compatible router (tests, CI)
+  renderer/   React 19 + Vite (chat, tool cards, diff viewer, mascot)
+scripts/      mock OpenAI-compatible router (tests, CI), mascot preview
 ```
 
 Why this split: the engine is the part that will grow into the agent runtime, so it must be testable without Electron and portable to a `utilityProcess`. Platform differences are injected, not read from `process.platform`, which is why Windows bugs are caught on macOS in unit tests.
@@ -291,13 +302,13 @@ CharlieCode aims to be a GUI equivalent of Claude Code / OpenCode. The engine is
 - [x] macOS dmg (x64 + arm64) and Windows NSIS packaging
 - [x] Unit tests + cross-OS CI + mock router e2e
 
-**Phase 1 — a real agent (next)**
+**Phase 1 — a real agent (done)**
 
-- [ ] Tools: `read`, `write`, `edit`, `glob`, `grep`, `bash`
-- [ ] `PermissionGate`: deny / allow once / allow always, per tool and per command
-- [ ] Diff viewer before any write lands
+- [x] Tools: `read`, `ls`, `write`, `edit`, `glob`, `grep`, `bash`
+- [x] `PermissionGate`: deny / allow once / allow always, per tool and per command prefix
+- [x] Diff viewer before any write lands
 - [x] Workspace picker (work on a local project folder, not just chat)
-- [x] Session persistence (JSONL now, SQLite later) with rename/delete and local history
+- [x] Session persistence (JSONL) with rename/delete, local history, model-context sidecar
 
 **Phase 2 — project context**
 
@@ -307,10 +318,11 @@ CharlieCode aims to be a GUI equivalent of Claude Code / OpenCode. The engine is
 - [ ] Plan mode: read-only exploration, then an explicit approve-to-execute step
 - [ ] Context compaction with token accounting
 
-**Phase 3 — multi-agent**
+**Phase 3 — multi-agent (done, first pass)**
 
-- [ ] `task` tool: the main agent delegates a scoped job to a subagent
-- [ ] Parallel read-only subagents (search, review, test triage) with a shared budget
+- [x] `task` tool: the main agent delegates a scoped job to a subagent
+- [x] Isolated subagents with a role (`explorer` read-only, `reviewer`, `implementer`), depth limit 2
+- [x] Parallel subagents with their own activity cards in the UI
 - [ ] Orchestrator with per-agent model and effort (cheap model for search, strong model for planning)
 - [ ] Git worktree isolation for parallel writers
 
@@ -323,9 +335,20 @@ CharlieCode aims to be a GUI equivalent of Claude Code / OpenCode. The engine is
 **Phase 5 — polish**
 
 - [x] File and image attachments (images to vision models, documents inlined as fenced blocks)
+- [x] Pixel-art mascot: walks intermittently, thinks, and sits at a desk while the agent works
 - [ ] `safeStorage` for credentials instead of a `600` JSON file
 - [ ] Code signing / notarization, auto-update
 - [ ] App icon and theming
+
+**Phase 6 — browser control (last)**
+
+Queued deliberately, after the agent itself is solid. The goal is the OpenCode-style loop: drive a real browser, read the page, click, type, screenshot, and feed what it finds back into the same conversation — behind the same permission gate as `bash`.
+
+- [ ] Browser session owned by the main process (Playwright/Chromium, or attach to an existing Chrome)
+- [ ] Tools: `browse_open`, `browse_snapshot`, `browse_click`, `browse_type`, `browse_screenshot`
+- [ ] Page content treated as untrusted data, never as instructions
+- [ ] Per-origin permission policy, so a page cannot talk the agent into widening its own access
+- [ ] Visible "the agent is driving the browser" indicator, plus a one-click stop
 
 ## Development
 

@@ -11,25 +11,14 @@ export const DEFAULT_CONFIG: CharlieCodeConfig = {
   version: 1,
   providers: [
     {
-      // Free by default: Zen serves deepseek-v4.1-flash-free at cost 0. It needs
-      // either a free API key or falls back on Zen's anonymous free allowance.
-      id: 'zen',
-      label: 'OpenCode Zen',
-      baseUrl: 'https://opencode.ai/zen/v1',
-      kind: 'direct',
-      enabled: true,
-      apiKeyEnv: 'ZEN_API_KEY'
-    },
-    {
       id: 'freellmapi',
-      label: 'FreeLLMAPI (local)',
-      baseUrl: 'http://localhost:3001/v1',
+      label: 'FreeLLMAPI (locale)',
+      baseUrl: 'http://localhost:31415/v1',
       kind: 'router',
-      enabled: true,
+      enabled: false,
       apiKeyEnv: 'FREELLMAPI_KEY'
     },
     {
-      // Ships disabled: the wizard enables it as soon as the user pastes a key.
       id: 'openrouter',
       label: 'OpenRouter',
       baseUrl: 'https://openrouter.ai/api/v1',
@@ -38,7 +27,6 @@ export const DEFAULT_CONFIG: CharlieCodeConfig = {
       apiKeyEnv: 'OPENROUTER_API_KEY'
     },
     {
-      // Local runtime, no key needed. Enabled by the wizard once Ollama answers.
       id: 'ollama',
       label: 'Ollama (locale)',
       baseUrl: 'http://localhost:11434/v1',
@@ -47,8 +35,7 @@ export const DEFAULT_CONFIG: CharlieCodeConfig = {
     }
   ],
   modelOverrides: {},
-  defaultModel: 'zen::deepseek-v4.1-flash-free',
-  fallbackModels: ['freellmapi::auto'],
+  fallbackModels: [],
   effort: 'none',
   recentWorkspaces: [],
   agents: {
