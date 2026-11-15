@@ -37,6 +37,7 @@ export interface ProviderStatus {
   hasKey: boolean
   keyHint: string
   keySource: 'env' | 'credentials' | 'none'
+  showAllModels: boolean
 }
 
 export interface ChatStartPayload {
@@ -52,6 +53,8 @@ export interface ChatStartPayload {
   system?: string
   maxOutputTokens?: number
   workspacePath?: string
+  /** `plan` explores read-only; `build` can write. Defaults to build. */
+  mode?: 'plan' | 'build'
   /** Images (data URL) and documents (raw text) attached to this turn. */
   attachments?: IncomingAttachment[]
 }
@@ -127,6 +130,7 @@ export interface CharlieCodeApi {
   providers(): Promise<ProviderStatus[]>
   setProviderKey(providerId: string, apiKey: string): Promise<ProviderStatus[]>
   toggleProvider(providerId: string, enabled: boolean): Promise<ProviderStatus[]>
+  setProviderShowAllModels(providerId: string, showAll: boolean): Promise<ProviderStatus[]>
   addProvider(payload: AddProviderPayload): Promise<ProviderStatus[]>
   openGlobalAgents(): Promise<void>
 

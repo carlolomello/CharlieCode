@@ -147,7 +147,8 @@ async function providerStatuses(config: CharlieCodeConfig): Promise<ProviderStat
       enabled: provider.enabled,
       hasKey: Boolean(key.apiKey),
       keyHint: key.apiKey ? maskKey(key.apiKey) : key.hint,
-      keySource: key.source
+      keySource: key.source,
+      showAllModels: Boolean(provider.showAllModels)
     })
   }
   return statuses
@@ -309,6 +310,22 @@ function registerIpc(): void {
         ...config,
         providers: config.providers.map((provider) =>
           provider.id === providerId ? { ...provider, enabled } : provider
+        )
+      }
+      await saveConfig(platform, next)
+      resetProviderCache()
+      return providerStatuses(next)
+    }
+  )
+
+  ipcMain.handle(
+    'charliecode:providers:show-all-models',
+    async (_event, providerId: string, showAll: boolean): Promise<ProviderStatus[]> => {
+      const { config } = await loadConfig(platform)
+      const next: CharlieCodeConfig = {
+        ...config,
+        providers: config.providers.map((provider) =>
+          provider.id === providerId ? { ...provider, showAllModels: showAll } : provider
         )
       }
       await saveConfig(platform, next)
@@ -537,7 +554,8 @@ hanno priorità su queste.
               system,
               effort: payload.effort,
               maxOutputTokens: payload.maxOutputTokens,
-              signal: controller.signal
+              signal: controller.signal,
+              mode: payload.mode ?? 'build'
             },
             {
               platform,

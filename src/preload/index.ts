@@ -33,6 +33,10 @@ const api: CharlieCodeApi = {
     ipcRenderer.invoke('charliecode:providers:toggle', providerId, enabled) as Promise<
       ProviderStatus[]
     >,
+  setProviderShowAllModels: (providerId: string, showAll: boolean) =>
+    ipcRenderer.invoke('charliecode:providers:show-all-models', providerId, showAll) as Promise<
+      ProviderStatus[]
+    >,
   addProvider: (payload: AddProviderPayload) =>
     ipcRenderer.invoke('charliecode:providers:add', payload) as Promise<ProviderStatus[]>,
   openGlobalAgents: () =>

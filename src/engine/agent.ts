@@ -97,6 +97,16 @@ function toModelMessages(messages: StreamRequest['messages']): ModelMessage[] {
   })
 }
 
+const PLAN_PROMPT = [
+  'MODALITÀ PIANO (sola lettura).',
+  'Hai a disposizione solo read, ls, glob e grep: non puoi scrivere file né eseguire comandi.',
+  'Esplora il progetto quanto basta, poi rispondi con un piano concreto e verificabile:',
+  '- cosa hai trovato (file e righe rilevanti),',
+  '- i passi che proporresti, in ordine, con i file che toccheresti,',
+  '- i rischi o le scelte aperte.',
+  'Non affermare di aver modificato qualcosa. Il piano verrà approvato prima dell’esecuzione.'
+].join('\n')
+
 /**
  * Runs one agent turn: streams text, executes tools, lets the model iterate,
  * and (when it calls `task`) spawns isolated subagents that run the same loop
@@ -116,6 +126,12 @@ export async function runAgent(
 ): Promise<AgentResult> {
   const depth = options.depth ?? 0
   const modelKey = options.modelKey ?? request.modelKey
+  const planMode = (request.mode ?? 'build') === 'plan'
+  // Plan mode never gets a writing tool, even if a caller passes one.
+  const allow = planMode ? ['read', 'ls', 'glob', 'grep', 'task'] : options.allow
+  const systemPrompt = [options.system ?? request.system, planMode ? PLAN_PROMPT : '']
+    .filter(Boolean)
+    .join('\n\n')
   const { candidates, error } = resolveCandidates({ ...request, modelKey }, {
     platform: deps.platform,
     config: deps.config,
@@ -157,6 +173,7 @@ export async function runAgent(
       ...(options.agentName ? { agentName: options.agentName } : {}),
       autoApprove: deps.config.agents.autoApprove,
       autoApproveCommands: deps.config.agents.autoApproveCommands,
+      ...(planMode ? { readOnly: true } : {}),
       askPermission: deps.askPermission,
       emit,
       runSubagent: async (sub) => {
@@ -190,7 +207,9 @@ export async function runAgent(
               modelKey: subModel,
               messages: [{ role: 'user', content: sub.prompt }],
               effort: request.effort,
-              signal: request.signal
+              signal: request.signal,
+              // Plan mode propagates: a subagent can never write either.
+              ...(planMode ? { mode: 'plan' as const } : {})
             },
             {
               ...deps,
@@ -246,9 +265,9 @@ export async function runAgent(
 
         const result = streamText({
           model: compat.chatModel(model.id),
-          system: options.system ?? request.system,
+          system: systemPrompt,
           messages: inputMessages,
-          tools: toolset(runtime, options.allow),
+          tools: toolset(runtime, allow),
           stopWhen: stepCountIs(deps.maxSteps ?? deps.config.agents.maxSteps),
           maxOutputTokens: request.maxOutputTokens ?? 4096,
           abortSignal: request.signal,

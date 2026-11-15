@@ -18,6 +18,7 @@ import type {
   RoutersStatus
 } from '../../shared/ipc'
 import { Mascot, MascotDesk, type MascotMood } from './components/Mascot'
+import { Markdown } from './components/Markdown'
 import { PermissionModal } from './components/PermissionModal'
 import { SetupWizard } from './components/SetupWizard'
 import { ToolActivity, type SubagentRun } from './components/ToolActivity'
@@ -27,6 +28,8 @@ type ChatItem = StoredMessage & {
   requestId?: string
   tools?: ToolLog[]
   subagents?: SubagentRun[]
+  /** Mode the turn ran in; drives the "esegui il piano" affordance. */
+  mode?: 'plan' | 'build'
 }
 
 interface PendingAttachment extends IncomingAttachment {
@@ -123,6 +126,7 @@ export default function App() {
   const [items, setItems] = useState<ChatItem[]>([])
   const [modelKey, setModelKey] = useState<string>('')
   const [effort, setEffort] = useState<EffortLevel>('none')
+  const [mode, setMode] = useState<'plan' | 'build'>('build')
   const [workspace, setWorkspace] = useState<string | undefined>(undefined)
   const [input, setInput] = useState('')
   const [streamingId, setStreamingId] = useState<string | null>(null)
@@ -140,6 +144,7 @@ export default function App() {
   const [newToolDraft, setNewToolDraft] = useState('')
   const [newCommandDraft, setNewCommandDraft] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const permissionQueue = useRef<PermissionEnvelope[]>([])
   const permissionRef = useRef<PermissionEnvelope | null>(null)
@@ -178,7 +183,6 @@ export default function App() {
         if (current && response.models.some((model) => model.key === current)) return current
         const preferred =
           response.models.find((model) => model.key === response.defaultModel) ??
-          response.models.find((model) => /deepseek-v4\.1-flash-free/i.test(model.id)) ??
           response.models.find((model) => model.caps.tools) ??
           response.models[0]
         return preferred ? preferred.key : ''
@@ -349,10 +353,20 @@ export default function App() {
     }
   }, [refreshSessions])
 
+  // Only follow the stream when the user is already at the bottom; otherwise
+  // reading scrollback would be yanked away on every token.
+  const stickToBottom = useRef(true)
+
   useEffect(() => {
     const node = scrollRef.current
-    if (node) node.scrollTop = node.scrollHeight
+    if (!node || !stickToBottom.current) return
+    node.scrollTop = node.scrollHeight
   }, [items])
+
+  // Give the keyboard back as soon as a turn ends.
+  useEffect(() => {
+    if (!streamingId) inputRef.current?.focus()
+  }, [streamingId])
 
   const selectedModel = useMemo(
     () => models.find((model) => model.key === modelKey),
@@ -517,49 +531,52 @@ export default function App() {
     setAttachments((previous) => previous.filter((item) => item.localId !== localId))
   }, [])
 
-  const send = useCallback(async (): Promise<void> => {
-    const text = input.trim()
-    if ((!text && attachments.length === 0) || streamingId || !modelKey) return
+  const send = useCallback(
+    async (overrideText?: string, overrideMode?: 'plan' | 'build'): Promise<void> => {
+      const text = (overrideText ?? input).trim()
+      if ((!text && attachments.length === 0) || streamingId || !modelKey) return
+      const activeMode = overrideMode ?? mode
 
-    const requestId = crypto.randomUUID()
-    const userMessageId = crypto.randomUUID()
-    const assistantMessageId = crypto.randomUUID()
-    const createdAt = new Date().toISOString()
-    const sentAttachments = attachments
+      const requestId = crypto.randomUUID()
+      const userMessageId = crypto.randomUUID()
+      const assistantMessageId = crypto.randomUUID()
+      const createdAt = new Date().toISOString()
+      const sentAttachments = attachments
 
-    setItems((previous) => [
-      ...previous,
-      {
-        id: userMessageId,
-        role: 'user',
-        content: text,
-        createdAt,
-        ...(sentAttachments.length > 0
-          ? {
-              attachments: sentAttachments.map((item) => ({
-                id: item.localId,
-                name: item.name,
-                mime: item.mime,
-                size: item.size,
-                kind: item.kind
-              }))
-            }
-          : {})
-      },
-      {
-        id: assistantMessageId,
-        role: 'assistant',
-        content: '',
-        createdAt,
-        pending: true,
-        requestId
-      }
-    ])
-    setInput('')
-    setAttachments([])
-    setAttachError(null)
-    setStreamingId(requestId)
-    setFatal(null)
+      setItems((previous) => [
+        ...previous,
+        {
+          id: userMessageId,
+          role: 'user',
+          content: text,
+          createdAt,
+          ...(sentAttachments.length > 0
+            ? {
+                attachments: sentAttachments.map((item) => ({
+                  id: item.localId,
+                  name: item.name,
+                  mime: item.mime,
+                  size: item.size,
+                  kind: item.kind
+                }))
+              }
+            : {})
+        },
+        {
+          id: assistantMessageId,
+          role: 'assistant',
+          content: '',
+          createdAt,
+          pending: true,
+          requestId,
+          mode: activeMode
+        }
+      ])
+      setInput('')
+      setAttachments([])
+      setAttachError(null)
+      setStreamingId(requestId)
+      setFatal(null)
 
     try {
       const result = await window.charliecode.startChat({
@@ -570,6 +587,7 @@ export default function App() {
         modelKey,
         text,
         effort,
+        mode: activeMode,
         workspacePath: workspace,
         ...(sentAttachments.length > 0
           ? {
@@ -606,7 +624,7 @@ export default function App() {
       )
       setStreamingId(null)
     }
-  }, [attachments, effort, input, modelKey, sessionId, streamingId, workspace])
+  }, [attachments, effort, input, mode, modelKey, sessionId, streamingId, workspace])
 
   const stop = useCallback(async (): Promise<void> => {
     if (!streamingId) return
@@ -637,6 +655,14 @@ export default function App() {
   const toggleProvider = useCallback(
     async (providerId: string, enabled: boolean): Promise<void> => {
       setProviders(await window.charliecode.toggleProvider(providerId, enabled))
+      await refreshModels()
+    },
+    [refreshModels]
+  )
+
+  const toggleShowAllModels = useCallback(
+    async (providerId: string, showAll: boolean): Promise<void> => {
+      setProviders(await window.charliecode.setProviderShowAllModels(providerId, showAll))
       await refreshModels()
     },
     [refreshModels]
@@ -836,6 +862,23 @@ export default function App() {
             <button className="ghost" onClick={() => void refreshModels()} disabled={loadingModels}>
               {loadingModels ? '…' : '↻'}
             </button>
+
+            <div className="mode-switch" role="group" aria-label="Modalità dell'agente">
+              <button
+                className={`mode-option ${mode === 'plan' ? 'active' : ''}`}
+                onClick={() => setMode('plan')}
+                title="Sola lettura: esplora e propone un piano, senza modificare file"
+              >
+                Piano
+              </button>
+              <button
+                className={`mode-option ${mode === 'build' ? 'active' : ''}`}
+                onClick={() => setMode('build')}
+                title="L'agente può scrivere file ed eseguire comandi"
+              >
+                Build
+              </button>
+            </div>
           </div>
 
           <div className="topbar-right">
@@ -863,7 +906,14 @@ export default function App() {
 
         {fatal && <div className="banner error">{fatal}</div>}
 
-        <main className="scroll" ref={scrollRef}>
+        <main
+          className="scroll"
+          ref={scrollRef}
+          onScroll={(event) => {
+            const node = event.currentTarget
+            stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 90
+          }}
+        >
           {needsSetup ? (
             <section className="setup">
               <Mascot size={120} mood="worried" className="setup-mascot" />
@@ -940,9 +990,15 @@ export default function App() {
                       ))}
                     </div>
                   )}
-                  <div className="message-body">
-                    {item.content || (item.pending || (item.attachments?.length ?? 0) > 0 ? '' : '—')}
-                  </div>
+                  {item.role === 'assistant' && item.content ? (
+                    <div className="message-body assistant">
+                      <Markdown text={item.content} />
+                    </div>
+                  ) : (
+                    <div className="message-body">
+                      {item.content || (item.pending || (item.attachments?.length ?? 0) > 0 ? '' : '—')}
+                    </div>
+                  )}
                   {item.role === 'assistant' && (
                     <ToolActivity
                       logs={item.tools ?? []}
@@ -950,6 +1006,27 @@ export default function App() {
                       busy={Boolean(item.pending)}
                     />
                   )}
+                  {item.role === 'assistant' &&
+                    item.mode === 'plan' &&
+                    !item.pending &&
+                    !streamingId &&
+                    item.content.trim().length > 0 && (
+                      <div className="plan-actions">
+                        <button
+                          className="primary small"
+                          onClick={() => {
+                            setMode('build')
+                            void send(
+                              'Il piano qui sopra va bene: implementalo ora. Applica le modifiche una alla volta e verifica con test/build quando possibile.',
+                              'build'
+                            )
+                          }}
+                        >
+                          ▶ Esegui il piano
+                        </button>
+                        <span className="muted small">passa in Build e applica le modifiche</span>
+                      </div>
+                    )}
                   {item.error && <div className="message-error">{item.error}</div>}
                   {item.meta && <div className="message-meta">{item.meta}</div>}
                 </article>
@@ -1015,6 +1092,7 @@ export default function App() {
           {attachError && <div className="composer-error">{attachError}</div>}
 
           <textarea
+            ref={inputRef}
             value={input}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={onKeyDown}
@@ -1126,6 +1204,18 @@ export default function App() {
                     </span>
                   </div>
                   <div className="provider-url">{provider.baseUrl}</div>
+                  {provider.kind === 'router' && (
+                    <label className="provider-toggle small-toggle">
+                      <input
+                        type="checkbox"
+                        checked={provider.showAllModels}
+                        onChange={(event) =>
+                          void toggleShowAllModels(provider.id, event.target.checked)
+                        }
+                      />
+                      <span>mostra tutti i modelli del router (di default ne basta uno)</span>
+                    </label>
+                  )}
                   <div className="provider-key">
                     <input
                       type="password"

@@ -229,7 +229,10 @@ export async function fetchProviderModels(
       .sort((a, b) => b[1] - a[1])
       .map(([reason, count]) => `${reason} (${count})`)
       .join(', ')
-    notice = `${unavailable.length} modelli nascosti: ${detail}. Aggiungi le provider key nella dashboard del router.`
+    notice =
+      `${unavailable.length} modelli del router non sono utilizzabili (${detail}). ` +
+      `Apri la dashboard di ${provider.label} → Keys e aggiungi almeno una chiave gratuita ` +
+      `(Google AI Studio, Groq, Cerebras, OpenRouter…).`
   }
 
   return { models, notice }
@@ -239,8 +242,22 @@ export async function loadCatalog(
   platform: Platform,
   config: CharlieCodeConfig
 ): Promise<CatalogResult> {
-  const enabled = config.providers.filter((p) => p.enabled)
   const errors: CatalogError[] = []
+
+  // A provider with no key that is not a local server cannot answer. Listing
+  // its models anyway is how the picker fills with options that 401 on send.
+  const enabled = (
+    await Promise.all(
+      config.providers
+        .filter((provider) => provider.enabled)
+        .map(async (provider) => {
+          const { apiKey } = await resolveApiKey(platform, provider)
+          if (apiKey || isLocalBaseUrl(provider.baseUrl)) return provider
+          return null
+        })
+    )
+  ).filter((provider): provider is ProviderConfig => provider !== null)
+
   const settled = await Promise.allSettled(
     enabled.map(async (provider) => ({ provider, models: await fetchProviderModels(platform, provider) }))
   )
@@ -254,7 +271,7 @@ export async function loadCatalog(
       if (notice) {
         errors.push({ providerId: provider.id, providerLabel: provider.label, message: notice })
       }
-      models.push(...applyOverrides(providerModels, config))
+      models.push(...applyOverrides(collapseRouterModels(providerModels, provider), config))
     } else {
       errors.push({
         providerId: provider.id,
@@ -270,6 +287,36 @@ export async function loadCatalog(
   })
 
   return { models, errors }
+}
+
+function isLocalBaseUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname
+    return (
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host === '0.0.0.0' ||
+      host === '::1' ||
+      host.endsWith('.local')
+    )
+  } catch {
+    return false
+  }
+}
+
+/**
+ * FreeLLMAPI exposes every model it can reach. The whole point of the router is
+ * that it picks one, so the picker shows a single "automatico" entry unless the
+ * user explicitly asks for the full list.
+ */
+function collapseRouterModels(models: ModelEntry[], provider: ProviderConfig): ModelEntry[] {
+  if (provider.kind !== 'router' || provider.showAllModels) return models
+  const auto =
+    models.find((model) => /\bauto\b/i.test(model.id)) ??
+    models.find((model) => /\bauto\b/i.test(model.label)) ??
+    models[0]
+  if (!auto) return []
+  return [{ ...auto, label: 'Automatico (il router sceglie il modello)' }]
 }
 
 export function applyOverrides(models: ModelEntry[], config: CharlieCodeConfig): ModelEntry[] {

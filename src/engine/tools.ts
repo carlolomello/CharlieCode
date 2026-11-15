@@ -68,6 +68,8 @@ export interface ToolRuntime {
   agentName?: string
   autoApprove: string[]
   autoApproveCommands: string[]
+  /** Plan mode: nothing may write, and subagents are forced read-only. */
+  readOnly?: boolean
   askPermission: (request: PermissionRequest) => Promise<PermissionDecision>
   emit: (event: EngineEvent) => void
   runSubagent: (request: SubagentRequest) => Promise<SubagentResult>
@@ -597,7 +599,9 @@ export function buildTools(runtime: ToolRuntime) {
           model: z.string().optional().describe('modelKey alternativo per questo subagente')
         }),
         run: async ({ description, prompt, agent, model }) => {
-          const result = await runtime.runSubagent({ description, prompt, agent, model })
+          // Plan mode keeps subagents read-only no matter what the model asked.
+          const role = runtime.readOnly ? 'explorer' : agent
+          const result = await runtime.runSubagent({ description, prompt, agent: role, model })
           return {
             output: result.text,
             summary: `${description} · ${result.ok ? 'completato' : 'fallito'}`

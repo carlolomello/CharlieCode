@@ -20,6 +20,11 @@ export interface ProviderConfig {
   enabled: boolean
   /** Env var checked before the credentials file. */
   apiKeyEnv?: string
+  /**
+   * Router providers expose dozens of models. By default the picker shows one
+   * "automatico" entry; set this to list them all.
+   */
+  showAllModels?: boolean
 }
 
 export interface ModelCaps {
@@ -128,7 +133,15 @@ export interface StreamRequest {
   maxOutputTokens?: number
   temperature?: number
   signal?: AbortSignal
+  /**
+   * `plan` explores and proposes without touching the project; `build` lets the
+   * agent write. Defaults to `build`.
+   */
+  mode?: AgentMode
 }
+
+/** Plan mode is read-only; build mode can modify the project. */
+export type AgentMode = 'plan' | 'build'
 
 export interface TokenUsage {
   inputTokens?: number
