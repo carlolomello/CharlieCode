@@ -787,7 +787,7 @@ export default function App() {
             <Mascot size={38} mood={mood} />
             <div>
               <div className="brand-name">CharlieCode</div>
-              <div className="brand-sub">v{info?.version ?? '0.0.2'}</div>
+              <div className="brand-sub">v{info?.version ?? '0.0.1'}</div>
             </div>
           </div>
 
