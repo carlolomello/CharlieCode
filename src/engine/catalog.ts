@@ -222,7 +222,10 @@ export async function fetchProviderModels(
   }
 
   let notice: string | undefined
-  if (unavailable.length > 0) {
+  // Only nag when the provider can answer nothing at all. When some models are
+  // usable the unusable ones are simply hidden, and a permanent yellow banner
+  // about them is noise.
+  if (unavailable.length > 0 && models.length === 0) {
     const counts = new Map<string, number>()
     for (const reason of unavailable) counts.set(reason, (counts.get(reason) ?? 0) + 1)
     const detail = [...counts.entries()]
@@ -309,13 +312,30 @@ function isLocalBaseUrl(url: string): boolean {
  * that it picks one, so the picker shows a single "automatico" entry unless the
  * user explicitly asks for the full list.
  */
-function collapseRouterModels(models: ModelEntry[], provider: ProviderConfig): ModelEntry[] {
+export function collapseRouterModels(models: ModelEntry[], provider: ProviderConfig): ModelEntry[] {
   if (provider.kind !== 'router' || provider.showAllModels) return models
   const auto =
     models.find((model) => /\bauto\b/i.test(model.id)) ??
     models.find((model) => /\bauto\b/i.test(model.label)) ??
     models[0]
-  if (!auto) return []
+  if (!auto) {
+    // The router answered but nothing is usable yet (no provider keys). Keep a
+    // single entry anyway: an empty picker leaves the user with no way forward,
+    // and the router starts working as soon as a key is added.
+    return [
+      {
+        key: `${provider.id}::auto`,
+        providerId: provider.id,
+        providerLabel: provider.label,
+        id: 'auto',
+        label: 'Automatico (il router sceglie il modello)',
+        caps: { tools: true, vision: false, contextWindow: DEFAULT_CONTEXT },
+        capsConfidence: 'guess',
+        effort: 'none',
+        efforts: guessEfforts('auto')
+      }
+    ]
+  }
   return [{ ...auto, label: 'Automatico (il router sceglie il modello)' }]
 }
 
@@ -341,5 +361,31 @@ export function findModel(models: ModelEntry[], keyOrId: string): ModelEntry | u
     models.find((model) => model.key === keyOrId) ??
     models.find((model) => model.id === keyOrId) ??
     models.find((model) => model.key.endsWith(`::${keyOrId}`))
+  )
+}
+
+/**
+ * The model to use when the requested one is gone (provider removed, model
+ * retired, session restored from an older install). Prefers the configured
+ * default, then a router's "automatico" entry, then anything that can call
+ * tools, then the first entry.
+ */
+export function pickDefaultModel(
+  models: ModelEntry[],
+  config: CharlieCodeConfig
+): ModelEntry | undefined {
+  if (models.length === 0) return undefined
+  if (config.defaultModel) {
+    const preferred = findModel(models, config.defaultModel)
+    if (preferred) return preferred
+  }
+  const routerIds = new Set(
+    config.providers.filter((provider) => provider.kind === 'router').map((provider) => provider.id)
+  )
+  return (
+    models.find((model) => routerIds.has(model.providerId) && model.id === 'auto') ??
+    models.find((model) => routerIds.has(model.providerId)) ??
+    models.find((model) => model.caps.tools) ??
+    models[0]
   )
 }

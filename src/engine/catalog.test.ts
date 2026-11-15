@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { applyOverrides, findModel, guessCaps, guessEfforts, isChatModel } from './catalog'
+import {
+  applyOverrides,
+  collapseRouterModels,
+  findModel,
+  guessCaps,
+  guessEfforts,
+  isChatModel,
+  pickDefaultModel
+} from './catalog'
 import type { CharlieCodeConfig, ModelEntry } from './types'
 
 describe('guessEfforts', () => {
@@ -94,5 +102,75 @@ describe('findModel', () => {
     expect(findModel(models, 'freellmapi::mock/echo-fast')?.key).toBe(baseModel.key)
     expect(findModel(models, 'mock/echo-fast')?.key).toBe(baseModel.key)
     expect(findModel(models, 'echo-fast')).toBeUndefined()
+  })
+})
+
+const router = {
+  id: 'freellmapi',
+  label: 'FreeLLMAPI',
+  baseUrl: 'http://localhost:31415/v1',
+  kind: 'router' as const,
+  enabled: true
+}
+
+describe('collapseRouterModels', () => {
+  it('riduce un router a una sola voce automatica', () => {
+    const models = [baseModel, { ...baseModel, key: 'freellmapi::auto', id: 'auto' }]
+    const collapsed = collapseRouterModels(models, router)
+    expect(collapsed).toHaveLength(1)
+    expect(collapsed[0]?.id).toBe('auto')
+    expect(collapsed[0]?.label).toBe('Automatico (il router sceglie il modello)')
+  })
+
+  it('tiene una voce automatica anche quando il router non ha modelli utilizzabili', () => {
+    // FreeLLMAPI senza key dei provider: la lista è vuota ma il selettore non
+    // deve restare senza scelte.
+    const collapsed = collapseRouterModels([], router)
+    expect(collapsed).toHaveLength(1)
+    expect(collapsed[0]?.key).toBe('freellmapi::auto')
+    expect(collapsed[0]?.id).toBe('auto')
+  })
+
+  it('non tocca i provider diretti né showAllModels', () => {
+    const direct = collapseRouterModels([baseModel], { ...router, kind: 'direct' })
+    expect(direct).toHaveLength(1)
+    expect(direct[0]?.key).toBe(baseModel.key)
+
+    const all = collapseRouterModels([baseModel], { ...router, showAllModels: true })
+    expect(all).toHaveLength(1)
+    expect(all[0]?.key).toBe(baseModel.key)
+  })
+})
+
+describe('pickDefaultModel', () => {
+  const other: ModelEntry = {
+    ...baseModel,
+    key: 'openrouter::deepseek',
+    providerId: 'openrouter',
+    id: 'deepseek',
+    caps: { tools: false, vision: false, contextWindow: 32768 }
+  }
+
+  it('preferisce il default configurato', () => {
+    const cfg = config({})
+    cfg.defaultModel = 'openrouter::deepseek'
+    expect(pickDefaultModel([baseModel, other], cfg)?.key).toBe('openrouter::deepseek')
+  })
+
+  it('senza default sceglie la voce automatica del router', () => {
+    const auto: ModelEntry = { ...baseModel, key: 'freellmapi::auto', id: 'auto' }
+    const cfg = config({})
+    cfg.providers = [router]
+    expect(pickDefaultModel([other, auto, baseModel], cfg)?.key).toBe('freellmapi::auto')
+  })
+
+  it('ignora un default che non esiste più', () => {
+    const cfg = config({})
+    cfg.defaultModel = 'zen::deepseek-v4.1-flash-free'
+    expect(pickDefaultModel([baseModel], cfg)?.key).toBe(baseModel.key)
+  })
+
+  it('restituisce undefined senza modelli', () => {
+    expect(pickDefaultModel([], config({}))).toBeUndefined()
   })
 })

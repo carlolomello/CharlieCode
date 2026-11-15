@@ -2,11 +2,11 @@ import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
 import { buildSystemPrompt, runAgent } from '../engine/agent'
 import { globalAgentsPath, loadProjectContext } from '../engine/agents'
 import { attachmentsDir, materializeHistory, saveAttachments } from '../engine/attachments'
-import { loadCatalog } from '../engine/catalog'
+import { findModel, loadCatalog, pickDefaultModel } from '../engine/catalog'
 import { resetProviderCache } from '../engine/client'
 import {
   CONFIG_FILE,
@@ -251,7 +251,9 @@ function registerIpc(): void {
   ipcMain.handle('charliecode:models', async (): Promise<ModelsResponse> => {
     const { config } = await loadConfig(platform)
     const { models, errors } = await loadCatalog(platform, config)
-    return { models, errors, defaultModel: config.defaultModel }
+    // The resolved default, not the raw config value: the renderer uses it to
+    // repair a stale selection (a model whose provider is gone).
+    return { models, errors, defaultModel: pickDefaultModel(models, config)?.key ?? config.defaultModel }
   })
 
   ipcMain.handle('charliecode:workspace:pick', async (event): Promise<{ path?: string }> => {
@@ -539,6 +541,15 @@ hanno priorità su queste.
 
         try {
           const { models } = await loadCatalog(platform, config)
+          // The requested model may be gone (provider removed, model retired,
+          // session restored from an older install). Falling back here keeps a
+          // stale key from dead-ending the chat.
+          const requested = findModel(models, payload.modelKey)
+          const modelKey = requested?.key ?? pickDefaultModel(models, config)?.key ?? payload.modelKey
+          if (modelKey !== payload.modelKey) {
+            usedModel = modelKey
+            await updateSession(platform, session.id, { modelKey })
+          }
           const stored = (await readSession(platform, session.id)) ?? session
           const savedContext = await readAgentContext(platform, session.id)
           const history =
@@ -551,7 +562,7 @@ hanno priorità su queste.
 
           const result = await runAgent(
             {
-              modelKey: payload.modelKey,
+              modelKey,
               messages: [],
               system,
               effort: payload.effort,
@@ -741,6 +752,21 @@ hanno priorità su queste.
     await shell.openPath(path)
     return path
   })
+}
+
+app.setName('CharlieCode')
+
+/**
+ * In development Electron runs from `node_modules`, so the Dock would show the
+ * Electron name and logo. Point it at our own icon; a packaged build already
+ * gets both from the bundle (Info.plist + icon.icns).
+ */
+if (process.platform === 'darwin' && !app.isPackaged) {
+  const devIcon = join(__dirname, '../../build/icon.png')
+  if (existsSync(devIcon)) {
+    const image = nativeImage.createFromPath(devIcon)
+    if (!image.isEmpty()) app.dock?.setIcon(image)
+  }
 }
 
 app.whenReady().then(() => {

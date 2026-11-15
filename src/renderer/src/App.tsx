@@ -129,6 +129,7 @@ export default function App() {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [items, setItems] = useState<ChatItem[]>([])
   const [modelKey, setModelKey] = useState<string>('')
+  const [preferredModel, setPreferredModel] = useState<string>('')
   const [effort, setEffort] = useState<EffortLevel>('none')
   const [mode, setMode] = useState<'plan' | 'build'>('build')
   const [workspace, setWorkspace] = useState<string | undefined>(undefined)
@@ -199,6 +200,7 @@ export default function App() {
           response.models[0]
         return preferred ? preferred.key : ''
       })
+      setPreferredModel(response.defaultModel ?? '')
       setFatal(null)
     } catch (error) {
       setFatal(error instanceof Error ? error.message : String(error))
@@ -392,6 +394,20 @@ export default function App() {
     () => models.find((model) => model.key === modelKey),
     [models, modelKey]
   )
+
+  // A selection can go stale: the provider is removed, the model is retired,
+  // or a restored session points at something this install no longer has. The
+  // picker would then show one thing while `modelKey` held another, and every
+  // send failed with "non presente nel catalog".
+  useEffect(() => {
+    if (models.length === 0) return
+    if (models.some((model) => model.key === modelKey)) return
+    const fallback =
+      models.find((model) => model.key === preferredModel) ??
+      models.find((model) => model.caps.tools) ??
+      models[0]
+    if (fallback) setModelKey(fallback.key)
+  }, [models, modelKey, preferredModel])
 
   // The picker only offers levels the model actually accepts.
   const effortOptions = useMemo<EffortLevel[]>(
