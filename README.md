@@ -1,133 +1,124 @@
 # CharlieCode
 
-A desktop coding agent with a GUI — multi-agent, plan mode, local workspaces, `AGENTS.md`, skills and plugins. Powered by **free models** through [FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi), or by any OpenAI-compatible endpoint you add yourself.
+**A desktop coding agent with a real GUI.** Point it at a folder, describe what you want, and it reads your code, edits files, runs commands and reports back — showing every diff before it touches disk.
 
-No account. No subscription. Your keys stay on your machine.
+No terminal, no account, no subscription. Models are free by default through [FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi); any OpenAI-compatible endpoint works too, and your keys never leave your machine.
 
-> **Status: a working agent.** Model catalog, streaming chat, stop, retry/fallback, project picker, saved sessions, `AGENTS.md` and attachments work. The agent can read, search, write and run commands in your project — every write shows a unified diff and goes through a permission gate — and it delegates scoped jobs to subagents. Skills, plugins/MCP, plan mode and browser control are the next phases — see [Roadmap](#roadmap). This README marks clearly what works today and what is planned.
-
----
-
-## Contents
-
-- [Why another coding agent](#why-another-coding-agent)
-- [Install CharlieCode](#install-charliecode)
-- [Connect models: FreeLLMAPI](#connect-models-freellmapi)
-- [Add your own API (any OpenAI-compatible)](#add-your-own-api-any-openai-compatible)
-- [Recommended free model](#recommended-free-model)
-- [Using the app](#using-the-app)
-- [CLI](#cli)
-- [Configuration](#configuration)
-- [Architecture](#architecture)
-- [Roadmap](#roadmap)
-- [Development](#development)
-- [Troubleshooting](#troubleshooting)
-- [Security](#security)
-- [License](#license)
+[![Download](https://img.shields.io/badge/download-installers-brightgreen)](https://github.com/carlolomello/CharlieCode/releases/latest)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
 ---
 
-## Why another coding agent
+## Download and install
 
-CharlieCode is a personal, open prototype of the "agentic IDE" idea:
+Grab the installer from the [latest release](https://github.com/carlolomello/CharlieCode/releases/latest) — no compiling, no toolchain:
 
-- **Desktop GUI**, not a terminal. macOS and Windows installers.
-- **Free-first.** FreeLLMAPI stacks ~87 free provider tiers behind one OpenAI-compatible endpoint; CharlieCode speaks that protocol, so any free model works.
-- **Bring your own model.** Every provider is a plain `{ baseUrl, apiKey }` entry — OpenCode Zen, OpenAI, OpenRouter, LM Studio, Ollama, vLLM, a corporate gateway.
-- **Own engine.** No Electron imports in the engine, so it runs headless, is testable on CI for both OSes, and can move to a `utilityProcess` later.
+| Platform | File | Notes |
+| --- | --- | --- |
+| macOS · Apple Silicon | [`CharlieCode-0.0.2-arm64.dmg`](https://github.com/carlolomello/CharlieCode/releases/download/v0.0.2/CharlieCode-0.0.2-arm64.dmg) | M1/M2/M3/M4 |
+| macOS · Intel | [`CharlieCode-0.0.2.dmg`](https://github.com/carlolomello/CharlieCode/releases/download/v0.0.2/CharlieCode-0.0.2.dmg) | x64 |
+| Windows · x64 | [`CharlieCode-Setup-0.0.2.exe`](https://github.com/carlolomello/CharlieCode/releases/download/v0.0.2/CharlieCode%20Setup%200.0.2.exe) | NSIS installer, choose the folder |
 
-## Install CharlieCode
-
-### macOS
-
-Download `CharlieCode-<version>.dmg` from [Releases](https://github.com/carlolomello/CharlieCode/releases) — pick `arm64` for Apple Silicon, the plain one for Intel — drag the app into *Applications*.
-
-The build is **ad-hoc signed and not notarized**, so macOS blocks the first launch. Either right-click the app → **Open** → **Open**, or:
+macOS builds are **ad-hoc signed, not notarized**, so Gatekeeper blocks the first launch. Right-click the app → **Open** → **Open**, or:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/CharlieCode.app
 ```
 
-### Windows
-
-Download the `.exe` installer (NSIS, x64) from [Releases](https://github.com/carlolomello/CharlieCode/releases). The installer lets you choose the target folder. SmartScreen may warn about an unsigned binary: *More info* → *Run anyway*.
+On Windows, SmartScreen may warn about an unsigned binary: *More info* → *Run anyway*.
 
 ### From source
 
 ```bash
 git clone https://github.com/carlolomello/CharlieCode.git
 cd CharlieCode
-nvm use            # Node 24 (see .nvmrc)
+nvm use            # Node 24, see .nvmrc
 pnpm install
 pnpm dev           # app with HMR
 ```
 
-## Connect models: FreeLLMAPI
+---
 
-CharlieCode does not ship model credentials, and it does not proxy them. It talks to an **OpenAI-compatible `/v1` endpoint**. The easiest one to start with is FreeLLMAPI, which aggregates the free tiers of many providers behind a single URL and a single key.
+## What it does
 
-**FreeLLMAPI is a separate project:** <https://github.com/tashfeenahmed/freellmapi>
+- **Plans before it writes.** Flip the topbar switch to **Piano**: the agent explores the project read-only and comes back with a concrete plan (files, steps, risks). One click on **▶ Esegui il piano** switches to **Build** and implements it.
+- **Shows the code it changes.** Every `write`/`edit` produces a unified diff in the chat — you see the change *before* it lands on disk.
+- **Multi-agent by design.** The `task` tool spawns isolated subagents with their own context (`explorer` read-only, `reviewer`, `implementer`), several in parallel, each with its own live activity card. The main agent gets a compact report back.
+- **Ask before it acts.** Destructive tools hit a permission gate: *allow once*, *allow always* (per tool, or per command prefix for `bash`), *deny*. Revocable from the settings drawer.
+- **Remembers the project.** Every chat is a saved session tied to a folder; the full model context (tool calls included) is persisted, so resuming actually continues instead of replaying a transcript.
+- **Knows your rules.** `AGENTS.md` — plus `CHARLIECODE.md` and `CLAUDE.md` — in the project root and globally in `~/.charliecode/` are injected into the system prompt.
+- **Free-first, zero lock-in.** One provider entry (FreeLLMAPI) routes across ~87 free tiers and picks the model itself. Add OpenAI, OpenRouter, Ollama, LM Studio, vLLM or a corporate gateway whenever you want.
+- **Speaks Markdown properly.** Headings, lists, tables, quotes and syntax-highlighted code blocks with a copy button — rendered by a small built-in renderer, not by injecting HTML into the app.
 
-### 1. Install and start FreeLLMAPI
+The app starts **completely clean**: no providers, no keys, no default model. If nothing is reachable it explains what to start instead of failing silently.
 
-Pick one:
+### The mascot
+
+Charlie is a pixel-art developer in a near-black shirt, brown trousers and white shoes. He walks across the sidebar every so often, thinks while the model is working, and sits down at his PC when a turn is running.
+
+---
+
+## Plugins (already installed)
+
+Three plugins ship with the app, enabled by default, each with a switch in **⚙ Provider e chiavi → Plugin**. Turning one off removes its tools *and* its prompt text — nothing lingers.
+
+| Plugin | What it does | Tool |
+| --- | --- | --- |
+| **Memoria del progetto** | Keeps `.charliecode/memory.md` inside the project: overview, notes and the last turns with the files they touched. It is injected at the start of every session, so you never re-explain the project. Plain Markdown, editable by hand, committable. | `remember` |
+| **Consigliere di setup** | Reads the project (languages, scripts, existing instructions) and proposes the useful boring things: the real test/lint commands, an `AGENTS.md`, which bash prefixes are safe to auto-approve, which skills to write. | `suggest_setup` |
+| **Agent Reach** | Lets the agent read documentation and pages as clean text. Fetched content is treated as data, never as instructions. | `fetch_url` |
+
+The memory file looks like this, and the "Attività recente" list is appended automatically at the end of each turn:
+
+```markdown
+# Memoria del progetto
+
+## Panoramica
+App Electron + React per gestire i preventivi.
+
+## Note
+- 2026-11-15 — Il comando di test è `pnpm test`; i typecheck girano con `pnpm typecheck`.
+
+## Attività recente
+- 2026-11-15 09:31 — sistemare il parser dei tag · src/parser.ts, src/tree.ts
+```
+
+In the drawer you can also press **Consigli di setup** to run the advisor without spending a model call, and **Apri memoria del progetto** to edit the memory directly.
+
+---
+
+## First run
+
+1. Launch CharlieCode. The setup screen offers to **install or launch FreeLLMAPI** if it is missing.
+2. Open the FreeLLMAPI dashboard and add **at least one free provider key** (Google AI Studio, Groq, Cerebras, OpenRouter…). Each is a free signup of a few minutes.
+3. Copy the **unified key** (`freellmapi-…`) from the dashboard header.
+4. Paste it in CharlieCode: **⚙ Provider e chiavi** → *FreeLLMAPI* → *Salva*.
+
+That is it. Press **↻** if the list is empty, pick a project folder from the sidebar, and start chatting.
+
+> Without a provider key the router has nothing to route to and returns `503 no_providers_configured`. CharlieCode shows a yellow banner explaining this instead of listing models that cannot answer.
+
+---
+
+## Connect models
+
+### FreeLLMAPI (recommended, free)
+
+FreeLLMAPI is a separate project: <https://github.com/tashfeenahmed/freellmapi>. It aggregates the free tiers of many providers behind one OpenAI-compatible endpoint.
 
 | Platform | How |
 | --- | --- |
-| macOS / Windows | Download the desktop app from [FreeLLMAPI Releases](https://github.com/tashfeenahmed/freellmapi/releases/latest). It lives in the menu bar / tray and serves `http://127.0.0.1:31415`. |
+| macOS / Windows | Desktop app from [FreeLLMAPI releases](https://github.com/tashfeenahmed/freellmapi/releases/latest). Serves `http://127.0.0.1:31415`. |
 | Docker / Linux / NAS | `curl -fsSL https://freellmapi.co/install.sh \| bash`, then open <http://localhost:3001> |
 | From source | `git clone https://github.com/tashfeenahmed/freellmapi && npm install && npm run dev` |
 
-> **Port matters.** The desktop app listens on **31415**; Docker and a source run default to **3001**. CharlieCode auto-detects the router across `3001`, `31415`, `8080`, `8000`, `4000`, `11434`, so you usually do not need to care.
+**Ports.** The desktop app listens on **31415**; Docker and a source run default to **3001**. CharlieCode auto-detects across `3001`, `31415`, `8080`, `8000`, `4000`, `11434`, so you usually do not need to care.
 
-### 2. Add at least one provider key
+**One entry, not 300.** FreeLLMAPI exposes every model it can reach, but routing is its job. CharlieCode therefore shows a single entry — *Automatico (il router sceglie il modello)* — and lets the router pick. If you really want the full list, tick *mostra tutti i modelli del router* in the provider drawer.
 
-Open the dashboard (tray icon → *Open Dashboard*, or <http://127.0.0.1:31415>) and go to **Keys**. Add the free tiers you have accounts for — each is a free signup, a few minutes each:
+### Any other OpenAI-compatible API
 
-- **Google AI Studio** — generous free tier
-- **Groq** — very fast inference
-- **Cerebras** — fast, high daily quota
-- **OpenRouter** — `:free` models from many labs
-- **OpenCode Zen** — hosts `deepseek-v4.1-flash-free` (see below)
-- …plus ~80 more providers, or a **custom** OpenAI-compatible endpoint
-
-Without at least one key the router has nothing to route to and returns HTTP 503 `no_providers_configured`. CharlieCode will show a yellow banner instead of a list of models that cannot answer — that is intentional.
-
-### 3. Copy the unified key
-
-On the **Keys** page, copy the unified key from the header. It looks like `freellmapi-…`. That single token is what any client uses; provider keys stay encrypted inside FreeLLMAPI's local database.
-
-### 4. Point CharlieCode at it
-
-The app reads `~/.charliecode/credentials.json`. Create it:
-
-```bash
-mkdir -p ~/.charliecode
-cat > ~/.charliecode/credentials.json <<'JSON'
-{ "freellmapi": { "apiKey": "freellmapi-YOUR-UNIFIED-KEY" } }
-JSON
-chmod 600 ~/.charliecode/credentials.json
-```
-
-Then verify:
-
-```bash
-pnpm charliecode:doctor    # → "✔ tutto pronto" and HTTP 200
-pnpm models                # lists only models that can actually answer
-```
-
-Alternatively, skip the file and use the environment:
-
-```bash
-export FREELLMAPI_KEY=freellmapi-YOUR-UNIFIED-KEY
-pnpm dev
-```
-
-CharlieCode re-reads the catalog on launch and whenever you press **↻**.
-
-## Add your own API (any OpenAI-compatible)
-
-FreeLLMAPI is optional. Anything that implements `/v1/chat/completions` works: a hosted API, a local model server, or a company gateway. Providers live in `~/.charliecode/config.json`:
+Providers are plain entries in `~/.charliecode/config.json`; add them from the drawer (**⚙ Provider e chiavi** → *Aggiungi*) or by hand:
 
 ```json
 {
@@ -142,100 +133,78 @@ FreeLLMAPI is optional. Anything that implements `/v1/chat/completions` works: a
       "apiKeyEnv": "FREELLMAPI_KEY"
     },
     {
-      "id": "zen",
-      "label": "OpenCode Zen",
-      "baseUrl": "https://opencode.ai/zen/v1",
-      "kind": "direct",
-      "enabled": true,
-      "apiKeyEnv": "ZEN_API_KEY"
-    },
-    {
       "id": "lmstudio",
-      "label": "LM Studio (local)",
+      "label": "LM Studio (locale)",
       "baseUrl": "http://localhost:1234/v1",
       "kind": "direct",
-      "enabled": false
+      "enabled": true
     }
   ],
-  "modelOverrides": {},
-  "defaultModel": "zen::deepseek-v4.1-flash-free",
-  "fallbackModels": ["freellmapi::auto"],
-  "effort": "none"
+  "defaultModel": "freellmapi::auto",
+  "fallbackModels": []
 }
 ```
 
-and the matching keys in `~/.charliecode/credentials.json`:
+and the keys in `~/.charliecode/credentials.json`:
 
 ```json
-{
-  "freellmapi": { "apiKey": "freellmapi-…" },
-  "zen": { "apiKey": "sk-…" }
-}
+{ "freellmapi": { "apiKey": "freellmapi-…" } }
 ```
 
-Notes:
+Rules worth knowing:
 
-- `id` is your name for the provider; it is also the `providerOptions` key used to pass `reasoning_effort`.
-- `kind: "router"` enables port auto-detection. Use `"direct"` for fixed endpoints.
-- `apiKeyEnv` is checked **before** the credentials file, so `export ZEN_API_KEY=…` also works.
-- Local servers that need no key can omit `apiKeyEnv` entirely.
-- Keys never leave your machine; requests go from your process straight to the endpoint.
-- You can also add a **custom provider inside FreeLLMAPI** (Keys → *Custom*), which is the right move if you want its routing, quota tracking and failover on top of your endpoint.
+- `id` names the provider and is the key used to forward `reasoning_effort`.
+- `kind: "router"` enables port auto-detection and the single-entry collapsing; `"direct"` is a fixed endpoint.
+- `apiKeyEnv` is checked **before** the credentials file, so `export FREELLMAPI_KEY=…` works too.
+- Local servers need no key at all — omit `apiKeyEnv`.
+- A provider with **no key and a non-local URL is left out of the catalog entirely**, so the picker never fills with options that would 401 on send. Enable it and add a key and it appears.
+- `modelOverrides` can pin capabilities per model; `fallbackModels` is walked on retry **only while no text has been emitted**, so you never get a Frankenstein answer from two models.
 
-### Multiple models and failover
-
-`fallbackModels` is an ordered list. CharlieCode retries and then walks it — but **only while no text has been emitted**. Once the model starts answering, a failure surfaces as an error instead of silently switching, so you never get a Frankenstein answer from two models.
-
-## Recommended free model
-
-`deepseek-v4.1-flash-free` is free (cost 0) and is served by **OpenCode Zen**, not by DeepSeek directly:
-
-```json
-{
-  "id": "zen",
-  "label": "OpenCode Zen",
-  "baseUrl": "https://opencode.ai/zen/v1",
-  "kind": "direct",
-  "enabled": true,
-  "apiKeyEnv": "ZEN_API_KEY"
-}
-```
-
-Get a key at <https://opencode.ai/zen>. Effort levels `low` / `high` / `max` map to `reasoning_effort`.
-
-You can also add OpenCode Zen **inside** FreeLLMAPI (Keys → OpenCode Zen). Then the same model appears as `freellmapi::deepseek-v4.1-flash-free` and gains the router's failover. Using both and pointing one at the other via `fallbackModels` is a sensible setup for long agentic runs: free tiers have RPM/RPD caps, and a 429 mid-task is the normal failure mode.
+---
 
 ## Using the app
 
-- **Projects** — pick a local folder from the sidebar. The app remembers the last one and the recent list; every chat is tied to its project.
-- **Sessions** — every conversation is saved under `~/.charliecode/sessions` as JSONL, listed in the sidebar with rename and delete. Closing the app never loses a chat. The full model context (tool calls included) lives beside it in `<id>.context.json`, so a resumed chat keeps working instead of replaying a transcript the model can no longer call tools from.
-- **Tools** — `read`, `ls`, `glob`, `grep`, `write`, `edit`, `bash` and `task`. Each call appears as a card with its arguments and a short result; failures are shown, not swallowed.
-- **Diffs before writes** — every `write`/`edit` produces a unified diff, rendered in the chat. You see exactly what changes before the file on disk does.
-- **Permissions** — destructive tools ask first: *allow once*, *allow always* (per tool, or per command prefix for `bash`), or *deny*. Allow-always is remembered in `config.json`, and the settings drawer lets you revoke it.
-- **Multi-agent** — the `task` tool spawns isolated subagents (`explorer` read-only, `reviewer` analysis, `implementer` write), up to depth 2, and several can run in parallel. Each one streams its own activity card; the main agent gets a compact report back.
-- **Local models** — Ollama, LM Studio and vLLM are detected and probed like any other provider, so a container with an LLM in it is a first-class backend.
-- **Model picker** — grouped by provider, `★` marks free models, `deepseek-v4.1-flash-free` is preselected when available.
-- **Effort** — per model, because not every model accepts the same levels: free-tier aliases get `none`, reasoning models get `none`/`low`/`high`/`max`, light models get `none`, everything else `none`/`low`/`high`. Forwarded as `reasoning_effort`, overridable per model in `config.json`.
-- **Attachments** — drag files onto the composer, paste a screenshot, or use **+ Allega**. Images go to vision models, documents (markdown, code, JSON, CSV…) are inlined as fenced blocks.
-- **Project instructions** — `AGENTS.md`, `CHARLIECODE.md` and `CLAUDE.md` in the project root plus a global `~/.charliecode/AGENTS.md` are injected into the system prompt.
-- **Providers** — the drawer lets you paste keys, disable a provider, or add any OpenAI-compatible endpoint.
-- **Streaming with stop** — abort mid-answer; the UI keeps whatever was already produced.
-- **Failure transparency** — the banner tells you how many models were hidden and why (`no_key`, `no_models`).
-- **Setup screen** — if no model is available, the app explains what to start instead of failing silently.
+| Area | What you get |
+| --- | --- |
+| **Piano / Build** | Read-only exploration and a plan, then one click to implement it. Plan mode restricts the agent to `read`, `ls`, `glob`, `grep`, `task` and forces subagents to `explorer`. |
+| **Projects** | Pick any local folder. The last project and a recent list are remembered; every chat belongs to its project. |
+| **Sessions** | JSONL under `~/.charliecode/sessions`, with rename and delete. The model context lives beside it in `<id>.context.json`. |
+| **Tools** | `read`, `ls`, `glob`, `grep`, `write`, `edit`, `bash`, `task`. Each call is a card with arguments and result; failures are shown, not swallowed. |
+| **Diffs** | Unified diff before every write, rendered inline. |
+| **Permissions** | Ask-first for destructive tools, with allow-always per tool and per command prefix. |
+| **Subagents** | Parallel, isolated, role-scoped, depth 2. |
+| **Model picker** | Grouped by provider, `★` marks free models, one entry per router. |
+| **Effort** | Per model: `default` / `low` / `high` / `max`, forwarded as `reasoning_effort`. Non-reasoning models only offer `default`. |
+| **Attachments** | Drag, paste or **+ Allega**. Images go to vision models; documents are inlined as fenced blocks. |
+| **Streaming** | Token-by-token with a stop button; whatever was produced is kept. Scroll only follows when you are at the bottom. |
+
+### Keyboard
+
+| Key | Action |
+| --- | --- |
+| `Enter` | send |
+| `Shift+Enter` | newline |
+| paste image | attach it |
+
+---
 
 ## CLI
 
-The same engine is usable headless — useful on a server, in CI, or when the GUI is overkill.
+The same engine runs headless — useful on a server, in CI, or when a GUI is overkill.
 
 ```bash
-pnpm charliecode:doctor                    # config, keys, reachability, detected port
-pnpm models [--all] [--json]               # catalog with estimated capabilities
+pnpm charliecode:doctor                        # config, keys, reachability, detected port
+pnpm models [--all] [--json]                   # catalog with estimated capabilities
 pnpm probe [--limit N] [--model key] [--save]  # does the model really emit tool calls?
-pnpm smoke "prompt" [--model key] [--effort high]  # end-to-end streaming
-pnpm mock                                  # fake OpenAI-compatible router on :3999
+pnpm smoke "prompt" [--model key] [--effort high]
+pnpm mock                                      # fake OpenAI-compatible router on :3999
 ```
 
-`pnpm probe --save` writes the measured capabilities back into `config.json`, so the app stops guessing about tool support. Probes run sequentially on purpose: free tiers have low RPM limits.
+`pnpm probe --save` writes measured capabilities back into `config.json`. Probes run sequentially on purpose: free tiers have low RPM limits.
+
+> `pnpm doctor` is pnpm's own command — use `pnpm charliecode:doctor`.
+
+---
 
 ## Configuration
 
@@ -243,19 +212,21 @@ Everything lives in `~/.charliecode/` (override with `CHARLIECODE_CONFIG_DIR`):
 
 | File | Contents |
 | --- | --- |
-| `config.json` | providers, capability overrides, default model, fallback chain |
+| `config.json` | providers, capability overrides, default model, fallback chain, auto-approve |
 | `credentials.json` | API keys per provider (mode `600`) |
+| `sessions/` | one JSONL per chat + its context sidecar |
 | `probe-report.json` | last capability probe |
-
-Environment variables:
+| `AGENTS.md` | global instructions injected into every project |
 
 | Variable | Effect |
 | --- | --- |
-| `CHARLIECODE_CONFIG_DIR` | alternative config directory (used by tests and CI) |
+| `CHARLIECODE_CONFIG_DIR` | alternative config directory (tests, CI, portable installs) |
 | `CHARLIECODE_BASE_URL` | override the `router` provider's base URL |
 | `CHARLIECODE_API_KEY` | key valid for any provider (highest priority) |
 | `FREELLMAPI_KEY` / `ZEN_API_KEY` / … | per-provider key, from `apiKeyEnv` |
 | `NO_COLOR` | plain CLI output |
+
+---
 
 ## Architecture
 
@@ -264,12 +235,12 @@ src/
   engine/     pure TypeScript engine — never imports electron
     platform   per-OS shell, EOL and path handling (Windows emulated in tests)
     config     config + credentials, env overrides
-    catalog    /v1/models normalization, capability heuristics, overrides
+    catalog    /v1/models normalization, capability heuristics, router collapsing
     discovery  router port auto-detection
     client     streaming, retry, fallback chain, provider cache
     probe      real tool-calling detection
     local      Ollama / LM Studio / vLLM presets and probing
-    agent      the agent loop, system prompt, subagents
+    agent      agent loop, plan/build modes, system prompt, subagents
     tools      read/ls/glob/grep/write/edit/bash/task + permission helpers
     diff       unified diff generation
     context-store  model context sidecar per session
@@ -279,24 +250,26 @@ src/
   main/       Electron main process, IPC, abort controllers
   preload/    typed contextBridge
   shared/     IPC types
-  renderer/   React 19 + Vite (chat, tool cards, diff viewer, mascot)
+  renderer/   React 19 + Vite (chat, markdown renderer, tool cards, diff viewer, mascot)
 scripts/      mock OpenAI-compatible router (tests, CI), mascot preview
 ```
 
-Why this split: the engine is the part that will grow into the agent runtime, so it must be testable without Electron and portable to a `utilityProcess`. Platform differences are injected, not read from `process.platform`, which is why Windows bugs are caught on macOS in unit tests.
+The engine is the part that grows into the agent runtime, so it must be testable without Electron and portable to a `utilityProcess`. Platform differences are injected, not read from `process.platform`, which is why Windows bugs are caught on macOS in unit tests.
 
-Tests: `pnpm test` (unit, including Windows emulation) and `pnpm build`. CI runs on `macos-latest` **and** `windows-latest`, plus an end-to-end pass against the mock router (catalog → streaming → 429 → fallback → probe).
+`pnpm test` runs unit tests (including Windows emulation and the Markdown renderer); CI runs on `macos-latest` and `windows-latest`, plus an end-to-end pass against the mock router (catalog → streaming → 429 → fallback → probe).
+
+---
 
 ## Roadmap
 
-CharlieCode aims to be a GUI equivalent of Claude Code / OpenCode. The engine is built so each phase lands without a rewrite.
+The goal is a GUI equivalent of Claude Code / OpenCode. Each phase lands without a rewrite.
 
 **Phase 0 — foundation (done)**
 
 - [x] Headless engine, no Electron imports
 - [x] OpenAI-compatible streaming with stop and retry
 - [x] Fallback chain that never mixes two models in one answer
-- [x] Model catalog with capability heuristics, manual overrides and real probing
+- [x] Model catalog with capability heuristics, overrides and real probing
 - [x] Router port auto-detection, unusable models hidden with an explanation
 - [x] Electron shell, typed IPC, React UI
 - [x] macOS dmg (x64 + arm64) and Windows NSIS packaging
@@ -305,40 +278,46 @@ CharlieCode aims to be a GUI equivalent of Claude Code / OpenCode. The engine is
 **Phase 1 — a real agent (done)**
 
 - [x] Tools: `read`, `ls`, `write`, `edit`, `glob`, `grep`, `bash`
-- [x] `PermissionGate`: deny / allow once / allow always, per tool and per command prefix
+- [x] Permission gate: deny / allow once / allow always, per tool and per command prefix
 - [x] Diff viewer before any write lands
-- [x] Workspace picker (work on a local project folder, not just chat)
-- [x] Session persistence (JSONL) with rename/delete, local history, model-context sidecar
+- [x] Workspace picker
+- [x] Session persistence (JSONL) with rename/delete and a model-context sidecar
 
-**Phase 2 — project context**
+**Phase 2 — project context (mostly done)**
 
-- [x] `AGENTS.md` discovery and layering: global `~/.charliecode/AGENTS.md`, repo root
+- [x] `AGENTS.md` layering: global `~/.charliecode/AGENTS.md`, repo root
 - [x] `CHARLIECODE.md` and `CLAUDE.md` compatibility
+- [x] Plan mode: read-only exploration, explicit approve-to-execute
 - [ ] Nested-directory `AGENTS.md` discovery
-- [ ] Plan mode: read-only exploration, then an explicit approve-to-execute step
 - [ ] Context compaction with token accounting
 
 **Phase 3 — multi-agent (done, first pass)**
 
 - [x] `task` tool: the main agent delegates a scoped job to a subagent
-- [x] Isolated subagents with a role (`explorer` read-only, `reviewer`, `implementer`), depth limit 2
-- [x] Parallel subagents with their own activity cards in the UI
-- [ ] Orchestrator with per-agent model and effort (cheap model for search, strong model for planning)
+- [x] Isolated subagents with a role (`explorer`, `reviewer`, `implementer`), depth limit 2
+- [x] Parallel subagents with their own activity cards
+- [x] Plan mode propagates: subagents cannot write either
+- [ ] Orchestrator with per-agent model and effort (cheap model for search, strong for planning)
 - [ ] Git worktree isolation for parallel writers
 
 **Phase 4 — extensibility**
 
-- [ ] Skills: `SKILL.md` packages discovered from `~/.charliecode/skills` and `.charliecode/skills`, installable from a git URL
-- [ ] Plugins: MCP servers, custom tools and command packs
+- [x] Built-in plugins with a switch in settings: project memory, setup advisor, web reach
+- [x] Project memory: `.charliecode/memory.md`, injected per session, `remember` tool
+- [x] Setup advisor: commands, missing `AGENTS.md`, auto-approve and skill suggestions
+- [ ] Skills: `SKILL.md` packages from `~/.charliecode/skills` and `.charliecode/skills`, installable from a git URL
+- [ ] Third-party plugins: install from a git URL, sandboxed tool packs
 - [ ] MCP client with per-server permission policy
 
 **Phase 5 — polish**
 
-- [x] File and image attachments (images to vision models, documents inlined as fenced blocks)
-- [x] Pixel-art mascot: walks intermittently, thinks, and sits at a desk while the agent works
+- [x] File and image attachments
+- [x] Pixel-art mascot: walks, thinks, sits at a desk while the agent works
+- [x] App icon (Charlie at his PC)
+- [x] Markdown rendering with code blocks and copy
 - [ ] `safeStorage` for credentials instead of a `600` JSON file
 - [ ] Code signing / notarization, auto-update
-- [ ] App icon and theming
+- [ ] Theming
 
 **Phase 6 — browser control (last)**
 
@@ -350,6 +329,8 @@ Queued deliberately, after the agent itself is solid. The goal is the OpenCode-s
 - [ ] Per-origin permission policy, so a page cannot talk the agent into widening its own access
 - [ ] Visible "the agent is driving the browser" indicator, plus a one-click stop
 
+---
+
 ## Development
 
 ```bash
@@ -360,35 +341,41 @@ pnpm build
 pnpm dev            # HMR
 
 pnpm dist:mac       # dmg x64 + arm64
-pnpm dist:win       # NSIS installer (needs Windows or wine)
+pnpm dist:win       # NSIS installer
 ```
 
-No test touches your real configuration: `CHARLIECODE_CONFIG_DIR` points at a temp dir. The mock router (`pnpm mock`) speaks the same subset of the OpenAI protocol the engine uses, including SSE streaming, tool calls and 429s, so the whole loop is testable offline.
+No test touches your real configuration: `CHARLIECODE_CONFIG_DIR` points at a temp dir. The mock router (`pnpm mock`) speaks the same subset of the OpenAI protocol the engine uses — SSE streaming, tool calls, 429s — so the whole loop is testable offline.
 
 Releases are built by `.github/workflows/release.yml` on real macOS and Windows runners (`workflow_dispatch` or a `v*` tag).
 
+---
+
 ## Troubleshooting
 
-**"Nessun modello disponibile" / empty list.** The router is running but has no provider keys. Open the FreeLLMAPI dashboard → Keys and add one. CharlieCode shows a banner with the exact reason per model.
+**Empty model list / "Nessun modello disponibile".** The router is running but has no provider keys. FreeLLMAPI dashboard → **Keys** → add one. The banner states the exact reason.
 
 **HTTP 503 `no_providers_configured`.** Same cause: unified key valid, zero provider keys behind it.
 
-**`connessione rifiutata`.** FreeLLMAPI is not running, or it is on another port. `pnpm charliecode:doctor` prints the detected URL; the app also auto-detects.
+**`connessione rifiutata`.** FreeLLMAPI is not running, or on another port. `pnpm charliecode:doctor` prints the detected URL; the app also auto-detects.
 
-**`pnpm doctor` does nothing useful.** That is pnpm's own built-in command. Use `pnpm charliecode:doctor`.
+**A provider I added does not appear.** Providers without a key and with a non-local URL are hidden on purpose — add the key first.
 
-**macOS refuses to open the app.** Ad-hoc signature, no notarization: right-click → Open, or clear the quarantine flag (see [Install](#install-charliecode)).
+**I only see one FreeLLMAPI model.** That is the point: the router picks. Tick *mostra tutti i modelli del router* in the provider drawer to see everything.
 
-**429 in the middle of a task.** Free tiers rate-limit. Add another provider in FreeLLMAPI, or configure `fallbackModels` so CharlieCode can move to another model before any text is produced.
+**429 in the middle of a task.** Free tiers rate-limit. Add another provider in FreeLLMAPI, or set `fallbackModels` so CharlieCode can switch before any text is produced.
 
-**A model claims tool support but never calls tools.** Capabilities are heuristics until measured. Run `pnpm probe --limit 8 --save`.
+**A model claims tool support but never calls tools.** Capabilities are heuristics until measured: `pnpm probe --limit 8 --save`.
+
+**macOS refuses to open the app.** Ad-hoc signature, no notarization — right-click → Open, or clear the quarantine flag (see [Download](#download-and-install)).
+
+---
 
 ## Security
 
-- Provider keys are read from `~/.charliecode/credentials.json` (mode `600`) or environment variables, and are sent only to the endpoint you configured.
-- Nothing is proxied through a CharlieCode server: there is no backend.
-- The renderer runs with `contextIsolation`, `sandbox`, no `nodeIntegration`, and a restrictive CSP; all filesystem and network access goes through typed IPC.
-- Builds are unsigned/ad-hoc for now. `safeStorage` and real signing are on the roadmap; until then, treat the installers as developer previews.
+- Keys live in `~/.charliecode/credentials.json` (mode `600`) or environment variables and are sent only to the endpoint you configured.
+- There is no CharlieCode backend; nothing is proxied.
+- The renderer runs with `contextIsolation`, `sandbox`, no `nodeIntegration` and a restrictive CSP; all filesystem and network access goes through typed IPC. Markdown is rendered as React elements, never as injected HTML.
+- Builds are unsigned/ad-hoc for now. `safeStorage` and real signing are on the roadmap — treat the installers as developer previews.
 
 ## License
 

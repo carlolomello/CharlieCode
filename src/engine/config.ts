@@ -43,6 +43,13 @@ export const DEFAULT_CONFIG: CharlieCodeConfig = {
     subagentMaxSteps: 12,
     autoApprove: ['read', 'ls', 'glob', 'grep'],
     autoApproveCommands: []
+  },
+  // Built-in plugins ship enabled: they are useful in every project and each
+  // one has a switch in the settings drawer.
+  plugins: {
+    memory: { enabled: true },
+    advisor: { enabled: true },
+    reach: { enabled: true }
   }
 }
 
@@ -78,7 +85,8 @@ function mergeConfig(partial: Partial<CharlieCodeConfig>): CharlieCodeConfig {
       ...(partial.agents ?? {}),
       autoApprove: partial.agents?.autoApprove ?? base.agents.autoApprove,
       autoApproveCommands: partial.agents?.autoApproveCommands ?? base.agents.autoApproveCommands
-    }
+    },
+    plugins: { ...base.plugins, ...(partial.plugins ?? {}) }
   }
 }
 

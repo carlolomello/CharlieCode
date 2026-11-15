@@ -14,6 +14,7 @@ import type {
   AppInfo,
   ChatEventEnvelope,
   PermissionEnvelope,
+  PluginStatus,
   ProviderStatus,
   RoutersStatus
 } from '../../shared/ipc'
@@ -121,6 +122,9 @@ export default function App() {
   const [loadingModels, setLoadingModels] = useState(true)
   const [providers, setProviders] = useState<ProviderStatus[]>([])
   const [autoApprove, setAutoApprove] = useState<{ tools: string[]; commands: string[] } | null>(null)
+  const [plugins, setPlugins] = useState<PluginStatus[]>([])
+  const [setupReport, setSetupReport] = useState<string | null>(null)
+  const [setupBusy, setSetupBusy] = useState(false)
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [items, setItems] = useState<ChatItem[]>([])
@@ -173,6 +177,14 @@ export default function App() {
     }
   }, [])
 
+  const refreshPlugins = useCallback(async (): Promise<void> => {
+    try {
+      setPlugins(await window.charliecode.plugins())
+    } catch {
+      setPlugins([])
+    }
+  }, [])
+
   const refreshModels = useCallback(async (): Promise<void> => {
     setLoadingModels(true)
     try {
@@ -206,7 +218,15 @@ export default function App() {
     void refreshSessions()
     void refreshRouters()
     void refreshAutoApprove()
-  }, [refreshModels, refreshProviders, refreshRouters, refreshSessions, refreshAutoApprove])
+    void refreshPlugins()
+  }, [
+    refreshModels,
+    refreshProviders,
+    refreshRouters,
+    refreshSessions,
+    refreshAutoApprove,
+    refreshPlugins
+  ])
 
   useEffect(() => {
     const unsubscribe = window.charliecode.onChatEvent(({ requestId, event }: ChatEventEnvelope) => {
@@ -534,14 +554,17 @@ export default function App() {
   const send = useCallback(
     async (overrideText?: string, overrideMode?: 'plan' | 'build'): Promise<void> => {
       const text = (overrideText ?? input).trim()
-      if ((!text && attachments.length === 0) || streamingId || !modelKey) return
+      // A "▶ Esegui il piano" click sends only its own prompt and leaves the
+      // composer (draft text and attachments) untouched.
+      const isOverride = overrideText !== undefined
+      const sentAttachments = isOverride ? [] : attachments
+      if ((!text && sentAttachments.length === 0) || streamingId || !modelKey) return
       const activeMode = overrideMode ?? mode
 
       const requestId = crypto.randomUUID()
       const userMessageId = crypto.randomUUID()
       const assistantMessageId = crypto.randomUUID()
       const createdAt = new Date().toISOString()
-      const sentAttachments = attachments
 
       setItems((previous) => [
         ...previous,
@@ -572,8 +595,10 @@ export default function App() {
           mode: activeMode
         }
       ])
-      setInput('')
-      setAttachments([])
+      if (!isOverride) {
+        setInput('')
+        setAttachments([])
+      }
       setAttachError(null)
       setStreamingId(requestId)
       setFatal(null)
@@ -668,6 +693,21 @@ export default function App() {
     [refreshModels]
   )
 
+  const togglePlugin = useCallback(async (id: string, enabled: boolean): Promise<void> => {
+    setPlugins(await window.charliecode.setPluginEnabled(id, enabled))
+  }, [])
+
+  const runSetupAdvisor = useCallback(async (): Promise<void> => {
+    setSetupBusy(true)
+    try {
+      setSetupReport(await window.charliecode.suggestSetup())
+    } catch (error) {
+      setSetupReport(error instanceof Error ? error.message : String(error))
+    } finally {
+      setSetupBusy(false)
+    }
+  }, [])
+
   const addProvider = useCallback(async (): Promise<void> => {
     const { id, label, baseUrl } = newProvider
     if (!id.trim() || !baseUrl.trim()) return
@@ -747,7 +787,7 @@ export default function App() {
             <Mascot size={38} mood={mood} />
             <div>
               <div className="brand-name">CharlieCode</div>
-              <div className="brand-sub">v{info?.version ?? '0.0.1'}</div>
+              <div className="brand-sub">v{info?.version ?? '0.0.2'}</div>
             </div>
           </div>
 
@@ -1287,6 +1327,69 @@ export default function App() {
                 Aggiungi
               </button>
             </div>
+
+            <h3>Plugin</h3>
+            <p className="muted small">
+              Arrivano già installati con l’app: ognuno aggiunge qualcosa all’agente e si
+              accende o spegne da qui. Se li spegni, spariscono anche i loro tool.
+            </p>
+            <div className="plugins">
+              {plugins.map((plugin) => (
+                <div key={plugin.id} className={`plugin ${plugin.enabled ? 'on' : 'off'}`}>
+                  <div className="plugin-head">
+                    <div className="plugin-title">
+                      <div className="plugin-name">{plugin.name}</div>
+                      <div className="plugin-tagline">{plugin.tagline}</div>
+                    </div>
+                    <label className="switch" title={plugin.enabled ? 'Attivo' : 'Spento'}>
+                      <input
+                        type="checkbox"
+                        checked={plugin.enabled}
+                        onChange={(event) => void togglePlugin(plugin.id, event.target.checked)}
+                      />
+                      <span className="switch-track">
+                        <span className="switch-thumb" />
+                      </span>
+                    </label>
+                  </div>
+                  <p className="plugin-desc">{plugin.description}</p>
+                  <div className="plugin-tools">
+                    {plugin.tools.map((tool) => (
+                      <code key={tool}>{tool}</code>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              {plugins.length === 0 && <p className="muted small">Nessun plugin disponibile.</p>}
+            </div>
+            <div className="setup-actions">
+              <button
+                className="ghost"
+                onClick={() => void window.charliecode.openProjectMemory()}
+                disabled={!workspace}
+                title={workspace ? 'Apre .charliecode/memory.md' : 'Apri prima un progetto'}
+              >
+                Apri memoria del progetto
+              </button>
+              <button
+                className="ghost"
+                onClick={() => void runSetupAdvisor()}
+                disabled={setupBusy || !workspace}
+              >
+                {setupBusy ? 'Analizzo…' : 'Consigli di setup'}
+              </button>
+            </div>
+            {setupReport && (
+              <div className="setup-report">
+                <div className="setup-report-head">
+                  <span>Analisi del progetto</span>
+                  <button className="ghost small" onClick={() => setSetupReport(null)}>
+                    chiudi
+                  </button>
+                </div>
+                <Markdown text={setupReport} />
+              </div>
+            )}
 
             <h3>Permessi automatici</h3>
             <p className="muted small">

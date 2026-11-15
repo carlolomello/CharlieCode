@@ -2,6 +2,7 @@ import { streamText, stepCountIs, type ModelMessage, type ToolSet } from 'ai'
 import { findModel } from './catalog'
 import { providerFor, resolveCandidates } from './client'
 import { buildTools, toolTitle, type ToolRuntime } from './tools'
+import { enabledPluginIds, pluginSystemPrompt, recordTurn, PLUGIN_READ_TOOLS } from './plugins'
 import type { Platform } from './platform'
 import type {
   CharlieCodeConfig,
@@ -97,9 +98,24 @@ function toModelMessages(messages: StreamRequest['messages']): ModelMessage[] {
   })
 }
 
+/** Last user text in the context, used for the memory diary line. */
+function lastUserText(messages: ModelMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i]
+    if (!message || message.role !== 'user') continue
+    if (typeof message.content === 'string') return message.content
+    const text = message.content
+      .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
+      .map((part) => part.text)
+      .join(' ')
+    if (text) return text
+  }
+  return ''
+}
+
 const PLAN_PROMPT = [
   'MODALITÀ PIANO (sola lettura).',
-  'Hai a disposizione solo read, ls, glob e grep: non puoi scrivere file né eseguire comandi.',
+  'Hai a disposizione solo read, ls, glob, grep e i tool di sola lettura dei plugin: non puoi scrivere file né eseguire comandi.',
   'Esplora il progetto quanto basta, poi rispondi con un piano concreto e verificabile:',
   '- cosa hai trovato (file e righe rilevanti),',
   '- i passi che proporresti, in ordine, con i file che toccheresti,',
@@ -127,9 +143,13 @@ export async function runAgent(
   const depth = options.depth ?? 0
   const modelKey = options.modelKey ?? request.modelKey
   const planMode = (request.mode ?? 'build') === 'plan'
+  const plugins = enabledPluginIds(deps.config)
   // Plan mode never gets a writing tool, even if a caller passes one.
-  const allow = planMode ? ['read', 'ls', 'glob', 'grep', 'task'] : options.allow
-  const systemPrompt = [options.system ?? request.system, planMode ? PLAN_PROMPT : '']
+  const allow = planMode
+    ? ['read', 'ls', 'glob', 'grep', 'task', ...PLUGIN_READ_TOOLS]
+    : options.allow
+  const pluginPrompt = await pluginSystemPrompt(deps.config, deps.workspace)
+  const systemPrompt = [options.system ?? request.system, pluginPrompt, planMode ? PLAN_PROMPT : '']
     .filter(Boolean)
     .join('\n\n')
   const { candidates, error } = resolveCandidates({ ...request, modelKey }, {
@@ -148,7 +168,22 @@ export async function runAgent(
     ? deps.modelMessages
     : toModelMessages(request.messages)
 
+  /**
+   * The memory plugin keeps a diary entry per turn. Fire-and-forget: a failed
+   * write must never fail the answer.
+   */
+  const rememberTurn = (): void => {
+    if (depth !== 0 || !deps.workspace || !plugins.includes('memory')) return
+    void recordTurn(deps.workspace, {
+      request: lastUserText(inputMessages),
+      files: [...touched],
+      ...(planMode ? { mode: 'plan' as const } : {})
+    }).catch(() => undefined)
+  }
+
   let lastError: string | undefined
+  /** Files this turn wrote or edited, for the project memory plugin. */
+  const touched = new Set<string>()
 
   for (const candidate of candidates) {
     const { provider, model } = candidate
@@ -161,6 +196,10 @@ export async function runAgent(
 
     const emit = (event: EngineEvent): void => {
       if (event.type === 'delta' || event.type === 'tool-call') produced = true
+      if (event.type === 'tool-call' && (event.name === 'write' || event.name === 'edit')) {
+        const path = (event.input as { path?: unknown } | undefined)?.path
+        if (typeof path === 'string') touched.add(path)
+      }
       deps.emit(event)
     }
 
@@ -173,6 +212,7 @@ export async function runAgent(
       ...(options.agentName ? { agentName: options.agentName } : {}),
       autoApprove: deps.config.agents.autoApprove,
       autoApproveCommands: deps.config.agents.autoApproveCommands,
+      plugins,
       ...(planMode ? { readOnly: true } : {}),
       askPermission: deps.askPermission,
       emit,
@@ -330,6 +370,8 @@ export async function runAgent(
           ...(request.signal?.aborted ? { aborted: true } : {})
         })
 
+        rememberTurn()
+
         return {
           text,
           modelKey: model.key,
@@ -411,7 +453,7 @@ export function buildSystemPrompt(projectContext: string, workspace?: string): s
     '- Puoi lanciare più `task` nello stesso turno: girano in parallelo.',
     '- Non delegare lavori che richiedono il contesto di questa conversazione: il subagente non lo vede.',
     '',
-    'Tool disponibili: read, ls, glob, grep, write, edit, bash, task.',
+    'Tool disponibili: read, ls, glob, grep, write, edit, bash, task (più quelli aggiunti dai plugin attivi).',
     projectContext ? `\n${projectContext}` : ''
   ]
     .filter(Boolean)

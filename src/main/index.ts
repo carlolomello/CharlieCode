@@ -25,6 +25,8 @@ import {
 } from '../engine/context-store'
 import { dockerAvailable, hasBinary, probeEndpoint, scanLocalEndpoints } from '../engine/local'
 import { createPlatform } from '../engine/platform'
+import { ensureProjectMemory, resolvePlugins } from '../engine/plugins'
+import { suggestSetup } from '../engine/advisor'
 import {
   appendMessage,
   createSession,
@@ -702,6 +704,43 @@ hanno priorità su queste.
       }
     }
   )
+
+  /* ---------------------------- plugins ---------------------------- */
+
+  ipcMain.handle('charliecode:plugins:list', async () => {
+    const { config } = await loadConfig(platform)
+    return resolvePlugins(config)
+  })
+
+  ipcMain.handle('charliecode:plugins:set', async (_event, id: string, enabled: boolean) => {
+    const { config } = await loadConfig(platform)
+    const next: CharlieCodeConfig = {
+      ...config,
+      plugins: { ...(config.plugins ?? {}), [id]: { enabled } }
+    }
+    await saveConfig(platform, next)
+    return resolvePlugins(next)
+  })
+
+  /** Runs the setup advisor for the open project, outside the agent loop. */
+  ipcMain.handle('charliecode:plugins:suggest-setup', async (): Promise<string> => {
+    const { config } = await loadConfig(platform)
+    if (!config.workspace) throw new Error('Apri prima un progetto.')
+    const report = await suggestSetup(config.workspace)
+    return report.markdown
+  })
+
+  /**
+   * Project memory lives in the project (`.charliecode/memory.md`) so it is
+   * visible, editable and can be committed with the code.
+   */
+  ipcMain.handle('charliecode:plugins:open-memory', async (): Promise<string | null> => {
+    const { config } = await loadConfig(platform)
+    if (!config.workspace) return null
+    const path = await ensureProjectMemory(config.workspace)
+    await shell.openPath(path)
+    return path
+  })
 }
 
 app.whenReady().then(() => {

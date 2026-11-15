@@ -9,6 +9,7 @@ import type {
   ChatStartResult,
   ModelsResponse,
   PermissionEnvelope,
+  PluginStatus,
   ProviderStatus,
   RoutersStatus
 } from '../shared/ipc'
@@ -105,7 +106,14 @@ const api: CharlieCodeApi = {
     ipcRenderer.invoke('charliecode:agents:auto-approve:set', payload) as Promise<{
       tools: string[]
       commands: string[]
-    }>
+    }>,
+
+  plugins: () => ipcRenderer.invoke('charliecode:plugins:list') as Promise<PluginStatus[]>,
+  setPluginEnabled: (id: string, enabled: boolean) =>
+    ipcRenderer.invoke('charliecode:plugins:set', id, enabled) as Promise<PluginStatus[]>,
+  suggestSetup: () => ipcRenderer.invoke('charliecode:plugins:suggest-setup') as Promise<string>,
+  openProjectMemory: () =>
+    ipcRenderer.invoke('charliecode:plugins:open-memory') as Promise<string | null>
 }
 
 contextBridge.exposeInMainWorld('charliecode', api)

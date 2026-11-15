@@ -156,4 +156,20 @@ export interface CharlieCodeApi {
     tools: string[]
     commands: string[]
   }>
+
+  plugins(): Promise<PluginStatus[]>
+  setPluginEnabled(id: string, enabled: boolean): Promise<PluginStatus[]>
+  /** Runs the setup advisor on the current project (also available as a tool). */
+  suggestSetup(): Promise<string>
+  /** Opens the project memory file, creating it if needed. */
+  openProjectMemory(): Promise<string | null>
+}
+
+export interface PluginStatus {
+  id: string
+  name: string
+  tagline: string
+  description: string
+  tools: string[]
+  enabled: boolean
 }

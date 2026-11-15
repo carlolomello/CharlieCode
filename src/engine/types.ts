@@ -70,6 +70,8 @@ export interface CharlieCodeConfig {
   recentWorkspaces: string[]
   /** Tool loop + multi-agent settings. */
   agents: AgentSettings
+  /** Built-in plugin switches; a missing entry means "shipped default". */
+  plugins?: Record<string, { enabled: boolean }>
 }
 
 export interface ModelEntry {
