@@ -17,7 +17,7 @@ Grab the installer from the [latest release](https://github.com/carlolomello/Cha
 | --- | --- | --- |
 | macOS · Apple Silicon | [`CharlieCode-0.0.1-arm64.dmg`](https://github.com/carlolomello/CharlieCode/releases/download/v0.0.1/CharlieCode-0.0.1-arm64.dmg) | M1/M2/M3/M4 |
 | macOS · Intel | [`CharlieCode-0.0.1.dmg`](https://github.com/carlolomello/CharlieCode/releases/download/v0.0.1/CharlieCode-0.0.1.dmg) | x64 |
-| Windows · x64 | [`CharlieCode-Setup-0.0.1.exe`](https://github.com/carlolomello/CharlieCode/releases/download/v0.0.1/CharlieCode%20Setup%200.0.1.exe) | NSIS installer, choose the folder |
+| Windows · x64 | [`CharlieCode-Setup-0.0.1.exe`](https://github.com/carlolomello/CharlieCode/releases/download/v0.0.1/CharlieCode-Setup-0.0.1.exe) | NSIS installer, choose the folder |
 
 macOS builds are **ad-hoc signed, not notarized**, so Gatekeeper blocks the first launch. Right-click the app → **Open** → **Open**, or:
 

@@ -46,7 +46,11 @@ jobs:
       - run: pnpm test
 
       - name: build installer
-        run: pnpm ${{ matrix.script }}
+        # `--publish never`: electron-builder must not upload on its own. With
+        # GH_TOKEN set it does, and the macOS runner names the file with dots
+        # while the Windows runner uses hyphens — two identical 124 MB
+        # installers on the release. The publish job below is the only writer.
+        run: pnpm ${{ matrix.script }} --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -74,6 +78,17 @@ jobs:
 
       - name: list assets
         run: ls -lh dist
+
+      - name: drop stale assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          for name in $(gh release view "$tag" --json assets --jq '.assets[].name'); do
+            if [ -f "dist/$name" ]; then continue; fi
+            echo "removing $name"
+            gh release delete-asset "$tag" "$name" --yes || true
+          done
 
       - uses: softprops/action-gh-release@v2
         with:
