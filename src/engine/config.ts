@@ -117,7 +117,9 @@ export async function loadConfig(platform: Platform): Promise<LoadConfigResult> 
 
 /**
  * `CHARLIECODE_BASE_URL` lets you point the app at another router (LAN, remote
- * gateway, test fixture) without editing the config file.
+ * gateway, test fixture) without editing the config file. Pointing at a router
+ * explicitly also turns it on: a provider that is configured by hand and still
+ * ignored would be a trap.
  */
 function applyEnvOverrides(config: CharlieCodeConfig): CharlieCodeConfig {
   const baseUrl = process.env.CHARLIECODE_BASE_URL
@@ -125,7 +127,7 @@ function applyEnvOverrides(config: CharlieCodeConfig): CharlieCodeConfig {
   return {
     ...config,
     providers: config.providers.map((provider) =>
-      provider.kind === 'router' ? { ...provider, baseUrl } : provider
+      provider.kind === 'router' ? { ...provider, baseUrl, enabled: true } : provider
     )
   }
 }
