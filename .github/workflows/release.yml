@@ -46,14 +46,13 @@ jobs:
       - run: pnpm test
 
       - name: build installer
-        # `--publish never`: electron-builder must not upload on its own. With
-        # GH_TOKEN set it does, and the macOS runner names the file with dots
-        # while the Windows runner uses hyphens — two identical 124 MB
-        # installers on the release. The publish job below is the only writer.
+        # No GH_TOKEN on purpose: electron-builder publishes by itself when it
+        # finds one, which is how a second, differently-named copy of the
+        # Windows installer ended up on the release. The publish job is the
+        # only writer.
         run: pnpm ${{ matrix.script }} --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/upload-artifact@v4
         with:
@@ -71,32 +70,51 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
 
-      - name: list assets
-        run: ls -lh dist
-
-      - name: drop stale assets
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # macOS and Windows disagree about spaces in file names ("CharlieCode
+      # Setup 0.0.1.exe" vs "CharlieCode-Setup-0.0.1.exe"), and GitHub turns the
+      # spaces into dots. One canonical name per platform keeps the README links
+      # stable and the release free of duplicates.
+      - name: canonical asset names
+        shell: bash
         run: |
-          tag="${{ inputs.tag || github.ref_name }}"
-          for name in $(gh release view "$tag" --json assets --jq '.assets[].name'); do
-            if [ -f "dist/$name" ]; then continue; fi
-            echo "removing $name"
-            gh release delete-asset "$tag" "$name" --yes || true
-          done
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          cd dist
+          exe="$(ls ./*.exe 2>/dev/null | head -1 || true)"
+          if [ -n "$exe" ]; then
+            mv "$exe" "CharlieCode-Setup-${version}.exe"
+          fi
+          ls -lh
 
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           name: CharlieCode ${{ inputs.tag || github.ref_name }}
+          body_path: RELEASE_NOTES.md
           draft: false
           prerelease: false
           fail_on_unmatched_files: true
           files: |
             dist/*.dmg
             dist/*.exe
+
+      # After the upload, so a failed publish never leaves the release empty.
+      - name: drop assets that are not part of this build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          names="$(gh release view "$tag" --json assets --jq '.assets[].name' 2>/dev/null || true)"
+          for name in $names; do
+            if [ -f "dist/$name" ]; then continue; fi
+            echo "removing stale asset: $name"
+            gh release delete-asset "$tag" "$name" --yes
+          done
