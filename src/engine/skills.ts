@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, readFile, rm } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { Platform } from './platform'
@@ -225,6 +225,8 @@ export async function removeSkill(
 ): Promise<void> {
   const root = skill.source === 'project' ? projectSkillsDir(workspace ?? '') : globalSkillsDir(platform)
   // Never delete outside the skills directories, whatever the renderer sends.
-  if (!skill.dir.startsWith(root)) throw new Error('Percorso skill non valido.')
+  // The separator matters: `<skills>-evil` starts with `<skills>` but is not inside it.
+  const prefix = root.endsWith(sep) ? root : root + sep
+  if (!skill.dir.startsWith(prefix)) throw new Error('Percorso skill non valido.')
   await rm(skill.dir, { recursive: true, force: true })
 }

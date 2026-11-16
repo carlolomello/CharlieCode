@@ -116,6 +116,13 @@ describe('removeSkill', () => {
       removeSkill(platform(), { dir: join(home, 'altro'), source: 'global' }, workspace)
     ).rejects.toThrow()
   })
+
+  it('rifiuta una cartella sorella che inizia con lo stesso prefisso', async () => {
+    const sibling = `${globalSkillsDir(platform())}-evil`
+    await expect(
+      removeSkill(platform(), { dir: sibling, source: 'global' }, workspace)
+    ).rejects.toThrow(/non valido/)
+  })
 })
 
 describe('installSkillFromGit', () => {
