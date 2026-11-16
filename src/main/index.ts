@@ -157,7 +157,9 @@ async function providerStatuses(config: CharlieCodeConfig): Promise<ProviderStat
       hasKey: Boolean(key.apiKey),
       keyHint: key.apiKey ? maskKey(key.apiKey) : key.hint,
       keySource: key.source,
-      showAllModels: Boolean(provider.showAllModels)
+      showAllModels: Boolean(provider.showAllModels),
+      ...(provider.docs ? { docs: provider.docs } : {}),
+      ...(provider.free ? { free: true } : {})
     })
   }
   return statuses

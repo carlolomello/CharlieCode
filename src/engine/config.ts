@@ -24,14 +24,71 @@ export const DEFAULT_CONFIG: CharlieCodeConfig = {
       baseUrl: 'https://openrouter.ai/api/v1',
       kind: 'direct',
       enabled: false,
-      apiKeyEnv: 'OPENROUTER_API_KEY'
+      apiKeyEnv: 'OPENROUTER_API_KEY',
+      docs: 'https://openrouter.ai/keys',
+      free: true
+    },
+    // Free tiers, one click each. They ship disabled on purpose: the app starts
+    // with no provider, no key and no model, and nothing leaves the machine
+    // until you switch one on. Limits change often — the drawer links to the
+    // provider's own page instead of quoting numbers that go stale.
+    {
+      id: 'gemini',
+      label: 'Google AI Studio (Gemini)',
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+      kind: 'direct',
+      enabled: false,
+      apiKeyEnv: 'GEMINI_API_KEY',
+      docs: 'https://aistudio.google.com/apikey',
+      free: true
+    },
+    {
+      id: 'groq',
+      label: 'Groq',
+      baseUrl: 'https://api.groq.com/openai/v1',
+      kind: 'direct',
+      enabled: false,
+      apiKeyEnv: 'GROQ_API_KEY',
+      docs: 'https://console.groq.com/keys',
+      free: true
+    },
+    {
+      id: 'cerebras',
+      label: 'Cerebras',
+      baseUrl: 'https://api.cerebras.ai/v1',
+      kind: 'direct',
+      enabled: false,
+      apiKeyEnv: 'CEREBRAS_API_KEY',
+      docs: 'https://cloud.cerebras.ai',
+      free: true
+    },
+    {
+      id: 'mistral',
+      label: 'Mistral',
+      baseUrl: 'https://api.mistral.ai/v1',
+      kind: 'direct',
+      enabled: false,
+      apiKeyEnv: 'MISTRAL_API_KEY',
+      docs: 'https://console.mistral.ai/api-keys',
+      free: true
+    },
+    {
+      id: 'github-models',
+      label: 'GitHub Models',
+      baseUrl: 'https://models.github.ai/inference',
+      kind: 'direct',
+      enabled: false,
+      apiKeyEnv: 'GITHUB_TOKEN',
+      docs: 'https://github.com/settings/tokens',
+      free: true
     },
     {
       id: 'ollama',
       label: 'Ollama (locale)',
       baseUrl: 'http://localhost:11434/v1',
       kind: 'direct',
-      enabled: false
+      enabled: false,
+      free: true
     }
   ],
   modelOverrides: {},

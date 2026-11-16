@@ -791,6 +791,12 @@ export default function App() {
 
   const needsSetup = models.length === 0 && !loadingModels
 
+  /** Free providers the user has not configured yet: the honest "what now?" list. */
+  const freeWithoutKey = useMemo(
+    () => providers.filter((provider) => provider.free && !provider.hasKey),
+    [providers]
+  )
+
   const wizardSetKey = useCallback(
     async (providerId: string, key: string): Promise<void> => {
       setProviders(await window.charliecode.setProviderKey(providerId, key))
@@ -1036,6 +1042,30 @@ export default function App() {
                   Preferisco inserire la key a mano
                 </button>
               </div>
+              {freeWithoutKey.length > 0 && (
+                <div className="free-hint">
+                  <span className="muted small">Tier gratuiti, senza carta di credito:</span>
+                  <div className="free-hint-list">
+                    {freeWithoutKey.slice(0, 5).map((provider) => (
+                      <button
+                        key={provider.id}
+                        className="free-chip"
+                        onClick={() => {
+                          setSettingsOpen(true)
+                          if (provider.docs) void window.charliecode.openExternal(provider.docs)
+                        }}
+                        title={provider.docs ? `Crea la key su ${provider.docs}` : provider.baseUrl}
+                      >
+                        {provider.label}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="muted small">
+                    Ogni provider si accende con il suo interruttore, e la key resta in{' '}
+                    <code>~/.charliecode/credentials.json</code>.
+                  </span>
+                </div>
+              )}
             </section>
           ) : items.length === 0 ? (
             <section className="empty">
@@ -1322,12 +1352,23 @@ export default function App() {
                         onChange={(event) => void toggleProvider(provider.id, event.target.checked)}
                       />
                       <span className="provider-label">{provider.label}</span>
+                      {provider.free && <span className="provider-badge">gratis</span>}
                     </label>
                     <span className={`key-state ${provider.hasKey ? 'ok' : 'warn'}`}>
                       {provider.hasKey ? `key ${provider.keyHint}` : 'nessuna key'}
                     </span>
                   </div>
-                  <div className="provider-url">{provider.baseUrl}</div>
+                  <div className="provider-url">
+                    {provider.baseUrl}
+                    {provider.docs && (
+                      <button
+                        className="link-button"
+                        onClick={() => void window.charliecode.openExternal(provider.docs as string)}
+                      >
+                        come ottenere la key
+                      </button>
+                    )}
+                  </div>
                   {provider.kind === 'router' && (
                     <label className="provider-toggle small-toggle">
                       <input

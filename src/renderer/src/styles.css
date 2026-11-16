@@ -1199,6 +1199,32 @@ button.ghost:hover,
   font-weight: 600;
 }
 
+.provider-badge {
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 999px;
+  border: 1px solid #2f5a45;
+  background: #16281f;
+  color: #7fd6a8;
+}
+
+.link-button {
+  margin-left: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #7aa7e0;
+  font-size: 11px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.link-button:hover {
+  color: #a8c8f0;
+}
+
 .key-state {
   font-size: 11px;
   padding: 2px 7px;
@@ -2441,4 +2467,38 @@ button.ghost:hover,
 
 .skill-install button {
   flex: 0 0 auto;
+}
+
+/* ---------- free providers hint ---------- */
+
+.free-hint {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 18px;
+  max-width: 520px;
+  text-align: center;
+}
+
+.free-hint-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+}
+
+.free-chip {
+  font-size: 11.5px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid #2f4a63;
+  background: #131c26;
+  color: #cfe0f5;
+  cursor: pointer;
+}
+
+.free-chip:hover {
+  border-color: #3f6d94;
+  background: #17242f;
 }

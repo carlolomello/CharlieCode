@@ -38,6 +38,10 @@ export interface ProviderStatus {
   keyHint: string
   keySource: 'env' | 'credentials' | 'none'
   showAllModels: boolean
+  /** Where to get a key, when the provider publishes one. */
+  docs?: string
+  /** Ships with a free tier. */
+  free?: boolean
 }
 
 export interface ChatStartPayload {

@@ -25,6 +25,10 @@ export interface ProviderConfig {
    * "automatico" entry; set this to list them all.
    */
   showAllModels?: boolean
+  /** Where to get a key. Shown in the drawer next to the field. */
+  docs?: string
+  /** Ships with a free tier: worth offering to someone with no budget. */
+  free?: boolean
 }
 
 export interface ModelCaps {
