@@ -35,6 +35,12 @@ import {
   removeSkill
 } from '../engine/skills'
 import {
+  applyOnboarding,
+  inspectProject,
+  planOnboarding,
+  skipOnboarding
+} from '../engine/onboarding'
+import {
   appendMessage,
   createSession,
   deleteSession,
@@ -52,6 +58,10 @@ import type {
   ChatStartPayload,
   DetectedLocal,
   ModelsResponse,
+  OnboardingAnswers,
+  OnboardingApplyPayload,
+  OnboardingFacts,
+  OnboardingResult,
   ProviderStatus,
   RoutersStatus
 } from '../shared/ipc'
@@ -768,6 +778,43 @@ hanno priorità su queste.
     const { config } = await loadConfig(platform)
     return { workspace: config.workspace, skills: await listSkills(platform, config.workspace) }
   }
+
+  /* --------------------------- onboarding --------------------------- */
+
+  ipcMain.handle(
+    'charliecode:onboarding:facts',
+    async (_event, workspace: string): Promise<OnboardingFacts> =>
+      inspectProject(platform, workspace)
+  )
+
+  ipcMain.handle(
+    'charliecode:onboarding:preview',
+    async (_event, payload: { workspace: string; answers: OnboardingAnswers }) =>
+      planOnboarding(platform, payload.workspace, payload.answers)
+  )
+
+  ipcMain.handle(
+    'charliecode:onboarding:apply',
+    async (
+      _event,
+      payload: { workspace: string; apply: OnboardingApplyPayload }
+    ): Promise<OnboardingResult> => {
+      const result = await applyOnboarding(platform, payload.workspace, payload.apply)
+      if (result.autoApprove.length > 0) {
+        const { config } = await loadConfig(platform)
+        const merged = [...new Set([...config.agents.autoApproveCommands, ...result.autoApprove])]
+        await saveConfig(platform, {
+          ...config,
+          agents: { ...config.agents, autoApproveCommands: merged }
+        })
+      }
+      return result
+    }
+  )
+
+  ipcMain.handle('charliecode:onboarding:skip', async (_event, workspace: string): Promise<void> => {
+    await skipOnboarding(workspace)
+  })
 
   ipcMain.handle('charliecode:skills:list', async () => (await skillsFor()).skills)
 

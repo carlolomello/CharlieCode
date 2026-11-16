@@ -168,6 +168,17 @@ export interface CharlieCodeApi {
   /** Opens the project memory file, creating it if needed. */
   openProjectMemory(): Promise<string | null>
 
+  onboardingFacts(workspace: string): Promise<OnboardingFacts>
+  onboardingPreview(payload: {
+    workspace: string
+    answers: OnboardingAnswers
+  }): Promise<OnboardingPlan>
+  onboardingApply(payload: {
+    workspace: string
+    apply: OnboardingApplyPayload
+  }): Promise<OnboardingResult>
+  onboardingSkip(workspace: string): Promise<void>
+
   skills(): Promise<SkillInfo[]>
   installSkill(payload: { url: string; target: 'global' | 'project' }): Promise<SkillInfo[]>
   removeSkill(payload: { dir: string; source: 'global' | 'project' }): Promise<SkillInfo[]>
@@ -184,6 +195,67 @@ export interface PluginStatus {
 }
 
 export type SkillSource = 'project' | 'global'
+
+/* ------------------------------ onboarding ------------------------------ */
+
+export interface OnboardingFacts {
+  workspace: string
+  languages: string[]
+  packageManager?: string
+  commands: string[]
+  files: number
+  truncated: boolean
+  isGit: boolean
+  agentsFile?: string
+  hasMemory: boolean
+  skillCount: number
+  /** No instructions file and the wizard was never dismissed for this project. */
+  needsOnboarding: boolean
+}
+
+export interface OnboardingAnswers {
+  /** Free text: what the project is about, in the user's own words. */
+  summary: string
+  /** Coarse buckets picked in the wizard. */
+  kinds: string[]
+}
+
+export type SkillOrigin = 'generated' | 'catalog'
+
+export interface SkillDraft {
+  id: string
+  name: string
+  description: string
+  body: string
+  origin: SkillOrigin
+  /** Commands in the body that deserve a second look before installing. */
+  warnings: string[]
+}
+
+export interface OnboardingPlan {
+  agentsMdPath: string
+  agentsMd: string
+  /** True when an instructions file already exists: the wizard shows a diff. */
+  agentsMdExists: boolean
+  skills: SkillDraft[]
+  autoApproveCommands: string[]
+}
+
+export interface OnboardingApplyPayload {
+  answers: OnboardingAnswers
+  writeAgentsMd: boolean
+  /** User-edited text. The renderer may change prose; it cannot choose paths. */
+  agentsMd: string
+  skillIds: string[]
+  autoApproveCommands: string[]
+}
+
+export interface OnboardingResult {
+  written: string[]
+  skipped: string[]
+  skills: SkillInfo[]
+  autoApprove: string[]
+}
 
 /**
  * Lives here rather than in the engine because the renderer type-checks this

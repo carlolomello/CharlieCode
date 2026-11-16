@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, readFile, rm } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, sep } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -216,6 +216,54 @@ export async function installSkillFromGit(
   }
 
   return { installed, directory: destination }
+}
+
+export interface LocalSkillDraft {
+  id: string
+  name: string
+  description: string
+  body: string
+}
+
+/**
+ * Writes a skill that was generated locally (the onboarding wizard) instead of
+ * cloned from a repository. Never overwrites: an existing folder means the user
+ * already has it, possibly edited by hand.
+ */
+export async function writeLocalSkill(
+  platform: Platform,
+  workspace: string | undefined,
+  draft: LocalSkillDraft,
+  target: SkillSource
+): Promise<{ skill: SkillInfo; created: boolean }> {
+  if (target === 'project' && !workspace) throw new Error('Apri prima un progetto.')
+
+  const root = target === 'project' ? projectSkillsDir(workspace as string) : globalSkillsDir(platform)
+  const slug = slugFromDir(draft.id)
+  if (!slug) throw new Error('Id skill non valido.')
+
+  const dir = join(root, slug)
+  const path = join(dir, SKILL_FILE)
+  if (existsSync(path)) {
+    const existing = (await readSkillsIn(root, target)).find((skill) => skill.id === slug)
+    if (existing) return { skill: existing, created: false }
+  }
+
+  await mkdir(dir, { recursive: true })
+  const content = `---\nname: ${draft.name}\ndescription: ${draft.description}\n---\n\n${draft.body.trim()}\n`
+  await writeFile(path, content, 'utf8')
+
+  return {
+    created: true,
+    skill: {
+      id: slug,
+      name: draft.name,
+      description: draft.description,
+      source: target,
+      path,
+      dir
+    }
+  }
 }
 
 export async function removeSkill(

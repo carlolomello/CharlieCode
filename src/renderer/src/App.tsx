@@ -23,6 +23,7 @@ import { Mascot, MascotDesk, MascotTeam, type MascotMood } from './components/Ma
 import { Markdown } from './components/Markdown'
 import { PermissionModal } from './components/PermissionModal'
 import { SetupWizard } from './components/SetupWizard'
+import { ProjectWizard } from './components/ProjectWizard'
 import { ToolActivity, type SubagentRun } from './components/ToolActivity'
 
 type ChatItem = StoredMessage & {
@@ -151,6 +152,8 @@ export default function App() {
   const [dragging, setDragging] = useState(false)
   const [permission, setPermission] = useState<PermissionEnvelope | null>(null)
   const [wizardOpen, setWizardOpen] = useState(false)
+  /** Workspace whose onboarding wizard is open, if any. */
+  const [projectWizard, setProjectWizard] = useState<string | null>(null)
   const [routers, setRouters] = useState<RoutersStatus | null>(null)
   const [newToolDraft, setNewToolDraft] = useState('')
   const [newCommandDraft, setNewCommandDraft] = useState('')
@@ -405,6 +408,27 @@ export default function App() {
   useEffect(() => {
     if (!streamingId) inputRef.current?.focus()
   }, [streamingId])
+
+  /**
+   * A project with no instructions and no onboarding marker gets the wizard
+   * once. It never blocks anything: a failure here is silent, and "non ora"
+   * writes the marker so it does not come back.
+   */
+  useEffect(() => {
+    if (!workspace) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const facts = await window.charliecode.onboardingFacts(workspace)
+        if (!cancelled && facts.needsOnboarding) setProjectWizard(workspace)
+      } catch {
+        // The wizard is a nicety: a broken scan must not stop the app.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [workspace])
 
   const selectedModel = useMemo(
     () => models.find((model) => model.key === modelKey),
@@ -1326,6 +1350,17 @@ export default function App() {
         />
       )}
 
+      {projectWizard && (
+        <ProjectWizard
+          workspace={projectWizard}
+          onClose={() => setProjectWizard(null)}
+          onApplied={async () => {
+            await refreshSkills()
+            await refreshPlugins()
+          }}
+        />
+      )}
+
       {settingsOpen && (
         <div className="overlay" onClick={() => setSettingsOpen(false)}>
           <div className="drawer" onClick={(event) => event.stopPropagation()}>
@@ -1502,6 +1537,22 @@ export default function App() {
                 disabled={setupBusy || !workspace}
               >
                 {setupBusy ? 'Analizzo…' : 'Consigli di setup'}
+              </button>
+              <button
+                className="ghost"
+                onClick={() => {
+                  if (!workspace) return
+                  setSettingsOpen(false)
+                  setProjectWizard(workspace)
+                }}
+                disabled={!workspace}
+                title={
+                  workspace
+                    ? 'Riapre il wizard: AGENTS.md e skill del progetto'
+                    : 'Apri prima un progetto'
+                }
+              >
+                Configura progetto
               </button>
             </div>
             {setupReport && (

@@ -8,6 +8,11 @@ import type {
   ChatStartPayload,
   ChatStartResult,
   ModelsResponse,
+  OnboardingAnswers,
+  OnboardingApplyPayload,
+  OnboardingFacts,
+  OnboardingPlan,
+  OnboardingResult,
   PermissionEnvelope,
   PluginStatus,
   ProviderStatus,
@@ -115,6 +120,15 @@ const api: CharlieCodeApi = {
   suggestSetup: () => ipcRenderer.invoke('charliecode:plugins:suggest-setup') as Promise<string>,
   openProjectMemory: () =>
     ipcRenderer.invoke('charliecode:plugins:open-memory') as Promise<string | null>,
+
+  onboardingFacts: (workspace: string) =>
+    ipcRenderer.invoke('charliecode:onboarding:facts', workspace) as Promise<OnboardingFacts>,
+  onboardingPreview: (payload: { workspace: string; answers: OnboardingAnswers }) =>
+    ipcRenderer.invoke('charliecode:onboarding:preview', payload) as Promise<OnboardingPlan>,
+  onboardingApply: (payload: { workspace: string; apply: OnboardingApplyPayload }) =>
+    ipcRenderer.invoke('charliecode:onboarding:apply', payload) as Promise<OnboardingResult>,
+  onboardingSkip: (workspace: string) =>
+    ipcRenderer.invoke('charliecode:onboarding:skip', workspace) as Promise<void>,
 
   skills: () => ipcRenderer.invoke('charliecode:skills:list') as Promise<SkillInfo[]>,
   installSkill: (payload: { url: string; target: 'global' | 'project' }) =>
