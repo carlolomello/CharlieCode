@@ -229,8 +229,9 @@ export async function pluginSystemPrompt(
 
   if (isPluginEnabled(config, 'advisor')) {
     parts.push(
-      'Consigliere di setup (plugin attivo): quando inizi in un progetto che non conosci, ' +
-        'chiama `suggest_setup` prima di proporre modifiche. Restituisce comandi, lacune e skill consigliate.'
+      'Consigliere di setup (plugin attivo): `suggest_setup` restituisce fatti su comandi, lacune ' +
+        'e skill consigliate. Chiamalo solo se la domanda riguarda il setup o come migliorare il ' +
+        'progetto. Non chiamarlo per una review generica e non ricopiare il suo output nella risposta.'
     )
   }
 

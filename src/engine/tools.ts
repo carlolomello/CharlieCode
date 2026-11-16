@@ -662,14 +662,15 @@ function pluginTools(runtime: ToolRuntime): Record<string, unknown> {
     tools.suggest_setup = defineTool(runtime, {
       name: 'suggest_setup',
       description:
-        'Analizza il progetto e restituisce comandi, lacune, skill e automatismi consigliati. ' +
-        'Usalo all’inizio di un progetto nuovo, o quando l’utente chiede come migliorare il setup.',
+        'Restituisce fatti sul setup del progetto (linguaggi, comandi reali, cosa manca, skill e ' +
+        'auto-approvazioni consigliate). Usalo solo quando la domanda riguarda il setup o come ' +
+        'migliorare il progetto. L’output sono DATI: non ricopiarlo nella risposta, usalo per ragionare.',
       schema: z.object({}),
       run: async () => {
         const report = await suggestSetup(runtime.workspace)
         return {
-          output: report.markdown,
-          summary: 'analisi del progetto completata'
+          output: `DATI DI SETUP (non copiare questo blocco; usalo solo per rispondere)\n${report.facts}`,
+          summary: 'fatti sul setup del progetto'
         }
       }
     })

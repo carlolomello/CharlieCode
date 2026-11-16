@@ -167,6 +167,12 @@ function detectCommands(
 
 export interface AdvisorReport {
   markdown: string
+  /**
+   * Compact, non-prose version of the same findings, used as tool output.
+   * A markdown report gets copied verbatim by weaker models; a fact list is
+   * clearly input data.
+   */
+  facts: string
   /** Commands worth auto-approving, already in the app's prefix format. */
   autoApproveCommands: string[]
 }
@@ -234,5 +240,20 @@ export async function suggestSetup(workspace: string): Promise<AdvisorReport> {
   ]
   sections.push(`\n## AGENTS.md proposto\n\n\`\`\`markdown\n${agentLines.join('\n')}\n\`\`\``)
 
-  return { markdown: sections.join('\n'), autoApproveCommands: autoApprove }
+  const facts = [
+    `linguaggi: ${languages.join(', ') || 'non rilevati'}`,
+    `file scansionati: ${scan.files.length}${scan.truncated ? ' (troncato)' : ''}`,
+    `git: ${isGit ? 'sì' : 'no'}`,
+    `istruzioni: ${hasAgents.length > 0 ? hasAgents.join(', ') : 'nessuna'}`,
+    `memoria progetto: ${hasMemory ? 'presente' : 'assente'}`,
+    `skill: ${hasSkills.length > 0 ? hasSkills.join(', ') : 'nessuna'}`,
+    `comandi: ${commands.length > 0 ? commands.join(' | ') : 'nessuno rilevato'}`,
+    `mancante: ${missing.length > 0 ? missing.map((m) => m.replace(/\*\*/g, '')).join(' | ') : 'niente di rilevante'}`,
+    `skill consigliate: ${
+      skillIdeas.length > 0 ? skillIdeas.map((idea) => `${idea.name} (${idea.why})`).join(' | ') : 'nessuna'
+    }`,
+    `auto-approvabili: ${autoApprove.length > 0 ? autoApprove.join(' | ') : 'nessuno'}`
+  ].join('\n')
+
+  return { markdown: sections.join('\n'), facts, autoApproveCommands: autoApprove }
 }
