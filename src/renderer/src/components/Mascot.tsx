@@ -406,7 +406,7 @@ function Worker({ x, palette }: { x: number; palette: WorkerPalette }): React.JS
 }
 
 /** Charlie, standing, arm raised, whip arcing over the nearest worker. */
-function Supervisor({ workers }: { workers: number }): React.JSX.Element {
+function Supervisor(): React.JSX.Element {
   return (
     <g>
       <ellipse cx="16" cy="31" rx="8" ry="1.4" fill="#000000" opacity="0.28" />
@@ -421,31 +421,38 @@ function Supervisor({ workers }: { workers: number }): React.JSX.Element {
       {/* left arm down */}
       {px(8, 17, 2, 6, SLEEVE)}
       {px(8, 23, 2, 1, SKIN)}
-      {/* right arm raised */}
-      {px(22, 14, 2, 3, SLEEVE)}
-      {px(22, 11, 2, 3, SLEEVE)}
-      {px(22, 9, 2, 2, SKIN)}
+      {/* right arm raised away from the face, hand up */}
+      {px(21, 16, 2, 3, SLEEVE)}
+      {px(23, 13, 2, 3, SLEEVE)}
+      {px(24, 10, 2, 3, SLEEVE)}
+      {px(25, 8, 2, 2, SKIN)}
 
-      {/* the whip */}
+      {/* the whip: a lash that arcs over the first worker's head and cracks */}
       <g className="team-whip">
         <path
-          d="M23 9 C 30 6, 38 10, 44 16"
+          d="M26 9 C 30 1.5, 38 0.4, 45 2.4"
           fill="none"
-          stroke="#6b4a2f"
+          stroke="#7b5533"
+          strokeWidth="1.3"
+          strokeLinecap="round"
+        />
+        <path
+          d="M45 2.4 l 2.2 2.8"
+          fill="none"
+          stroke="#e8e2d4"
           strokeWidth="1.1"
           strokeLinecap="round"
         />
-        <path d="M44 16 l 2 2" stroke="#c7ced8" strokeWidth="1" strokeLinecap="round" />
-      </g>
-
-      {/* shout mark, because a whip alone is not enough theatre */}
-      {workers > 0 && (
-        <g className="team-shout">
-          {px(27, 2, 1, 2, '#f2c14e')}
-          {px(29, 3, 1, 1, '#f2c14e')}
-          {px(26, 4, 1, 1, '#f2c14e')}
+        {/* the crack: two frames per snap, which is what sells the hit */}
+        <g className="team-crack">
+          <path
+            d="M47.6 6.4 l 2.2 1.8 M48 4.4 l 2.4 -0.8 M46.4 7.6 l 0.6 2.4"
+            stroke="#f2c14e"
+            strokeWidth="1"
+            strokeLinecap="round"
+          />
         </g>
-      )}
+      </g>
     </g>
   )
 }
@@ -476,7 +483,7 @@ export function MascotTeam({
       role="img"
       aria-label={`Charlie supervisiona ${shown.length} subagenti`}
     >
-      <Supervisor workers={shown.length} />
+      <Supervisor />
       {shown.map((member, index) => (
         <Worker
           key={member.id}

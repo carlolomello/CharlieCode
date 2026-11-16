@@ -2321,18 +2321,25 @@ button.ghost:hover,
   }
 }
 
-.team-shout {
-  animation: team-shout 1.1s steps(2, end) infinite;
+/* The crack star exists only for two frames per snap: that is what makes the
+   whip look like it hit something rather than being waved around. */
+.team-crack {
+  opacity: 0;
+  animation: team-crack 1.6s steps(1, end) infinite;
 }
 
-@keyframes team-shout {
+@keyframes team-crack {
   0%,
-  50% {
-    opacity: 1;
+  59% {
+    opacity: 0;
   }
   60%,
+  75% {
+    opacity: 1;
+  }
+  76%,
   100% {
-    opacity: 0.25;
+    opacity: 0;
   }
 }
 
@@ -2353,9 +2360,9 @@ button.ghost:hover,
 
 @media (prefers-reduced-motion: reduce) {
   .team-whip,
+  .team-crack,
   .team-worker-hand,
   .team-sweat,
-  .team-shout,
   .team-cursor {
     animation: none;
   }

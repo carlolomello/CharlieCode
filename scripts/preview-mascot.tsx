@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { Mascot, MascotDesk } from '../src/renderer/src/components/Mascot'
+import { Mascot, MascotDesk, MascotTeam } from '../src/renderer/src/components/Mascot'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const out = process.argv[2] ?? join(root, 'mascot-preview.html')
@@ -21,7 +21,51 @@ const cells = [
   { label: '320px · happy', html: renderToStaticMarkup(<Mascot size={320} mood="happy" still />) },
   { label: 'desk · working', html: renderToStaticMarkup(<MascotDesk width={320} mood="thinking" />) },
   { label: '64px (sidebar)', html: renderToStaticMarkup(<Mascot size={64} mood="idle" />) },
-  { label: '140px (empty state)', html: renderToStaticMarkup(<Mascot size={140} mood="happy" />) }
+  { label: '140px (empty state)', html: renderToStaticMarkup(<Mascot size={140} mood="happy" />) },
+  {
+    label: 'team · 1 subagent',
+    html: renderToStaticMarkup(
+      <MascotTeam width={420} members={[{ id: 'a', label: 'esplora' }]} />
+    )
+  },
+  {
+    label: 'team · 2 subagent',
+    html: renderToStaticMarkup(
+      <MascotTeam
+        width={420}
+        members={[
+          { id: 'a', label: 'esplora' },
+          { id: 'b', label: 'implementa' }
+        ]}
+      />
+    )
+  },
+  {
+    label: 'team · 4 subagent',
+    html: renderToStaticMarkup(
+      <MascotTeam
+        width={420}
+        members={[
+          { id: 'a', label: 'esplora' },
+          { id: 'b', label: 'implementa' },
+          { id: 'c', label: 'test' },
+          { id: 'd', label: 'docs' }
+        ]}
+      />
+    )
+  },
+  {
+    label: 'team · 200px (badge)',
+    html: renderToStaticMarkup(
+      <MascotTeam
+        width={200}
+        members={[
+          { id: 'a', label: 'esplora' },
+          { id: 'b', label: 'implementa' }
+        ]}
+      />
+    )
+  }
 ]
 
 const html = `<!doctype html>
