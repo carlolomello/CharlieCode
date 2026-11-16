@@ -371,7 +371,16 @@ pnpm dist:win       # NSIS installer
 
 No test touches your real configuration: `CHARLIECODE_CONFIG_DIR` points at a temp dir. The mock router (`pnpm mock`) speaks the same subset of the OpenAI protocol the engine uses — SSE streaming, tool calls, 429s — so the whole loop is testable offline.
 
-Releases are built by `.github/workflows/release.yml` on real macOS and Windows runners (`workflow_dispatch` or a `v*` tag).
+Releases are built by `.github/workflows/release.yml` on real macOS and Windows runners. The `publish` job downloads both artifacts and attaches them to the tag's release, so the ~120 MB installers never pass through a manual upload.
+
+The version stays **0.0.1** until the first public cut, so "new build, same version" is a normal move here: point the tag at the commit you want and push it.
+
+```bash
+git tag -f v0.0.1 <commit>
+git push -f origin v0.0.1     # rebuilds and replaces the release assets
+```
+
+Or, without touching the tag: **Actions → release → Run workflow**, leaving `tag` empty to use the branch head, or filling `v0.0.1` to attach the fresh build to the existing release.
 
 ---
 
