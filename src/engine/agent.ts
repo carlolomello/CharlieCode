@@ -2,6 +2,7 @@ import { streamText, stepCountIs, type ModelMessage, type ToolSet } from 'ai'
 import { findModel } from './catalog'
 import { providerFor, resolveCandidates } from './client'
 import { buildTools, toolTitle, type ToolRuntime } from './tools'
+import { sanitizeMessages } from './context-store'
 import { enabledPluginIds, pluginSystemPrompt, recordTurn, PLUGIN_READ_TOOLS } from './plugins'
 import { skillsSystemPrompt } from './skills'
 import type { Platform } from './platform'
@@ -120,7 +121,7 @@ const PLAN_PROMPT = [
   'Rispondi alla domanda dell’utente, non descrivere il progetto.',
   '- Se chiede bug, problemi o migliorie: elenca i problemi concreti che hai visto, ognuno con file:riga, perché è un problema e la correzione proposta. Ordina per impatto.',
   '- Se chiede un piano di implementazione: passi in ordine, file toccati, rischi.',
-  'Non aprire con “Analisi completata” né con un riassunto di cosa fa il progetto.',
+  'Non aprire con un riassunto di cosa fa il progetto: parti dalla risposta.',
   'Non affermare di aver modificato qualcosa. Il piano verrà approvato prima dell’esecuzione.'
 ].join('\n')
 
@@ -363,7 +364,12 @@ export async function runAgent(
 
         const steps = await result.steps
         const usage = await result.totalUsage
-        const newMessages: ModelMessage[] = steps.flatMap((step) => step.response.messages)
+        // `response.messages` carries the provider's reasoning parts. Storing
+        // them would feed the model its own monologue on the next turn, which is
+        // how a weak model ends up repeating "ho già analizzato" forever.
+        const newMessages: ModelMessage[] = sanitizeMessages(
+          steps.flatMap((step) => step.response.messages)
+        )
         const messages: ModelMessage[] = [...inputMessages, ...newMessages]
 
         deps.emit({
@@ -458,8 +464,9 @@ export function buildSystemPrompt(projectContext: string, workspace?: string): s
     'Come rispondere:',
     '- Rispondi alla domanda. Non raccontare cosa fa il progetto se non te lo chiedono.',
     '- Se ti chiedono bug, problemi o migliorie, produci un elenco concreto: cosa non va, file:riga, perché, come si corregge. Niente panoramiche, niente tabelle riassuntive.',
-    '- Non aprire con “Analisi completata”, “Ecco i punti salienti” o simili: parti dalla risposta.',
+    '- Parti dalla risposta: niente preamboli su cosa stai per fare o su cosa hai già fatto.',
     '- Non ripetere la risposta precedente. Se l’utente dice che non hai risposto, cambia approccio: fai una cosa diversa, non riscrivere lo stesso testo.',
+    '- Non rispondere che il progetto è già stato analizzato e non rimandare la domanda: se ti serve contesto, chiama i tool adesso, in questo turno.',
     '- Se un tool restituisce dati, usali per ragionare. Non incollare l’output del tool nella risposta.',
     '',
     'Multi-agente:',

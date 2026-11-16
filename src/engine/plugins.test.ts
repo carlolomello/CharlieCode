@@ -7,6 +7,7 @@ import {
   ensureProjectMemory,
   pluginSystemPrompt,
   projectMemoryPath,
+  memoryForPrompt,
   readProjectMemory,
   recordTurn,
   rememberNote,
@@ -87,6 +88,32 @@ describe('project memory', () => {
 
   it('returns undefined when there is no memory yet', async () => {
     expect(await readProjectMemory(workspace)).toBeUndefined()
+  })
+})
+
+describe('memoryForPrompt', () => {
+  it('toglie il diario delle attività: al modello insegna solo che "è già stato fatto"', () => {
+    const memory = [
+      '# Memoria del progetto',
+      '',
+      '## Panoramica',
+      'Gestionale di preventivi.',
+      '',
+      '## Attività recente',
+      '',
+      '- 2026-11-16 — analizza il progetto',
+      '- 2026-11-16 — analizza il progetto'
+    ].join('\n')
+
+    const prompt = memoryForPrompt(memory)
+    expect(prompt).toContain('Gestionale di preventivi.')
+    expect(prompt).not.toContain('Attività recente')
+    expect(prompt).not.toContain('analizza il progetto')
+  })
+
+  it('lascia il resto intatto', () => {
+    const memory = '# Memoria\n\n## Note\n- il test è `pnpm test`'
+    expect(memoryForPrompt(memory)).toBe(memory)
   })
 })
 

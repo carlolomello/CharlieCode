@@ -126,6 +126,26 @@ export async function readProjectMemory(workspace: string): Promise<string | und
   }
 }
 
+/**
+ * The memory file as the model should see it.
+ *
+ * "Attività recente" is a diary for the human: a list of past requests. Fed to
+ * the model it reads as "this was already done", and a weak model will refuse
+ * to work instead of working. Only the durable parts go into the prompt.
+ */
+export function memoryForPrompt(memory: string): string {
+  const kept: string[] = []
+  let skipping = false
+  for (const line of memory.split('\n')) {
+    if (/^##\s+/.test(line)) {
+      skipping = /attivit[àa] recente/i.test(line)
+      if (skipping) continue
+    }
+    if (!skipping) kept.push(line)
+  }
+  return kept.join('\n').trim()
+}
+
 async function ensureMemoryFile(workspace: string): Promise<string> {
   const path = projectMemoryPath(workspace)
   await mkdir(dirname(path), { recursive: true })
@@ -207,7 +227,8 @@ export async function pluginSystemPrompt(
   const parts: string[] = []
 
   if (isPluginEnabled(config, 'memory') && workspace) {
-    const memory = await readProjectMemory(workspace)
+    const raw = await readProjectMemory(workspace)
+    const memory = raw ? memoryForPrompt(raw) : ''
     if (memory) {
       parts.push(
         [

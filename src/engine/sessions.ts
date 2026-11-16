@@ -225,7 +225,7 @@ export async function deleteSession(platform: Platform, id: string): Promise<boo
 
 /** Messages that go to the model: no errors, no empty turns, most recent last. */
 export function toChatHistory(session: Session, limit = 40): ChatMessage[] {
-  return session.messages
+  const history = session.messages
     .filter((message) => message.content.trim().length > 0 || (message.attachments?.length ?? 0) > 0)
     .filter((message) => !message.error)
     .slice(-limit)
@@ -234,4 +234,17 @@ export function toChatHistory(session: Session, limit = 40): ChatMessage[] {
       content: message.content,
       ...(message.attachments?.length ? { attachments: message.attachments } : {})
     }))
+
+  // A resend writes the same user message twice. The model reads the duplicate
+  // as "the user keeps repeating" and starts answering about the repetition
+  // instead of the question.
+  return history.filter(
+    (message, index) =>
+      index === 0 ||
+      !(
+        message.role === 'user' &&
+        history[index - 1]?.role === 'user' &&
+        history[index - 1]?.content.trim() === message.content.trim()
+      )
+  )
 }
