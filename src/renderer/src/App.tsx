@@ -16,9 +16,10 @@ import type {
   PermissionEnvelope,
   PluginStatus,
   ProviderStatus,
+  SkillInfo,
   RoutersStatus
 } from '../../shared/ipc'
-import { Mascot, MascotDesk, type MascotMood } from './components/Mascot'
+import { Mascot, MascotDesk, MascotTeam, type MascotMood } from './components/Mascot'
 import { Markdown } from './components/Markdown'
 import { PermissionModal } from './components/PermissionModal'
 import { SetupWizard } from './components/SetupWizard'
@@ -125,6 +126,11 @@ export default function App() {
   const [plugins, setPlugins] = useState<PluginStatus[]>([])
   const [setupReport, setSetupReport] = useState<string | null>(null)
   const [setupBusy, setSetupBusy] = useState(false)
+  const [skills, setSkills] = useState<SkillInfo[]>([])
+  const [skillUrl, setSkillUrl] = useState('')
+  const [skillTarget, setSkillTarget] = useState<'global' | 'project'>('global')
+  const [skillBusy, setSkillBusy] = useState(false)
+  const [skillError, setSkillError] = useState<string | null>(null)
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [items, setItems] = useState<ChatItem[]>([])
@@ -186,6 +192,14 @@ export default function App() {
     }
   }, [])
 
+  const refreshSkills = useCallback(async (): Promise<void> => {
+    try {
+      setSkills(await window.charliecode.skills())
+    } catch {
+      setSkills([])
+    }
+  }, [])
+
   const refreshModels = useCallback(async (): Promise<void> => {
     setLoadingModels(true)
     try {
@@ -221,13 +235,15 @@ export default function App() {
     void refreshRouters()
     void refreshAutoApprove()
     void refreshPlugins()
+    void refreshSkills()
   }, [
     refreshModels,
     refreshProviders,
     refreshRouters,
     refreshSessions,
     refreshAutoApprove,
-    refreshPlugins
+    refreshPlugins,
+    refreshSkills
   ])
 
   useEffect(() => {
@@ -438,6 +454,13 @@ export default function App() {
       : items.length > 0
         ? 'happy'
         : 'idle'
+
+  /** Subagents still running in the current turn, for the workshop scene. */
+  const runningSubagents = useMemo(() => {
+    if (!streamingId) return []
+    const current = items.find((item) => item.requestId === streamingId)
+    return (current?.subagents ?? []).filter((run) => run.status === 'running')
+  }, [items, streamingId])
 
   const groupedModels = useMemo(() => {
     const groups = new Map<string, ModelEntry[]>()
@@ -723,6 +746,33 @@ export default function App() {
       setSetupBusy(false)
     }
   }, [])
+
+  const installSkill = useCallback(async (): Promise<void> => {
+    const url = skillUrl.trim()
+    if (!url) return
+    setSkillBusy(true)
+    setSkillError(null)
+    try {
+      setSkills(await window.charliecode.installSkill({ url, target: skillTarget }))
+      setSkillUrl('')
+    } catch (error) {
+      setSkillError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setSkillBusy(false)
+    }
+  }, [skillTarget, skillUrl])
+
+  const uninstallSkill = useCallback(
+    async (skill: SkillInfo): Promise<void> => {
+      if (!window.confirm(`Rimuovere la skill "${skill.name}"?`)) return
+      try {
+        setSkills(await window.charliecode.removeSkill({ dir: skill.dir, source: skill.source }))
+      } catch (error) {
+        setSkillError(error instanceof Error ? error.message : String(error))
+      }
+    },
+    []
+  )
 
   const addProvider = useCallback(async (): Promise<void> => {
     const { id, label, baseUrl } = newProvider
@@ -1092,11 +1142,29 @@ export default function App() {
 
           {streamingId && (
             <div className="working-wrap">
-              <div className="working-badge">
-                <MascotDesk width={118} mood="thinking" />
+              <div className={`working-badge ${runningSubagents.length > 0 ? 'with-team' : ''}`}>
+                {runningSubagents.length > 0 ? (
+                  <MascotTeam
+                    width={runningSubagents.length > 1 ? 240 : 200}
+                    members={runningSubagents.map((run) => ({
+                      id: run.agentId,
+                      label: run.description
+                    }))}
+                  />
+                ) : (
+                  <MascotDesk width={118} mood="thinking" />
+                )}
                 <div className="working-text">
-                  <strong>Charlie sta lavorando</strong>
-                  <span>strumenti, diff e subagenti in corso…</span>
+                  <strong>
+                    {runningSubagents.length > 0
+                      ? `Charlie supervisiona ${runningSubagents.length} subagent${runningSubagents.length === 1 ? 'e' : 'i'}`
+                      : 'Charlie sta lavorando'}
+                  </strong>
+                  <span>
+                    {runningSubagents.length > 0
+                      ? runningSubagents.map((run) => run.name).join(' · ')
+                      : 'strumenti, diff e subagenti in corso…'}
+                  </span>
                 </div>
               </div>
             </div>
@@ -1406,6 +1474,78 @@ export default function App() {
                 <Markdown text={setupReport} />
               </div>
             )}
+
+            <h3>Skill</h3>
+            <p className="muted small">
+              Procedure riutilizzabili in <code>SKILL.md</code>, come in Claude Code. Stanno in{' '}
+              <code>.charliecode/skills</code> del progetto o in <code>~/.charliecode/skills</code>.
+              L’agente vede solo nome e descrizione e carica il testo con il tool <code>skill</code>{' '}
+              quando serve, quindi non consumano contesto.
+            </p>
+            <div className="skills">
+              {skills.map((skill) => (
+                <div key={skill.dir} className="skill">
+                  <div className="skill-head">
+                    <div>
+                      <div className="skill-name">{skill.name}</div>
+                      <div className="skill-desc">{skill.description}</div>
+                    </div>
+                    <div className="skill-actions">
+                      <span className={`skill-source ${skill.source}`}>
+                        {skill.source === 'project' ? 'progetto' : 'globale'}
+                      </span>
+                      <button
+                        className="ghost small"
+                        onClick={() => void uninstallSkill(skill)}
+                        title="Rimuove la cartella della skill"
+                      >
+                        rimuovi
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {skills.length === 0 && (
+                <p className="muted small">
+                  Nessuna skill installata. Puoi crearne una a mano o installarne una da un
+                  repository git.
+                </p>
+              )}
+            </div>
+            {skillError && <div className="message-error">{skillError}</div>}
+            <div className="skill-install">
+              <input
+                placeholder="URL git (https://github.com/utente/repo)"
+                value={skillUrl}
+                onChange={(event) => setSkillUrl(event.target.value)}
+              />
+              <select
+                value={skillTarget}
+                onChange={(event) => setSkillTarget(event.target.value as 'global' | 'project')}
+              >
+                <option value="global">tutti i progetti</option>
+                <option value="project">solo questo progetto</option>
+              </select>
+              <button
+                className="primary"
+                onClick={() => void installSkill()}
+                disabled={skillBusy || !skillUrl.trim()}
+              >
+                {skillBusy ? 'Installo…' : 'Installa'}
+              </button>
+            </div>
+            <div className="setup-actions">
+              <button className="ghost" onClick={() => void window.charliecode.openSkillsDir('global')}>
+                Apri cartella skill
+              </button>
+              <button
+                className="ghost"
+                onClick={() => void window.charliecode.openSkillsDir('project')}
+                disabled={!workspace}
+              >
+                Skill del progetto
+              </button>
+            </div>
 
             <h3>Permessi automatici</h3>
             <p className="muted small">

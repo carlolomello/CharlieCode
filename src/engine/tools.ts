@@ -7,6 +7,7 @@ import { z } from 'zod'
 import { createDiff } from './diff'
 import { suggestSetup } from './advisor'
 import { rememberNote } from './plugins'
+import { listSkills, readSkill } from './skills'
 import type { Platform } from './platform'
 import type {
   EngineEvent,
@@ -624,6 +625,28 @@ export function buildTools(runtime: ToolRuntime) {
     write,
     edit,
     bash,
+    skill: defineTool(runtime, {
+      name: 'skill',
+      description:
+        'Carica il testo di una skill installata (procedura riutilizzabile). Usa l’id elencato ' +
+        'nelle istruzioni di sistema. È sola lettura e non serve chiedere permesso.',
+      schema: z.object({
+        id: z.string().min(1).describe('id della skill, come elencato nel system prompt')
+      }),
+      run: async ({ id }) => {
+        const found = await readSkill(runtime.platform, runtime.workspace, id)
+        if (!found) {
+          const available = await listSkills(runtime.platform, runtime.workspace)
+          throw new Error(
+            `Skill "${id}" non trovata. Disponibili: ${available.map((s) => s.id).join(', ') || 'nessuna'}.`
+          )
+        }
+        return {
+          output: `# Skill: ${found.name}\n\n${found.body}`,
+          summary: `${found.name} · ${found.body.length} caratteri`
+        }
+      }
+    }),
     ...(task ? { task } : {}),
     ...pluginTools(runtime)
   }

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { rm, writeFile } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
 import { buildSystemPrompt, runAgent } from '../engine/agent'
@@ -27,6 +27,13 @@ import { dockerAvailable, hasBinary, probeEndpoint, scanLocalEndpoints } from '.
 import { createPlatform } from '../engine/platform'
 import { ensureProjectMemory, resolvePlugins } from '../engine/plugins'
 import { suggestSetup } from '../engine/advisor'
+import {
+  globalSkillsDir,
+  installSkillFromGit,
+  listSkills,
+  projectSkillsDir,
+  removeSkill
+} from '../engine/skills'
 import {
   appendMessage,
   createSession,
@@ -751,6 +758,42 @@ hanno priorità su queste.
     const path = await ensureProjectMemory(config.workspace)
     await shell.openPath(path)
     return path
+  })
+
+  /* ----------------------------- skills ----------------------------- */
+
+  const skillsFor = async (): Promise<{ workspace?: string; skills: Awaited<ReturnType<typeof listSkills>> }> => {
+    const { config } = await loadConfig(platform)
+    return { workspace: config.workspace, skills: await listSkills(platform, config.workspace) }
+  }
+
+  ipcMain.handle('charliecode:skills:list', async () => (await skillsFor()).skills)
+
+  ipcMain.handle(
+    'charliecode:skills:install',
+    async (_event, payload: { url: string; target: 'global' | 'project' }) => {
+      const { workspace } = await skillsFor()
+      await installSkillFromGit(platform, payload.url, payload.target, workspace)
+      return (await skillsFor()).skills
+    }
+  )
+
+  ipcMain.handle(
+    'charliecode:skills:remove',
+    async (_event, payload: { dir: string; source: 'global' | 'project' }) => {
+      const { workspace } = await skillsFor()
+      await removeSkill(platform, payload, workspace)
+      return (await skillsFor()).skills
+    }
+  )
+
+  ipcMain.handle('charliecode:skills:open-dir', async (_event, target: 'global' | 'project') => {
+    const { workspace } = await skillsFor()
+    if (target === 'project' && !workspace) throw new Error('Apri prima un progetto.')
+    const dir =
+      target === 'project' ? projectSkillsDir(workspace as string) : globalSkillsDir(platform)
+    await mkdir(dir, { recursive: true })
+    await shell.openPath(dir)
   })
 }
 

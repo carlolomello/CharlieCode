@@ -2,9 +2,16 @@ name: release
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag della release da aggiornare (es. v0.0.1)'
+        required: false
   push:
     tags:
       - 'v*'
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -50,3 +57,31 @@ jobs:
           path: ${{ matrix.artifacts }}
           if-no-files-found: error
           retention-days: 14
+
+  # Attach the installers to the GitHub release for the tag. This is how the
+  # ~120 MB files get published without uploading them by hand: GitHub allows
+  # 2 GB per release asset, the 50 MB limit only exists in the browser bridge.
+  publish:
+    name: publish release assets
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: list assets
+        run: ls -lh dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          name: CharlieCode ${{ inputs.tag || github.ref_name }}
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+          files: |
+            dist/*.dmg
+            dist/*.exe

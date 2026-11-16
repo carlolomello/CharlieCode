@@ -11,7 +11,8 @@ import type {
   PermissionEnvelope,
   PluginStatus,
   ProviderStatus,
-  RoutersStatus
+  RoutersStatus,
+  SkillInfo
 } from '../shared/ipc'
 import type { Session, SessionSummary } from '../engine/sessions'
 import type { PermissionDecision } from '../engine/types'
@@ -113,7 +114,15 @@ const api: CharlieCodeApi = {
     ipcRenderer.invoke('charliecode:plugins:set', id, enabled) as Promise<PluginStatus[]>,
   suggestSetup: () => ipcRenderer.invoke('charliecode:plugins:suggest-setup') as Promise<string>,
   openProjectMemory: () =>
-    ipcRenderer.invoke('charliecode:plugins:open-memory') as Promise<string | null>
+    ipcRenderer.invoke('charliecode:plugins:open-memory') as Promise<string | null>,
+
+  skills: () => ipcRenderer.invoke('charliecode:skills:list') as Promise<SkillInfo[]>,
+  installSkill: (payload: { url: string; target: 'global' | 'project' }) =>
+    ipcRenderer.invoke('charliecode:skills:install', payload) as Promise<SkillInfo[]>,
+  removeSkill: (payload: { dir: string; source: 'global' | 'project' }) =>
+    ipcRenderer.invoke('charliecode:skills:remove', payload) as Promise<SkillInfo[]>,
+  openSkillsDir: (target: 'global' | 'project') =>
+    ipcRenderer.invoke('charliecode:skills:open-dir', target) as Promise<void>
 }
 
 contextBridge.exposeInMainWorld('charliecode', api)

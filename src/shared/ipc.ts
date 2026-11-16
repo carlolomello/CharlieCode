@@ -163,6 +163,11 @@ export interface CharlieCodeApi {
   suggestSetup(): Promise<string>
   /** Opens the project memory file, creating it if needed. */
   openProjectMemory(): Promise<string | null>
+
+  skills(): Promise<SkillInfo[]>
+  installSkill(payload: { url: string; target: 'global' | 'project' }): Promise<SkillInfo[]>
+  removeSkill(payload: { dir: string; source: 'global' | 'project' }): Promise<SkillInfo[]>
+  openSkillsDir(target: 'global' | 'project'): Promise<void>
 }
 
 export interface PluginStatus {
@@ -172,4 +177,23 @@ export interface PluginStatus {
   description: string
   tools: string[]
   enabled: boolean
+}
+
+export type SkillSource = 'project' | 'global'
+
+/**
+ * Lives here rather than in the engine because the renderer type-checks this
+ * file without Node types; importing the engine would drag `node:fs` into the
+ * web project.
+ */
+export interface SkillInfo {
+  /** Slug used by the `skill` tool, unique across both directories. */
+  id: string
+  name: string
+  description: string
+  source: SkillSource
+  /** Absolute path of SKILL.md, for "open in editor". */
+  path: string
+  /** Directory that holds the skill, removed when the user uninstalls it. */
+  dir: string
 }

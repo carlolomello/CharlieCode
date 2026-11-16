@@ -56,6 +56,8 @@ The app starts **completely clean**: no providers, no keys, no default model. If
 
 Charlie is a pixel-art developer in a near-black shirt, brown trousers and white shoes. He walks across the sidebar every so often, thinks while the model is working, and sits down at his PC when a turn is running.
 
+When a turn spawns subagents, the scene becomes a workshop: Charlie stands behind them with a whip while each running `task` is a different little worker at its own desk, typing and sweating until the subagent reports back. One worker per running subagent, four at most.
+
 ---
 
 ## Plugins (already installed)
@@ -84,6 +86,29 @@ App Electron + React per gestire i preventivi.
 ```
 
 In the drawer you can also press **Consigli di setup** to run the advisor without spending a model call, and **Apri memoria del progetto** to edit the memory directly.
+
+---
+
+## Skills
+
+A skill is a reusable procedure in a `SKILL.md`, the same format Claude Code uses. Two places, project first:
+
+| Where | Path | Scope |
+| --- | --- | --- |
+| Project | `.charliecode/skills/<slug>/SKILL.md` | committable, travels with the repo |
+| Global | `~/.charliecode/skills/<slug>/SKILL.md` | every project |
+
+```markdown
+---
+name: typecheck
+description: Come verificare i tipi prima di consegnare
+---
+
+1. `pnpm typecheck`
+2. Se fallisce, correggi gli errori nell'ordine in cui compaiono.
+```
+
+The system prompt carries only **name and description**; the body is read through the `skill` tool when the model decides it is relevant, so twenty skills cost a few lines of context. In **⚙ Provider e chiavi → Skill** you can install one from a git URL (cloned into the chosen folder), open the folders, and remove a skill.
 
 ---
 
@@ -305,7 +330,7 @@ The goal is a GUI equivalent of Claude Code / OpenCode. Each phase lands without
 - [x] Built-in plugins with a switch in settings: project memory, setup advisor, web reach
 - [x] Project memory: `.charliecode/memory.md`, injected per session, `remember` tool
 - [x] Setup advisor: commands, missing `AGENTS.md`, auto-approve and skill suggestions
-- [ ] Skills: `SKILL.md` packages from `~/.charliecode/skills` and `.charliecode/skills`, installable from a git URL
+- [x] Skills: `SKILL.md` packages from `~/.charliecode/skills` and `.charliecode/skills`, installable from a git URL, loaded on demand by the `skill` tool
 - [ ] Third-party plugins: install from a git URL, sandboxed tool packs
 - [ ] MCP client with per-server permission policy
 

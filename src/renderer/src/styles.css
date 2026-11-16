@@ -2256,3 +2256,182 @@ button.ghost:hover,
     max-width: 340px;
   }
 }
+
+/* ---------- multi-agent workshop ---------- */
+
+.working-badge.with-team {
+  padding-left: 4px;
+  border-color: #3a4f74;
+}
+
+.mascot.team {
+  flex: 0 0 auto;
+}
+
+/* The whip cracks fast and unevenly: a metronome would look like a clock. */
+.team-whip {
+  transform-origin: 23px 9px;
+  animation: team-whip 1.6s steps(3, end) infinite;
+}
+
+@keyframes team-whip {
+  0%,
+  55% {
+    transform: rotate(0deg);
+  }
+  62% {
+    transform: rotate(-16deg);
+  }
+  70% {
+    transform: rotate(8deg);
+  }
+  78% {
+    transform: rotate(0deg);
+  }
+}
+
+.team-worker-hand {
+  animation: team-typing 0.36s steps(2, end) infinite;
+}
+
+@keyframes team-typing {
+  0% {
+    transform: translate(0, 0);
+  }
+  100% {
+    transform: translate(0.6px, -1px);
+  }
+}
+
+.team-sweat {
+  animation: team-sweat 1.9s steps(2, end) infinite;
+}
+
+@keyframes team-sweat {
+  0%,
+  60% {
+    opacity: 0;
+  }
+  70%,
+  90% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.team-shout {
+  animation: team-shout 1.1s steps(2, end) infinite;
+}
+
+@keyframes team-shout {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  60%,
+  100% {
+    opacity: 0.25;
+  }
+}
+
+.team-cursor {
+  animation: team-cursor 0.9s steps(1, end) infinite;
+}
+
+@keyframes team-cursor {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .team-whip,
+  .team-worker-hand,
+  .team-sweat,
+  .team-shout,
+  .team-cursor {
+    animation: none;
+  }
+}
+
+/* ---------- skills ---------- */
+
+.skills {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.skill {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+}
+
+.skill-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.skill-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.skill-desc {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-top: 2px;
+  line-height: 1.45;
+}
+
+.skill-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.skill-source {
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.skill-source.project {
+  border-color: #2c4a6e;
+  color: #9dc0ea;
+}
+
+.skill-install {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.skill-install input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.skill-install select {
+  flex: 0 0 auto;
+}
+
+.skill-install button {
+  flex: 0 0 auto;
+}

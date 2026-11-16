@@ -3,6 +3,7 @@ import { findModel } from './catalog'
 import { providerFor, resolveCandidates } from './client'
 import { buildTools, toolTitle, type ToolRuntime } from './tools'
 import { enabledPluginIds, pluginSystemPrompt, recordTurn, PLUGIN_READ_TOOLS } from './plugins'
+import { skillsSystemPrompt } from './skills'
 import type { Platform } from './platform'
 import type {
   CharlieCodeConfig,
@@ -146,10 +147,16 @@ export async function runAgent(
   const plugins = enabledPluginIds(deps.config)
   // Plan mode never gets a writing tool, even if a caller passes one.
   const allow = planMode
-    ? ['read', 'ls', 'glob', 'grep', 'task', ...PLUGIN_READ_TOOLS]
+    ? ['read', 'ls', 'glob', 'grep', 'task', 'skill', ...PLUGIN_READ_TOOLS]
     : options.allow
   const pluginPrompt = await pluginSystemPrompt(deps.config, deps.workspace)
-  const systemPrompt = [options.system ?? request.system, pluginPrompt, planMode ? PLAN_PROMPT : '']
+  const skillsPrompt = await skillsSystemPrompt(deps.platform, deps.workspace)
+  const systemPrompt = [
+    options.system ?? request.system,
+    pluginPrompt,
+    skillsPrompt,
+    planMode ? PLAN_PROMPT : ''
+  ]
     .filter(Boolean)
     .join('\n\n')
   const { candidates, error } = resolveCandidates({ ...request, modelKey }, {

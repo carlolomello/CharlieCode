@@ -312,3 +312,178 @@ export function MascotDesk({
     </svg>
   )
 }
+
+/* ------------------------------------------------------------------ */
+/* multi-agent scene                                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Charlie supervising the subagents.
+ *
+ * Each running `task` becomes a worker at its own little desk: same pixel
+ * language as Charlie, different people — the point is that a team is not four
+ * copies of the boss. Charlie stands behind them with a whip and cracks it
+ * until they are done. Pure decoration: it never lies about state, it is only
+ * shown while `subagent-start` runs and disappears at `subagent-end`.
+ */
+export interface TeamMember {
+  id: string
+  label: string
+}
+
+interface WorkerPalette {
+  skin: string
+  skinShade: string
+  hair: string
+  shirt: string
+  shirtDark: string
+}
+
+/** Four people, four looks. Skin and hair vary; the shirts are just colours. */
+const WORKER_PALETTES: WorkerPalette[] = [
+  { skin: '#8d5524', skinShade: '#74451b', hair: '#1b1310', shirt: '#3a5f8f', shirtDark: '#2c4a70' },
+  { skin: '#e8b98a', skinShade: '#cf9f70', hair: '#141414', shirt: '#7a4f8f', shirtDark: '#603d70' },
+  { skin: '#c68642', skinShade: '#a86c31', hair: '#221812', shirt: '#2f7f6a', shirtDark: '#256555' },
+  { skin: '#f3c9a2', skinShade: '#d9a97f', hair: '#7a4a1e', shirt: '#8f5a3a', shirtDark: '#70452c' }
+]
+
+function Worker({ x, palette }: { x: number; palette: WorkerPalette }): React.JSX.Element {
+  return (
+    <g transform={`translate(${x},0)`} className="team-worker">
+      <ellipse cx="16" cy="31" rx="11" ry="1.3" fill="#000000" opacity="0.24" />
+
+      {/* chair */}
+      {px(3, 12, 2, 10, '#2a2f38')}
+      {px(3, 21, 7, 1, '#333a45')}
+      {px(4, 22, 1, 6, '#22272f')}
+      {px(8, 22, 1, 6, '#22272f')}
+
+      {/* head + hair */}
+      {px(6, 3, 9, 2, palette.hair)}
+      {px(5, 5, 2, 5, palette.hair)}
+      {px(7, 5, 7, 6, palette.skin)}
+      {px(13, 6, 1, 4, palette.hair)}
+      {px(9, 7, 1, 1, PUPIL)}
+      {px(11, 7, 1, 1, PUPIL)}
+      {px(9, 9, 2, 1, MOUTH)}
+
+      {/* body */}
+      {px(5, 11, 7, 6, palette.shirt)}
+      {px(5, 11, 7, 1, palette.shirtDark)}
+      {px(8, 11, 2, 1, palette.skin)}
+
+      {/* typing arm + thigh, shin, shoe */}
+      <g className="team-worker-hand">
+        {px(11, 13, 4, 1, palette.shirtDark)}
+        {px(14, 13, 2, 1, palette.skin)}
+      </g>
+      {px(5, 17, 6, 2, PANTS)}
+      {px(10, 19, 2, 5, PANTS)}
+      {px(9, 24, 4, 1, SHOE)}
+
+      {/* desk */}
+      {px(15, 16, 15, 2, DESK)}
+      {px(15, 18, 15, 1, DESK_DARK)}
+      {px(17, 19, 2, 7, DESK_DARK)}
+      {px(27, 19, 2, 7, DESK_DARK)}
+
+      {/* laptop + keyboard */}
+      {px(16, 15, 8, 1, '#7b8794')}
+      {px(18, 6, 10, 9, '#2b3038')}
+      {px(19, 7, 8, 7, SCREEN)}
+      {px(20, 8, 5, 1, SCREEN_LINE)}
+      {px(20, 10, 6, 1, '#3a4a5a')}
+      {px(20, 11, 4, 1, SCREEN_LINE_2)}
+      <rect className="team-cursor" x="20" y="12" width="1" height="1" fill="#d7f5e9" />
+
+      {/* sweat: the model is not the only one under pressure */}
+      <g className="team-sweat">
+        {px(15, 4, 1, 1, '#cfe0f7')}
+        {px(16, 5, 1, 1, '#cfe0f7')}
+      </g>
+    </g>
+  )
+}
+
+/** Charlie, standing, arm raised, whip arcing over the nearest worker. */
+function Supervisor({ workers }: { workers: number }): React.JSX.Element {
+  return (
+    <g>
+      <ellipse cx="16" cy="31" rx="8" ry="1.4" fill="#000000" opacity="0.28" />
+      <Torso />
+      <Head mood="happy" />
+
+      {/* standing legs */}
+      {px(13, 24, 2, 5, PANTS)}
+      {px(12, 29, 3, 1, SHOE)}
+      {px(17, 24, 2, 5, PANTS)}
+      {px(17, 29, 3, 1, SHOE)}
+      {/* left arm down */}
+      {px(8, 17, 2, 6, SLEEVE)}
+      {px(8, 23, 2, 1, SKIN)}
+      {/* right arm raised */}
+      {px(22, 14, 2, 3, SLEEVE)}
+      {px(22, 11, 2, 3, SLEEVE)}
+      {px(22, 9, 2, 2, SKIN)}
+
+      {/* the whip */}
+      <g className="team-whip">
+        <path
+          d="M23 9 C 30 6, 38 10, 44 16"
+          fill="none"
+          stroke="#6b4a2f"
+          strokeWidth="1.1"
+          strokeLinecap="round"
+        />
+        <path d="M44 16 l 2 2" stroke="#c7ced8" strokeWidth="1" strokeLinecap="round" />
+      </g>
+
+      {/* shout mark, because a whip alone is not enough theatre */}
+      {workers > 0 && (
+        <g className="team-shout">
+          {px(27, 2, 1, 2, '#f2c14e')}
+          {px(29, 3, 1, 1, '#f2c14e')}
+          {px(26, 4, 1, 1, '#f2c14e')}
+        </g>
+      )}
+    </g>
+  )
+}
+
+/**
+ * The whole workshop: Charlie plus one worker per running subagent (max four,
+ * beyond that the scene would turn into confetti).
+ */
+export function MascotTeam({
+  members,
+  width = 220,
+  className
+}: {
+  members: TeamMember[]
+  width?: number
+  className?: string
+}): React.JSX.Element {
+  const shown = members.slice(0, 4)
+  const viewWidth = 34 + shown.length * 34
+
+  return (
+    <svg
+      className={`mascot team ${className ?? ''}`}
+      width={width}
+      height={(width * 32) / viewWidth}
+      viewBox={`0 0 ${viewWidth} 32`}
+      shapeRendering="crispEdges"
+      role="img"
+      aria-label={`Charlie supervisiona ${shown.length} subagenti`}
+    >
+      <Supervisor workers={shown.length} />
+      {shown.map((member, index) => (
+        <Worker
+          key={member.id}
+          x={34 + index * 34}
+          palette={WORKER_PALETTES[index % WORKER_PALETTES.length] as WorkerPalette}
+        />
+      ))}
+    </svg>
+  )
+}
