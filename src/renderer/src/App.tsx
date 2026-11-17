@@ -562,23 +562,25 @@ export default function App() {
   const pickWorkspace = useCallback(async (): Promise<void> => {
     const result = await window.charliecode.pickWorkspace()
     const picked = result.path
-    if (picked) {
-      setWorkspace(picked)
-      setInfo((current) =>
-        current
-          ? {
-              ...current,
-              workspacePath: picked,
-              recentWorkspaces: [
-                picked,
-                ...current.recentWorkspaces.filter((entry) => entry !== picked)
-              ].slice(0, 8)
-            }
-          : current
-      )
-      void refreshSessions()
-    }
-  }, [refreshSessions])
+    if (!picked) return
+    setWorkspace(picked)
+    // A new project starts a new chat: keeping the previous one open would
+    // write its next message into a folder you just left.
+    startNewChat()
+    setInfo((current) =>
+      current
+        ? {
+            ...current,
+            workspacePath: picked,
+            recentWorkspaces: [
+              picked,
+              ...current.recentWorkspaces.filter((entry) => entry !== picked)
+            ].slice(0, 8)
+          }
+        : current
+    )
+    await refreshSessions()
+  }, [refreshSessions, startNewChat])
 
   const openSession = useCallback(async (id: string): Promise<void> => {
     setLoadingSession(true)
@@ -842,13 +844,7 @@ export default function App() {
     async (skill: SkillInfo): Promise<void> => {
       if (!window.confirm(`Rimuovere la skill "${skill.name}"?`)) return
       try {
-        setSkills(
-          await window.charliecode.removeSkill({
-            dir: skill.dir,
-            source: skill.source,
-            ...(skill.readOnly ? { readOnly: true } : {})
-          })
-        )
+        setSkills(await window.charliecode.removeSkill({ dir: skill.dir, source: skill.source }))
       } catch (error) {
         setSkillError(error instanceof Error ? error.message : String(error))
       }
@@ -1632,11 +1628,10 @@ export default function App() {
 
             <h3>Skill</h3>
             <p className="muted small">
-              Procedure riutilizzabili in <code>SKILL.md</code>. CharlieCode legge anche quelle già
-              installate per altri agenti (<code>.claude/skills</code>, <code>.opencode/skills</code>,{' '}
-              <code>.agents/skills</code>, <code>.cursor/skills</code>), senza copiarle: restano una
-              copia sola. L’agente vede solo nome e descrizione e carica il testo con il tool{' '}
-              <code>skill</code> quando serve, quindi non consumano contesto.
+              Procedure riutilizzabili in <code>SKILL.md</code>, come in Claude Code. Stanno in{' '}
+              <code>.charliecode/skills</code> del progetto o in <code>~/.charliecode/skills</code>.
+              L’agente vede solo nome e descrizione e carica il testo con il tool <code>skill</code>{' '}
+              quando serve, quindi non consumano contesto.
             </p>
             <div className="skills">
               {skills.map((skill) => (
@@ -1648,21 +1643,15 @@ export default function App() {
                     </div>
                     <div className="skill-actions">
                       <span className={`skill-source ${skill.source}`}>
-                        {skill.origin ?? (skill.source === 'project' ? 'progetto' : 'globale')}
+                        {skill.source === 'project' ? 'progetto' : 'globale'}
                       </span>
-                      {skill.readOnly ? (
-                        <span className="muted small" title={skill.dir}>
-                          di un altro strumento
-                        </span>
-                      ) : (
-                        <button
-                          className="ghost small"
-                          onClick={() => void uninstallSkill(skill)}
-                          title="Rimuove la cartella della skill"
-                        >
-                          rimuovi
-                        </button>
-                      )}
+                      <button
+                        className="ghost small"
+                        onClick={() => void uninstallSkill(skill)}
+                        title="Rimuove la cartella della skill"
+                      >
+                        rimuovi
+                      </button>
                     </div>
                   </div>
                 </div>

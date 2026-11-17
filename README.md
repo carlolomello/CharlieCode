@@ -99,8 +99,6 @@ A skill is a reusable procedure in a `SKILL.md`, the same format Claude Code use
 | Project | `.charliecode/skills/<slug>/SKILL.md` | committable, travels with the repo |
 | Global | `~/.charliecode/skills/<slug>/SKILL.md` | every project |
 
-Skills already installed for another agent are read **where they are**, never copied: `.claude/skills`, `.opencode/skills`, `.agents/skills`, `.cursor/skills` in the project, and the same folders under your home directory. They show up with the name of the tool that owns them and cannot be deleted from here. A repository that ships many skills under `skills/` — like [Salesforce's `sf-skills`](https://github.com/forcedotcom/sf-skills) — works as-is, whether you installed it with `npx skills add` or cloned it.
-
 ```markdown
 ---
 name: typecheck

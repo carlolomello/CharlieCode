@@ -191,11 +191,7 @@ export interface CharlieCodeApi {
 
   skills(): Promise<SkillInfo[]>
   installSkill(payload: { url: string; target: 'global' | 'project' }): Promise<SkillInfo[]>
-  removeSkill(payload: {
-    dir: string
-    source: 'global' | 'project'
-    readOnly?: boolean
-  }): Promise<SkillInfo[]>
+  removeSkill(payload: { dir: string; source: 'global' | 'project' }): Promise<SkillInfo[]>
   openSkillsDir(target: 'global' | 'project'): Promise<void>
 
   /** Agent CLIs already installed on this machine, plus the configured worker. */
@@ -351,8 +347,4 @@ export interface SkillInfo {
   path: string
   /** Directory that holds the skill, removed when the user uninstalls it. */
   dir: string
-  /** Tool that owns the folder when it is not ours (`Claude Code`, …). */
-  origin?: string
-  /** Installed by another tool: we read it, we never delete it. */
-  readOnly?: boolean
 }

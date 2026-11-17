@@ -105,9 +105,6 @@ export function Sidebar({
 
               {active && (
                 <div className="project-children">
-                  <button className="new-chat nested" onClick={onNewChat}>
-                    + Nuova chat
-                  </button>
                   {projectSessions.length === 0 && (
                     <div className="session-empty">Nessuna chat in questo progetto</div>
                   )}
@@ -148,6 +145,9 @@ export function Sidebar({
                       </div>
                     </div>
                   ))}
+                  <button className="new-chat nested" onClick={onNewChat}>
+                    + Nuova chat
+                  </button>
                 </div>
               )}
             </div>

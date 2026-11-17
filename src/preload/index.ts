@@ -146,7 +146,7 @@ const api: CharlieCodeApi = {
   skills: () => ipcRenderer.invoke('charliecode:skills:list') as Promise<SkillInfo[]>,
   installSkill: (payload: { url: string; target: 'global' | 'project' }) =>
     ipcRenderer.invoke('charliecode:skills:install', payload) as Promise<SkillInfo[]>,
-  removeSkill: (payload: { dir: string; source: 'global' | 'project'; readOnly?: boolean }) =>
+  removeSkill: (payload: { dir: string; source: 'global' | 'project' }) =>
     ipcRenderer.invoke('charliecode:skills:remove', payload) as Promise<SkillInfo[]>,
   openSkillsDir: (target: 'global' | 'project') =>
     ipcRenderer.invoke('charliecode:skills:open-dir', target) as Promise<void>,

@@ -292,7 +292,7 @@ function registerIpc(): void {
     const options: Electron.OpenDialogOptions = {
       title: 'Scegli il progetto',
       buttonLabel: 'Apri progetto',
-      properties: ['openDirectory', 'createDirectory']
+      properties: ['openDirectory', 'createDirectory', 'promptToCreate']
     }
     const result = window
       ? await dialog.showOpenDialog(window, options)
