@@ -55,6 +55,8 @@ export interface ChatStartPayload {
   /** Only the new turn: history lives in the session on disk. */
   text: string
   effort?: EffortLevel
+  /** Split this turn across parallel `task` subagents. */
+  team?: boolean
   system?: string
   maxOutputTokens?: number
   workspacePath?: string

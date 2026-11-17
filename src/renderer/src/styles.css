@@ -2923,3 +2923,75 @@ button.ghost:hover,
     min-width: 340px;
   }
 }
+
+/* ---------- team ---------- */
+
+.brand-mascot {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  line-height: 0;
+  border-radius: 6px;
+}
+
+.brand-mascot:hover {
+  background: #1b2432;
+}
+
+.team-toggle.active {
+  border-color: var(--accent);
+  background: #16202e;
+  color: var(--text);
+}
+
+.team-preview {
+  width: min(820px, 94vw);
+  background: var(--panel);
+  border: 1px solid #2c3a56;
+  border-radius: 16px;
+  padding: 18px 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 28px 70px #00000090;
+}
+
+.team-preview-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.team-preview-head h2 {
+  margin: 0 0 4px;
+  font-size: 17px;
+}
+
+.team-preview-head p {
+  margin: 0;
+  max-width: 62ch;
+  line-height: 1.55;
+}
+
+.team-preview .mascot.team {
+  align-self: center;
+  background: #0b1017;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 12px;
+}
+
+.team-preview-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.team-overlay {
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}

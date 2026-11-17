@@ -6,6 +6,7 @@
  */
 import { createRoot } from 'react-dom/client'
 import { ChangesPanel } from '../src/renderer/src/components/ChangesPanel'
+import { MascotTeam } from '../src/renderer/src/components/Mascot'
 import type { WorkspaceChange, WorkspaceChanges } from '../src/shared/ipc'
 
 const workspace = '/Users/carlolomello/Desktop/VSCodePlugions/sfdc-atlas'
@@ -61,10 +62,44 @@ const diffs: Record<string, string> = {
   openExternal: async () => undefined
 }
 
+const view = new URLSearchParams(location.search).get('view')
+
+const team = (
+  <div className="overlay team-overlay">
+    <div className="team-preview">
+      <div className="team-preview-head">
+        <div>
+          <h2>La squadra di Charlie</h2>
+          <p className="muted small">
+            Compare quando l’agente delega con <code>task</code>: Charlie in piedi supervisiona, i
+            subagenti scrivono al computer.
+          </p>
+        </div>
+        <button className="ghost small">✕</button>
+      </div>
+      <MascotTeam
+        width={720}
+        members={[
+          { id: 'd1', label: 'esplora' },
+          { id: 'd2', label: 'implementa' },
+          { id: 'd3', label: 'verifica' },
+          { id: 'd4', label: 'documenta' }
+        ]}
+      />
+      <div className="team-preview-foot">
+        <span className="muted small">
+          Un subagente = un contesto separato: legge, lavora e riporta. Charlie integra.
+        </span>
+        <button className="primary">Attiva Squadra</button>
+      </div>
+    </div>
+  </div>
+)
+
 const root = createRoot(document.getElementById('root') as HTMLElement)
 root.render(
-  <div className="app" style={{ justifyContent: 'flex-end' }}>
-    <ChangesPanel workspace={workspace} onClose={() => undefined} />
+  <div className="app" style={{ justifyContent: view === 'team' ? 'center' : 'flex-end' }}>
+    {view === 'team' ? team : <ChangesPanel workspace={workspace} onClose={() => undefined} />}
   </div>
 )
 

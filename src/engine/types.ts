@@ -144,6 +144,11 @@ export interface StreamRequest {
    * agent write. Defaults to `build`.
    */
   mode?: AgentMode
+  /**
+   * Ask for a team turn: the agent must split the work across `task` subagents
+   * instead of doing everything itself. The UI shows the workshop while they run.
+   */
+  team?: boolean
 }
 
 /** Plan mode is read-only; build mode can modify the project. */

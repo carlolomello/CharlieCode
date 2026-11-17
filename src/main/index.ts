@@ -590,7 +590,8 @@ hanno priorità su queste.
               effort: payload.effort,
               maxOutputTokens: payload.maxOutputTokens,
               signal: controller.signal,
-              mode: payload.mode ?? 'build'
+              mode: payload.mode ?? 'build',
+              ...(payload.team ? { team: true } : {})
             },
             {
               platform,

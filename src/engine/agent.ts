@@ -156,7 +156,19 @@ export async function runAgent(
     options.system ?? request.system,
     pluginPrompt,
     skillsPrompt,
-    planMode ? PLAN_PROMPT : ''
+    planMode ? PLAN_PROMPT : '',
+    // A team turn is a user decision, not a model preference: say it plainly and
+    // make the split concrete, so a weak model still delegates instead of
+    // answering "fatto" after one read.
+    request.team && depth === 0 && !planMode
+      ? [
+          'Modalità squadra attiva: questa richiesta va divisa tra subagenti.',
+          '- Apri il turno con una `task` per ogni area indipendente (almeno 2, massimo 4), con ruoli distinti: esplorazione, implementazione, verifica.',
+          '- Dai a ogni subagente un prompt autosufficiente: cosa cercare o cambiare, in quali cartelle, e cosa riportare.',
+          '- Aspetta i risultati, poi integra tu: le modifiche finali sono tue, non dei subagenti.',
+          '- Non delegare la stessa cosa a due subagenti e non delegare una singola lettura.'
+        ].join('\n')
+      : ''
   ]
     .filter(Boolean)
     .join('\n\n')

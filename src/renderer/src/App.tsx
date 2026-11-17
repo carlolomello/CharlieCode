@@ -157,6 +157,16 @@ export default function App() {
   const [projectWizard, setProjectWizard] = useState<string | null>(null)
   /** Right-hand "what changed" panel, and the count for its badge. */
   const [changesOpen, setChangesOpen] = useState(false)
+  /** "Squadra": force this turn to be split across task subagents. */
+  const [teamMode, setTeamMode] = useState(() => {
+    try {
+      return window.localStorage.getItem('charliecode.team') === '1'
+    } catch {
+      return false
+    }
+  })
+  /** The workshop scene, shown on demand from the sidebar mascot. */
+  const [teamPreview, setTeamPreview] = useState(false)
   const [changesCount, setChangesCount] = useState(0)
   const [routers, setRouters] = useState<RoutersStatus | null>(null)
   const [newToolDraft, setNewToolDraft] = useState('')
@@ -455,6 +465,14 @@ export default function App() {
     }
   }, [workspace])
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('charliecode.team', teamMode ? '1' : '0')
+    } catch {
+      // Preference only.
+    }
+  }, [teamMode])
+
   const selectedModel = useMemo(
     () => models.find((model) => model.key === modelKey),
     [models, modelKey]
@@ -701,6 +719,7 @@ export default function App() {
         text,
         effort,
         mode: activeMode,
+        team: teamMode,
         workspacePath: workspace,
         ...(sentAttachments.length > 0
           ? {
@@ -905,7 +924,14 @@ export default function App() {
       <aside className="sidebar">
         <div className="sidebar-top">
           <div className="brand">
-            <Mascot size={38} mood={mood} />
+            <button
+              className="brand-mascot"
+              onClick={() => setTeamPreview(true)}
+              title="Vedi la squadra al lavoro"
+              aria-label="Vedi la squadra al lavoro"
+            >
+              <Mascot size={38} mood={mood} />
+            </button>
             <div>
               <div className="brand-name">CharlieCode</div>
               <div className="brand-sub">v{info?.version ?? '0.0.1'}</div>
@@ -1022,6 +1048,15 @@ export default function App() {
 
             <button className="ghost" onClick={() => void refreshModels()} disabled={loadingModels}>
               {loadingModels ? '…' : '↻'}
+            </button>
+
+            <button
+              className={`ghost small team-toggle ${teamMode ? 'active' : ''}`}
+              onClick={() => setTeamMode((value) => !value)}
+              title="Divide il turno tra subagenti in parallelo: Charlie supervisiona, loro lavorano"
+              aria-pressed={teamMode}
+            >
+              Squadra
             </button>
 
             <div className="mode-switch" role="group" aria-label="Modalità dell'agente">
@@ -1234,7 +1269,7 @@ export default function App() {
               <div className={`working-badge ${runningSubagents.length > 0 ? 'with-team' : ''}`}>
                 {runningSubagents.length > 0 ? (
                   <MascotTeam
-                    width={runningSubagents.length > 1 ? 240 : 200}
+                    width={runningSubagents.length > 1 ? 320 : 240}
                     members={runningSubagents.map((run) => ({
                       id: run.agentId,
                       label: run.description
@@ -1383,6 +1418,49 @@ export default function App() {
             void refreshRouters()
           }}
         />
+      )}
+
+      {teamPreview && (
+        <div className="overlay team-overlay" onClick={() => setTeamPreview(false)}>
+          <div className="team-preview" onClick={(event) => event.stopPropagation()}>
+            <div className="team-preview-head">
+              <div>
+                <h2>La squadra di Charlie</h2>
+                <p className="muted small">
+                  Compare quando l’agente delega con <code>task</code>: Charlie in piedi
+                  supervisiona, i subagenti scrivono al computer. Con «Squadra» attivo lo chiedi a
+                  ogni turno.
+                </p>
+              </div>
+              <button className="ghost small" onClick={() => setTeamPreview(false)}>
+                ✕
+              </button>
+            </div>
+            <MascotTeam
+              width={720}
+              members={[
+                { id: 'demo-1', label: 'esplora' },
+                { id: 'demo-2', label: 'implementa' },
+                { id: 'demo-3', label: 'verifica' },
+                { id: 'demo-4', label: 'documenta' }
+              ]}
+            />
+            <div className="team-preview-foot">
+              <span className="muted small">
+                Un subagente = un contesto separato: legge, lavora e riporta. Charlie integra.
+              </span>
+              <button
+                className="primary"
+                onClick={() => {
+                  setTeamMode(true)
+                  setTeamPreview(false)
+                }}
+              >
+                Attiva Squadra
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {changesOpen && workspace && (
