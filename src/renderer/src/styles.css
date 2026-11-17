@@ -2619,3 +2619,76 @@ button.ghost:hover,
 .small-toggle span {
   font-size: 12px;
 }
+
+.wizard-progress {
+  list-style: none;
+  margin: 0;
+  padding: 10px 20px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.wizard-progress li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 4px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.wizard-progress li span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.wizard-progress li.done {
+  color: #8fb6df;
+}
+
+.wizard-progress li.done span {
+  border-color: #2f5a45;
+  background: #16281f;
+  color: #7fd6a8;
+}
+
+.wizard-progress li.active {
+  border-color: var(--accent);
+  background: #16202e;
+  color: var(--text);
+}
+
+.wizard-progress li.active span {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #0b1220;
+  font-weight: 700;
+}
+
+.skill-head .provider-toggle {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.skill-head .provider-toggle > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.skill-actions .ghost.small {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}

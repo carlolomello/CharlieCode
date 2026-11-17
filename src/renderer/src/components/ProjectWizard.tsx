@@ -155,7 +155,7 @@ export function ProjectWizard({
           </button>
         </header>
 
-        <ol className="wizard-steps">
+        <ol className="wizard-progress">
           {['Il progetto', 'AGENTS.md', 'Skill', 'Fatto'].map((label, index) => (
             <li key={label} className={index === step ? 'active' : index < step ? 'done' : ''}>
               <span>{index + 1}</span>
@@ -344,9 +344,13 @@ export function ProjectWizard({
         )}
 
         <footer className="wizard-foot">
-          <button className="ghost" onClick={() => void skip()}>
-            Non ora
-          </button>
+          {step < 3 ? (
+            <button className="ghost" onClick={() => void skip()}>
+              Non ora
+            </button>
+          ) : (
+            <span />
+          )}
           <div className="wizard-nav">
             {step > 0 && step < 3 && (
               <button className="ghost" onClick={() => setStep(step - 1)} disabled={busy}>
