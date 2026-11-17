@@ -6,6 +6,8 @@ interface DiffViewProps {
   /** Collapsed by default inside a tool card; expanded in the side panel. */
   defaultOpen?: boolean
   maxLines?: number
+  /** Only the lines, no header: the panel already names the file. */
+  bare?: boolean
 }
 
 interface Line {
@@ -23,10 +25,33 @@ function parse(unified: string): Line[] {
   })
 }
 
-export function DiffView({ diff, defaultOpen = false, maxLines = 400 }: DiffViewProps): React.JSX.Element {
+export function DiffView({
+  diff,
+  defaultOpen = false,
+  maxLines = 400,
+  bare = false
+}: DiffViewProps): React.JSX.Element {
   const [open, setOpen] = useState(defaultOpen)
   const lines = useMemo(() => parse(diff.unified), [diff.unified])
   const shown = lines.length > maxLines ? lines.slice(0, maxLines) : lines
+
+  if (bare) {
+    return (
+      <div className="diff-body bare">
+        {shown.map((line, index) => (
+          <div key={index} className={`diff-line ${line.kind}`}>
+            <span className="diff-sign">
+              {line.kind === 'add' ? '+' : line.kind === 'del' ? '-' : ' '}
+            </span>
+            <span className="diff-text">{line.text.replace(/^[+-]/, '')}</span>
+          </div>
+        ))}
+        {lines.length > maxLines && (
+          <div className="diff-more">… {lines.length - maxLines} righe non mostrate</div>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div className={`diff ${open ? 'open' : ''}`}>

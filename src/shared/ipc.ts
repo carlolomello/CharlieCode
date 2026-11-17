@@ -4,6 +4,7 @@ import type {
   CatalogError,
   EffortLevel,
   EngineEvent,
+  FileDiff,
   ModelEntry,
   PermissionDecision,
   PermissionRequest
@@ -179,6 +180,12 @@ export interface CharlieCodeApi {
   }): Promise<OnboardingResult>
   onboardingSkip(workspace: string): Promise<void>
 
+  changes(workspace: string): Promise<WorkspaceChanges>
+  changeDiff(payload: { workspace: string; path: string }): Promise<FileDiff>
+  revertChange(payload: { workspace: string; change: WorkspaceChange }): Promise<WorkspaceChanges>
+  /** Opens a file of the project in the user's editor. */
+  openFile(payload: { workspace: string; path: string }): Promise<void>
+
   skills(): Promise<SkillInfo[]>
   installSkill(payload: { url: string; target: 'global' | 'project' }): Promise<SkillInfo[]>
   removeSkill(payload: { dir: string; source: 'global' | 'project' }): Promise<SkillInfo[]>
@@ -255,6 +262,39 @@ export interface OnboardingResult {
   skipped: string[]
   skills: SkillInfo[]
   autoApprove: string[]
+}
+
+/* ------------------------------- changes -------------------------------- */
+
+export type ChangeStatus = 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked'
+
+export interface WorkspaceChange {
+  /** Repository-relative path. */
+  path: string
+  displayPath: string
+  status: ChangeStatus
+  added: number
+  removed: number
+  /** The change is already in the index (not just the working tree). */
+  staged: boolean
+  /** Previous path, for renames. */
+  from?: string
+  /** Counts are meaningless for binaries. */
+  binary?: boolean
+}
+
+export interface WorkspaceChanges {
+  workspace: string
+  /** False when the folder is not a git repository: the panel says so. */
+  git: boolean
+  branch?: string
+  changes: WorkspaceChange[]
+  /** The list was capped; there are more files than we show. */
+  truncated?: boolean
+  /** package.json scripts that start a dev server. */
+  previewScripts: string[]
+  /** Best guess at the URL the project serves. */
+  previewUrl?: string
 }
 
 /**

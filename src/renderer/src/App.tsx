@@ -24,6 +24,7 @@ import { Markdown } from './components/Markdown'
 import { PermissionModal } from './components/PermissionModal'
 import { SetupWizard } from './components/SetupWizard'
 import { ProjectWizard } from './components/ProjectWizard'
+import { ChangesPanel } from './components/ChangesPanel'
 import { ToolActivity, type SubagentRun } from './components/ToolActivity'
 
 type ChatItem = StoredMessage & {
@@ -154,6 +155,9 @@ export default function App() {
   const [wizardOpen, setWizardOpen] = useState(false)
   /** Workspace whose onboarding wizard is open, if any. */
   const [projectWizard, setProjectWizard] = useState<string | null>(null)
+  /** Right-hand "what changed" panel, and the count for its badge. */
+  const [changesOpen, setChangesOpen] = useState(false)
+  const [changesCount, setChangesCount] = useState(0)
   const [routers, setRouters] = useState<RoutersStatus | null>(null)
   const [newToolDraft, setNewToolDraft] = useState('')
   const [newCommandDraft, setNewCommandDraft] = useState('')
@@ -408,6 +412,27 @@ export default function App() {
   useEffect(() => {
     if (!streamingId) inputRef.current?.focus()
   }, [streamingId])
+
+  /**
+   * The badge in the topbar: a cheap `git status` after every turn and on
+   * project switch. The panel itself refreshes on open.
+   */
+  const refreshChanges = useCallback(async (): Promise<void> => {
+    if (!workspace) {
+      setChangesCount(0)
+      return
+    }
+    try {
+      const data = await window.charliecode.changes(workspace)
+      setChangesCount(data.changes.length)
+    } catch {
+      setChangesCount(0)
+    }
+  }, [workspace])
+
+  useEffect(() => {
+    void refreshChanges()
+  }, [refreshChanges, streamingId])
 
   /**
    * A project with no instructions and no onboarding marker gets the wizard
@@ -1020,6 +1045,16 @@ export default function App() {
           <div className="topbar-right">
             {workspace && (
               <button
+                className={`ghost small changes-toggle ${changesOpen ? 'active' : ''}`}
+                onClick={() => setChangesOpen((open) => !open)}
+                title="Cosa è cambiato nel progetto (git)"
+              >
+                Modifiche
+                {changesCount > 0 && <span className="changes-count">{changesCount}</span>}
+              </button>
+            )}
+            {workspace && (
+              <button
                 className="ghost small"
                 onClick={() => void window.charliecode.openWorkspace()}
                 title={workspace}
@@ -1348,6 +1383,10 @@ export default function App() {
             void refreshRouters()
           }}
         />
+      )}
+
+      {changesOpen && workspace && (
+        <ChangesPanel workspace={workspace} onClose={() => setChangesOpen(false)} />
       )}
 
       {projectWizard && (

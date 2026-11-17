@@ -27,6 +27,7 @@ import { dockerAvailable, hasBinary, probeEndpoint, scanLocalEndpoints } from '.
 import { createPlatform } from '../engine/platform'
 import { ensureProjectMemory, resolvePlugins } from '../engine/plugins'
 import { suggestSetup } from '../engine/advisor'
+import { changeDiff, listChanges, revertChange, workspacePath } from '../engine/changes'
 import {
   globalSkillsDir,
   installSkillFromGit,
@@ -63,6 +64,8 @@ import type {
   OnboardingFacts,
   OnboardingResult,
   ProviderStatus,
+  WorkspaceChange,
+  WorkspaceChanges,
   RoutersStatus
 } from '../shared/ipc'
 
@@ -815,6 +818,39 @@ hanno priorità su queste.
   ipcMain.handle('charliecode:onboarding:skip', async (_event, workspace: string): Promise<void> => {
     await skipOnboarding(workspace)
   })
+
+  /* ----------------------------- changes ---------------------------- */
+
+  ipcMain.handle(
+    'charliecode:changes:list',
+    async (_event, workspace: string): Promise<WorkspaceChanges> => listChanges(workspace)
+  )
+
+  ipcMain.handle(
+    'charliecode:changes:diff',
+    async (_event, payload: { workspace: string; path: string }) =>
+      changeDiff(payload.workspace, payload.path)
+  )
+
+  ipcMain.handle(
+    'charliecode:changes:revert',
+    async (
+      _event,
+      payload: { workspace: string; change: WorkspaceChange }
+    ): Promise<WorkspaceChanges> => {
+      await revertChange(payload.workspace, payload.change)
+      return listChanges(payload.workspace)
+    }
+  )
+
+  ipcMain.handle(
+    'charliecode:file:open',
+    async (_event, payload: { workspace: string; path: string }): Promise<void> => {
+      const target = workspacePath(payload.workspace, payload.path)
+      const error = await shell.openPath(target)
+      if (error) throw new Error(error)
+    }
+  )
 
   ipcMain.handle('charliecode:skills:list', async () => (await skillsFor()).skills)
 

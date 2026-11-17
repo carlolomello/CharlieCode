@@ -17,10 +17,12 @@ import type {
   PluginStatus,
   ProviderStatus,
   RoutersStatus,
-  SkillInfo
+  SkillInfo,
+  WorkspaceChange,
+  WorkspaceChanges
 } from '../shared/ipc'
 import type { Session, SessionSummary } from '../engine/sessions'
-import type { PermissionDecision } from '../engine/types'
+import type { FileDiff, PermissionDecision } from '../engine/types'
 
 const api: CharlieCodeApi = {
   info: () => ipcRenderer.invoke('charliecode:info') as Promise<AppInfo>,
@@ -129,6 +131,15 @@ const api: CharlieCodeApi = {
     ipcRenderer.invoke('charliecode:onboarding:apply', payload) as Promise<OnboardingResult>,
   onboardingSkip: (workspace: string) =>
     ipcRenderer.invoke('charliecode:onboarding:skip', workspace) as Promise<void>,
+
+  changes: (workspace: string) =>
+    ipcRenderer.invoke('charliecode:changes:list', workspace) as Promise<WorkspaceChanges>,
+  changeDiff: (payload: { workspace: string; path: string }) =>
+    ipcRenderer.invoke('charliecode:changes:diff', payload) as Promise<FileDiff>,
+  revertChange: (payload: { workspace: string; change: WorkspaceChange }) =>
+    ipcRenderer.invoke('charliecode:changes:revert', payload) as Promise<WorkspaceChanges>,
+  openFile: (payload: { workspace: string; path: string }) =>
+    ipcRenderer.invoke('charliecode:file:open', payload) as Promise<void>,
 
   skills: () => ipcRenderer.invoke('charliecode:skills:list') as Promise<SkillInfo[]>,
   installSkill: (payload: { url: string; target: 'global' | 'project' }) =>
