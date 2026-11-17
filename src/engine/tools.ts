@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'no
 import { tool } from 'ai'
 import { z } from 'zod'
 import { createDiff } from './diff'
+import { isExclusiveCommand, withExclusive } from './exclusive'
 import { suggestSetup } from './advisor'
 import { rememberNote } from './plugins'
 import { listSkills, readSkill } from './skills'
@@ -534,7 +535,8 @@ export function buildTools(runtime: ToolRuntime) {
         command.trim()
       )
 
-      return new Promise<ToolOutcome>((resolvePromise) => {
+      const execute = (): Promise<ToolOutcome> =>
+        new Promise<ToolOutcome>((resolvePromise) => {
         const started = Date.now()
         const child = spawn(runtime.platform.shell.command, [...runtime.platform.shell.args, command], {
           cwd: runtime.workspace,
@@ -584,7 +586,10 @@ export function buildTools(runtime: ToolRuntime) {
           resolvePromise({ output: `Errore: ${error.message}`, summary: error.message })
         })
         child.on('close', (code) => finish(code, false))
-      })
+        })
+
+      // Deploy/publish/push: one at a time, even when several subagents ask.
+      return isExclusiveCommand(command) ? withExclusive('exclusive', execute) : execute()
     }
   })
 
@@ -595,7 +600,9 @@ export function buildTools(runtime: ToolRuntime) {
           'Delega un lavoro a un subagente isolato (multi-agente). Il subagente ha gli stessi ' +
           'strumenti ma un contesto separato: usalo per esplorare il codice, revisionare o ' +
           'implementare un pezzo in parallelo. Restituisce il suo riassunto finale. ' +
-          'Puoi chiamarlo più volte nello stesso turno per lavorare in parallelo.',
+          'Puoi chiamarlo più volte nello stesso turno per lavorare in parallelo, ma solo su file ' +
+          'disgiunti: due subagenti non devono scrivere lo stesso file, e deploy/publish/push vanno ' +
+          'eseguiti una volta sola da te, dopo che hanno finito.',
         schema: z.object({
           description: z.string().describe('Titolo breve del lavoro (3-6 parole)'),
           prompt: z.string().describe('Istruzioni complete e autonome per il subagente'),

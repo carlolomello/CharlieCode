@@ -164,7 +164,10 @@ export async function runAgent(
       ? [
           'Modalità squadra attiva: questa richiesta va divisa tra subagenti.',
           '- Apri il turno con una `task` per ogni area indipendente (almeno 2, massimo 4), con ruoli distinti: esplorazione, implementazione, verifica.',
-          '- Dai a ogni subagente un prompt autosufficiente: cosa cercare o cambiare, in quali cartelle, e cosa riportare.',
+          '- Dai a ogni subagente un prompt autosufficiente: cosa creare o cambiare, file esatti, nomi esatti, cosa riportare.',
+          '- Parallelizza solo ciò che non condivide niente: un file appartiene a un solo subagente, e due worker non devono scrivere lo stesso file.',
+          '- Rispetta le dipendenze: se B usa l’API di A (una classe e il suo test, un campo e il codice che lo legge), prima A, poi B.',
+          '- I comandi con effetti fuori dal progetto — deploy, validate, publish, push, migrate — li esegui tu, una volta sola, dopo i worker. Mai in parallelo tra subagenti.',
           '- Aspetta i risultati, poi integra tu: le modifiche finali sono tue, non dei subagenti.',
           '- Non delegare la stessa cosa a due subagenti e non delegare una singola lettura.'
         ].join('\n')
