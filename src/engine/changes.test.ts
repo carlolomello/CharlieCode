@@ -79,7 +79,11 @@ describe('changes', () => {
     await revertChange(repo, { path: 'a.ts', status: 'modified' })
     await revertChange(repo, { path: 'new.ts', status: 'untracked' })
 
-    expect(await readFile(join(repo, 'a.ts'), 'utf8')).toBe('export const a = 1\n')
+    // `git restore` honours core.autocrlf, which is on by default on Windows:
+    // the file comes back with the line endings git considers native. What
+    // matters is the content, not the EOL.
+    const restored = await readFile(join(repo, 'a.ts'), 'utf8')
+    expect(restored.replace(/\r\n/g, '\n')).toBe('export const a = 1\n')
     expect(existsSync(join(repo, 'new.ts'))).toBe(false)
     expect((await listChanges(repo)).changes).toHaveLength(0)
   })
