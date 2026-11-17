@@ -7,7 +7,16 @@
 import { createRoot } from 'react-dom/client'
 import { ChangesPanel } from '../src/renderer/src/components/ChangesPanel'
 import { MascotTeam } from '../src/renderer/src/components/Mascot'
-import type { WorkspaceChange, WorkspaceChanges } from '../src/shared/ipc'
+import { ExternalCliPanel } from '../src/renderer/src/components/ExternalCliPanel'
+import { Sidebar } from '../src/renderer/src/components/Sidebar'
+import type {
+  AppInfo,
+  ProviderStatus,
+  RoutersStatus,
+  WorkspaceChange,
+  WorkspaceChanges
+} from '../src/shared/ipc'
+import type { SessionSummary } from '../src/engine/session-types'
 
 const workspace = '/Users/carlolomello/Desktop/VSCodePlugions/sfdc-atlas'
 
@@ -49,6 +58,37 @@ const diffs: Record<string, string> = {
 }
 
 ;(window as unknown as { charliecode: unknown }).charliecode = {
+  externalAgents: async () => ({
+    detected: [
+      {
+        id: 'opencode',
+        label: 'OpenCode',
+        path: '/Users/carlolomello/.opencode/bin/opencode',
+        version: '2.3.0',
+        notes: 'Parla --format json: vediamo testo, step e fine turno.',
+        canListModels: true
+      },
+      {
+        id: 'cline',
+        label: 'Cline',
+        path: '/usr/local/bin/cline',
+        version: '3.1.0',
+        notes: 'Headless con --json: l’ultima riga run_result contiene la risposta.',
+        canListModels: false
+      },
+      {
+        id: 'gaia',
+        label: 'Gaia Axet (fork Cline)',
+        path: '/Applications/Gaia.app/Contents/MacOS/gaia',
+        notes: 'Presumo la stessa interfaccia di Cline (--json, run_result).',
+        canListModels: false
+      }
+    ],
+    worker: { id: 'gaia', model: 'sonnet-5.5' }
+  }),
+  externalAgentModels: async () => ['freellmapi/auto', 'anthropic/sonnet-5.5'],
+  testExternalAgent: async () => ({ ok: true, text: 'ok', ms: 2400 }),
+  setExternalWorker: async () => ({ detected: [] }),
   changes: async () => data,
   changeDiff: async ({ path }: { path: string }) => ({
     path,
@@ -96,10 +136,126 @@ const team = (
   </div>
 )
 
+const now = Date.now()
+const iso = (minutesAgo: number): string => new Date(now - minutesAgo * 60_000).toISOString()
+
+const projectA = '/Users/carlolomello/Desktop/VSCodePlugions/sfdc-atlas'
+const projectB = '/Users/carlolomello/Desktop/VSCodePlugions/CharlieMultiAgentic'
+
+const fakeSessions: SessionSummary[] = [
+  {
+    id: 's1',
+    title: 'Campi su Account e classe che li usa',
+    createdAt: iso(180),
+    updatedAt: iso(4),
+    workspacePath: projectA,
+    effort: 'none',
+    messageCount: 24,
+    preview: 'Crea quattro campi…'
+  },
+  {
+    id: 's2',
+    title: 'Permission set e FLS',
+    createdAt: iso(600),
+    updatedAt: iso(120),
+    workspacePath: projectA,
+    effort: 'none',
+    messageCount: 9,
+    preview: 'Aggiorna il permission set…'
+  },
+  {
+    id: 's3',
+    title: 'Squadra visibile durante il lavoro',
+    createdAt: iso(3000),
+    updatedAt: iso(1500),
+    workspacePath: projectB,
+    effort: 'none',
+    messageCount: 41,
+    preview: 'La mascotte…'
+  }
+]
+
+const fakeProviders = [
+  { id: 'freellmapi', label: 'FreeLLMAPI', enabled: true },
+  { id: 'gemini', label: 'Gemini', enabled: false }
+] as unknown as ProviderStatus[]
+
+const fakeRouters = {
+  ollama: { running: false },
+  freellmapi: { running: true },
+  detected: [],
+  docker: false
+} as unknown as RoutersStatus
+
+const fakeInfo = {
+  version: '0.0.1',
+  platform: 'darwin',
+  configDir: '/tmp',
+  configPath: '/tmp/config.json',
+  credentialsPath: '/tmp/credentials.json',
+  electron: '39',
+  recentWorkspaces: [projectA, projectB],
+  effort: 'none'
+} as unknown as AppInfo
+
+const sidebar = (
+  <div className="app">
+    <Sidebar
+      info={fakeInfo}
+      workspace={projectA}
+      projects={[projectA, projectB]}
+      sessions={fakeSessions}
+      sessionId="s1"
+      providers={fakeProviders}
+      routers={fakeRouters}
+      mood="idle"
+      onTeamPreview={() => undefined}
+      onNewProject={() => undefined}
+      onSwitchProject={() => undefined}
+      onNewChat={() => undefined}
+      onOpenSession={() => undefined}
+      onRenameSession={() => undefined}
+      onRemoveSession={() => undefined}
+      onOpenWizard={() => undefined}
+      onOpenSettings={() => undefined}
+      onOpenConfig={() => undefined}
+    />
+    <div style={{ flex: 1 }} />
+  </div>
+)
+
+const cliPanel = (
+  <div className="wizard" style={{ width: 'min(680px, 94vw)' }}>
+    <div className="wizard-body">
+      <section className="wizard-panel">
+        <ExternalCliPanel onClose={() => undefined} />
+      </section>
+    </div>
+  </div>
+)
+
 const root = createRoot(document.getElementById('root') as HTMLElement)
 root.render(
-  <div className="app" style={{ justifyContent: view === 'team' ? 'center' : 'flex-end' }}>
-    {view === 'team' ? team : <ChangesPanel workspace={workspace} onClose={() => undefined} />}
+  <div
+    className="app"
+    style={{
+      justifyContent:
+        view === 'team' || view === 'cli'
+          ? 'center'
+          : view === 'sidebar'
+            ? 'flex-start'
+            : 'flex-end'
+    }}
+  >
+    {view === 'team' ? (
+      team
+    ) : view === 'sidebar' ? (
+      sidebar
+    ) : view === 'cli' ? (
+      cliPanel
+    ) : (
+      <ChangesPanel workspace={workspace} onClose={() => undefined} />
+    )}
   </div>
 )
 

@@ -3,6 +3,7 @@ import { findModel } from './catalog'
 import { providerFor, resolveCandidates } from './client'
 import { buildTools, toolTitle, type ToolRuntime } from './tools'
 import { sanitizeMessages } from './context-store'
+import { runExternalAgent } from './external-agents'
 import { enabledPluginIds, pluginSystemPrompt, recordTurn, PLUGIN_READ_TOOLS } from './plugins'
 import { skillsSystemPrompt } from './skills'
 import type { Platform } from './platform'
@@ -243,6 +244,7 @@ export async function runAgent(
         const agentId = `agent-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
         const name = sub.description.slice(0, 60)
         const role = sub.agent ?? 'explorer'
+        const worker = deps.config.external
         const subModel =
           sub.model ??
           deps.config.agents.subagentModel ??
@@ -253,7 +255,9 @@ export async function runAgent(
           agentId,
           name,
           description: sub.prompt.slice(0, 200),
-          modelKey: subModel
+          modelKey: worker?.id
+            ? `${worker.id}${worker.model ? `/${worker.model}` : ''}`
+            : subModel
         })
 
         const allow =
@@ -264,6 +268,52 @@ export async function runAgent(
               : undefined
 
         const started = Date.now()
+
+        if (worker?.id) {
+          // The user chose an existing CLI as the worker: the model calls happen
+          // inside it, with its auth, quota and logs. We only orchestrate.
+          try {
+            const result = await runExternalAgent(
+              worker.id,
+              {
+                prompt: sub.prompt,
+                ...(worker.model ? { model: worker.model } : {}),
+                // Reading is always allowed; writing only for an implementer.
+                ...(planMode || role !== 'implementer' ? { plan: true } : {}),
+                auto: worker.auto === true && !planMode && role === 'implementer',
+                workspace: deps.workspace ?? deps.platform.homeDir
+              },
+              {
+                home: deps.platform.homeDir,
+                ...(request.signal ? { signal: request.signal } : {}),
+                onText: (chunk) => deps.emit({ type: 'delta', text: chunk, agentId })
+              }
+            )
+            const text = result.text || 'La CLI non ha prodotto output.'
+            const ok = result.code === 0
+            deps.emit({
+              type: 'subagent-end',
+              agentId,
+              name,
+              ok,
+              summary: text.slice(0, 200),
+              ms: Date.now() - started
+            })
+            return { ok, text, summary: text.slice(0, 200) }
+          } catch (caught) {
+            const message = caught instanceof Error ? caught.message : String(caught)
+            deps.emit({
+              type: 'subagent-end',
+              agentId,
+              name,
+              ok: false,
+              summary: message,
+              ms: Date.now() - started
+            })
+            return { ok: false, text: `Subagente fallito: ${message}`, summary: message }
+          }
+        }
+
         try {
           const result = await runAgent(
             {

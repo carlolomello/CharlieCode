@@ -20,6 +20,8 @@ import type {
   RoutersStatus
 } from '../../shared/ipc'
 import { Mascot, MascotDesk, MascotTeam, type MascotMood } from './components/Mascot'
+import { Sidebar } from './components/Sidebar'
+import { baseName } from './format'
 import { Markdown } from './components/Markdown'
 import { PermissionModal } from './components/PermissionModal'
 import { SetupWizard } from './components/SetupWizard'
@@ -97,25 +99,6 @@ function shortKey(key: string): string {
 function modelLabel(model: ModelEntry): string {
   const free = /free/i.test(model.id)
   return `${free ? '★ ' : ''}${model.label === model.id ? shortKey(model.id) : model.label}`
-}
-
-function relativeTime(iso: string): string {
-  const then = new Date(iso).getTime()
-  if (!Number.isFinite(then)) return ''
-  const diff = Date.now() - then
-  const minutes = Math.round(diff / 60_000)
-  if (minutes < 1) return 'ora'
-  if (minutes < 60) return `${minutes}m`
-  const hours = Math.round(minutes / 60)
-  if (hours < 24) return `${hours}h`
-  const days = Math.round(hours / 24)
-  if (days < 30) return `${days}g`
-  return new Date(iso).toLocaleDateString('it-IT', { day: '2-digit', month: 'short' })
-}
-
-function baseName(path: string): string {
-  const parts = path.split(/[\\/]/).filter(Boolean)
-  return parts[parts.length - 1] ?? path
 }
 
 export default function App() {
@@ -551,6 +534,31 @@ export default function App() {
     setPermission(null)
   }, [])
 
+  /** Projects in the sidebar: the open one first, then the recent ones. */
+  const projects = useMemo(() => {
+    const list = [workspace, ...(info?.recentWorkspaces ?? [])].filter(
+      (entry): entry is string => Boolean(entry)
+    )
+    return list.filter((entry, index) => list.indexOf(entry) === index)
+  }, [workspace, info?.recentWorkspaces])
+
+  const switchProject = useCallback(
+    async (path: string): Promise<void> => {
+      if (path === workspace) return
+      try {
+        const result = await window.charliecode.useWorkspace(path)
+        if (!result.path) return
+        setWorkspace(result.path)
+        startNewChat()
+        await refreshSessions()
+        setInfo(await window.charliecode.info())
+      } catch (cause) {
+        setFatal(cause instanceof Error ? cause.message : String(cause))
+      }
+    },
+    [workspace, startNewChat, refreshSessions]
+  )
+
   const pickWorkspace = useCallback(async (): Promise<void> => {
     const result = await window.charliecode.pickWorkspace()
     const picked = result.path
@@ -834,7 +842,13 @@ export default function App() {
     async (skill: SkillInfo): Promise<void> => {
       if (!window.confirm(`Rimuovere la skill "${skill.name}"?`)) return
       try {
-        setSkills(await window.charliecode.removeSkill({ dir: skill.dir, source: skill.source }))
+        setSkills(
+          await window.charliecode.removeSkill({
+            dir: skill.dir,
+            source: skill.source,
+            ...(skill.readOnly ? { readOnly: true } : {})
+          })
+        )
       } catch (error) {
         setSkillError(error instanceof Error ? error.message : String(error))
       }
@@ -921,94 +935,26 @@ export default function App() {
 
   return (
     <div className={`app ${info?.platform === 'darwin' ? 'darwin' : ''}`}>
-      <aside className="sidebar">
-        <div className="sidebar-top">
-          <div className="brand">
-            <button
-              className="brand-mascot"
-              onClick={() => setTeamPreview(true)}
-              title="Vedi la squadra al lavoro"
-              aria-label="Vedi la squadra al lavoro"
-            >
-              <Mascot size={38} mood={mood} />
-            </button>
-            <div>
-              <div className="brand-name">CharlieCode</div>
-              <div className="brand-sub">v{info?.version ?? '0.0.1'}</div>
-            </div>
-          </div>
-
-          <button className="project" onClick={() => void pickWorkspace()} title="Scegli la cartella del progetto">
-            <span className="project-icon">▣</span>
-            <span className="project-body">
-              <span className="project-label">{workspace ? baseName(workspace) : 'Nessun progetto'}</span>
-              <span className="project-path">{workspace ?? 'clicca per scegliere una cartella'}</span>
-            </span>
-          </button>
-
-          <button className="new-chat" onClick={startNewChat}>
-            + Nuova chat
-          </button>
-        </div>
-
-        <div className="session-list">
-          {sessions.length === 0 && <div className="session-empty">Nessuna chat salvata</div>}
-          {sessions.map((session) => (
-            <div
-              key={session.id}
-              className={`session ${session.id === sessionId ? 'active' : ''}`}
-              onClick={() => void openSession(session.id)}
-              title={session.preview || session.title}
-            >
-              <div className="session-main">
-                <div className="session-title">{session.title}</div>
-                <div className="session-meta">
-                  {relativeTime(session.updatedAt)} · {session.messageCount} msg
-                </div>
-              </div>
-              <div className="session-actions">
-                <button
-                  className="icon"
-                  title="Rinomina"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    void renameSession(session.id, session.title)
-                  }}
-                >
-                  ✎
-                </button>
-                <button
-                  className="icon danger-text"
-                  title="Elimina"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    void removeSession(session.id)
-                  }}
-                >
-                  ✕
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="sidebar-bottom">
-          <button className="primary wide" onClick={() => setWizardOpen(true)}>
-            ✦ Collega un modello
-          </button>
-          <button className="ghost wide" onClick={() => setSettingsOpen(true)}>
-            ⚙ Provider e chiavi
-          </button>
-          <button className="ghost wide" onClick={() => void window.charliecode.openConfigDir()}>
-            Apri cartella config
-          </button>
-          <div className="sidebar-foot">
-            {info?.platform ?? '…'} · {providers.filter((provider) => provider.enabled).length} provider
-            {routers?.ollama.running ? ' · ollama ✓' : ''}
-            {routers?.freellmapi.running ? ' · router ✓' : ''}
-          </div>
-        </div>
-      </aside>
+      <Sidebar
+        info={info}
+        {...(workspace ? { workspace } : {})}
+        projects={projects}
+        sessions={sessions}
+        sessionId={sessionId}
+        providers={providers}
+        routers={routers}
+        mood={mood}
+        onTeamPreview={() => setTeamPreview(true)}
+        onNewProject={() => void pickWorkspace()}
+        onSwitchProject={(path) => void switchProject(path)}
+        onNewChat={startNewChat}
+        onOpenSession={(id) => void openSession(id)}
+        onRenameSession={(id, title) => void renameSession(id, title)}
+        onRemoveSession={(id) => void removeSession(id)}
+        onOpenWizard={() => setWizardOpen(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenConfig={() => void window.charliecode.openConfigDir()}
+      />
 
       <div className="main">
         <header className="topbar">
@@ -1686,10 +1632,11 @@ export default function App() {
 
             <h3>Skill</h3>
             <p className="muted small">
-              Procedure riutilizzabili in <code>SKILL.md</code>, come in Claude Code. Stanno in{' '}
-              <code>.charliecode/skills</code> del progetto o in <code>~/.charliecode/skills</code>.
-              L’agente vede solo nome e descrizione e carica il testo con il tool <code>skill</code>{' '}
-              quando serve, quindi non consumano contesto.
+              Procedure riutilizzabili in <code>SKILL.md</code>. CharlieCode legge anche quelle già
+              installate per altri agenti (<code>.claude/skills</code>, <code>.opencode/skills</code>,{' '}
+              <code>.agents/skills</code>, <code>.cursor/skills</code>), senza copiarle: restano una
+              copia sola. L’agente vede solo nome e descrizione e carica il testo con il tool{' '}
+              <code>skill</code> quando serve, quindi non consumano contesto.
             </p>
             <div className="skills">
               {skills.map((skill) => (
@@ -1701,15 +1648,21 @@ export default function App() {
                     </div>
                     <div className="skill-actions">
                       <span className={`skill-source ${skill.source}`}>
-                        {skill.source === 'project' ? 'progetto' : 'globale'}
+                        {skill.origin ?? (skill.source === 'project' ? 'progetto' : 'globale')}
                       </span>
-                      <button
-                        className="ghost small"
-                        onClick={() => void uninstallSkill(skill)}
-                        title="Rimuove la cartella della skill"
-                      >
-                        rimuovi
-                      </button>
+                      {skill.readOnly ? (
+                        <span className="muted small" title={skill.dir}>
+                          di un altro strumento
+                        </span>
+                      ) : (
+                        <button
+                          className="ghost small"
+                          onClick={() => void uninstallSkill(skill)}
+                          title="Rimuove la cartella della skill"
+                        >
+                          rimuovi
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>

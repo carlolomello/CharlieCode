@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ProviderStatus, RoutersStatus } from '../../../shared/ipc'
+import { ExternalCliPanel } from './ExternalCliPanel'
 
-type Path = 'openrouter' | 'freellmapi' | 'local' | 'custom'
+type Path = 'openrouter' | 'freellmapi' | 'local' | 'custom' | 'cli'
 
 interface SetupWizardProps {
   providers: ProviderStatus[]
@@ -41,6 +42,12 @@ const PATHS: { id: Path; label: string; tag: string; blurb: string }[] = [
     label: 'API personalizzata',
     tag: 'pro',
     blurb: 'Qualsiasi endpoint OpenAI-compatible: LM Studio, vLLM, gateway aziendale.'
+  },
+  {
+    id: 'cli',
+    label: 'CLI esistente',
+    tag: 'azienda',
+    blurb: 'Claude Code, Cline, Gaia o OpenCode già installati: nessuna chiave da incollare.'
   }
 ]
 
@@ -382,6 +389,7 @@ export function SetupWizard({
                 </button>
               </>
             )}
+            {path === 'cli' && <ExternalCliPanel onClose={onClose} />}
           </section>
         </div>
 

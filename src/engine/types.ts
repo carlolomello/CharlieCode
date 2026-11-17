@@ -76,6 +76,25 @@ export interface CharlieCodeConfig {
   agents: AgentSettings
   /** Built-in plugin switches; a missing entry means "shipped default". */
   plugins?: Record<string, { enabled: boolean }>
+  /**
+   * An agent CLI the user already has (Claude Code, Cline, Gaia, OpenCode…)
+   * used to run `task` subagents. When set, the model calls stay inside that
+   * CLI: CharlieCode never sees its keys, quota or logs.
+   */
+  external?: ExternalWorkerConfig
+}
+
+export interface ExternalWorkerConfig {
+  /** Id from the registry in `external-agents.ts`. */
+  id: string
+  /** Model passed to the CLI as `-m`; empty means the CLI's own default. */
+  model?: string
+  /**
+   * Let the CLI write and run commands without asking. Off by default: an
+   * orchestrator that silently turns off another tool's approvals is a bad
+   * surprise.
+   */
+  auto?: boolean
 }
 
 export interface ModelEntry {

@@ -143,7 +143,8 @@ function mergeConfig(partial: Partial<CharlieCodeConfig>): CharlieCodeConfig {
       autoApprove: partial.agents?.autoApprove ?? base.agents.autoApprove,
       autoApproveCommands: partial.agents?.autoApproveCommands ?? base.agents.autoApproveCommands
     },
-    plugins: { ...base.plugins, ...(partial.plugins ?? {}) }
+    plugins: { ...base.plugins, ...(partial.plugins ?? {}) },
+    ...(partial.external ? { external: partial.external } : {})
   }
 }
 

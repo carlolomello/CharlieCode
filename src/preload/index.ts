@@ -7,6 +7,8 @@ import type {
   ChatSessionEnvelope,
   ChatStartPayload,
   ChatStartResult,
+  ExternalAgentsStatus,
+  ExternalTestResult,
   ModelsResponse,
   OnboardingAnswers,
   OnboardingApplyPayload,
@@ -22,7 +24,7 @@ import type {
   WorkspaceChanges
 } from '../shared/ipc'
 import type { Session, SessionSummary } from '../engine/sessions'
-import type { FileDiff, PermissionDecision } from '../engine/types'
+import type { ExternalWorkerConfig, FileDiff, PermissionDecision } from '../engine/types'
 
 const api: CharlieCodeApi = {
   info: () => ipcRenderer.invoke('charliecode:info') as Promise<AppInfo>,
@@ -144,10 +146,19 @@ const api: CharlieCodeApi = {
   skills: () => ipcRenderer.invoke('charliecode:skills:list') as Promise<SkillInfo[]>,
   installSkill: (payload: { url: string; target: 'global' | 'project' }) =>
     ipcRenderer.invoke('charliecode:skills:install', payload) as Promise<SkillInfo[]>,
-  removeSkill: (payload: { dir: string; source: 'global' | 'project' }) =>
+  removeSkill: (payload: { dir: string; source: 'global' | 'project'; readOnly?: boolean }) =>
     ipcRenderer.invoke('charliecode:skills:remove', payload) as Promise<SkillInfo[]>,
   openSkillsDir: (target: 'global' | 'project') =>
-    ipcRenderer.invoke('charliecode:skills:open-dir', target) as Promise<void>
+    ipcRenderer.invoke('charliecode:skills:open-dir', target) as Promise<void>,
+
+  externalAgents: () =>
+    ipcRenderer.invoke('charliecode:external:list') as Promise<ExternalAgentsStatus>,
+  externalAgentModels: (id: string) =>
+    ipcRenderer.invoke('charliecode:external:models', id) as Promise<string[]>,
+  testExternalAgent: (payload: { id: string; model?: string }) =>
+    ipcRenderer.invoke('charliecode:external:test', payload) as Promise<ExternalTestResult>,
+  setExternalWorker: (worker: ExternalWorkerConfig | null) =>
+    ipcRenderer.invoke('charliecode:external:set-worker', worker) as Promise<ExternalAgentsStatus>
 }
 
 contextBridge.exposeInMainWorld('charliecode', api)

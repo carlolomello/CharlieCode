@@ -23,6 +23,7 @@ import {
   readAgentContext,
   writeAgentContext
 } from '../engine/context-store'
+import { agentModels, detectAgentClis, runExternalAgent } from '../engine/external-agents'
 import { dockerAvailable, hasBinary, probeEndpoint, scanLocalEndpoints } from '../engine/local'
 import { createPlatform } from '../engine/platform'
 import { ensureProjectMemory, resolvePlugins } from '../engine/plugins'
@@ -52,12 +53,20 @@ import {
   type SessionSummary
 } from '../engine/sessions'
 import { toolLogFromEvent } from '../engine/tools'
-import type { CharlieCodeConfig, PermissionDecision, PermissionRequest, ToolLog } from '../engine/types'
+import type {
+  CharlieCodeConfig,
+  ExternalWorkerConfig,
+  PermissionDecision,
+  PermissionRequest,
+  ToolLog
+} from '../engine/types'
 import type {
   AddProviderPayload,
   AppInfo,
   ChatStartPayload,
   DetectedLocal,
+  ExternalAgentsStatus,
+  ExternalTestResult,
   ModelsResponse,
   OnboardingAnswers,
   OnboardingApplyPayload,
@@ -391,6 +400,71 @@ function registerIpc(): void {
       await saveConfig(platform, next)
       resetProviderCache()
       return providerStatuses(next)
+    }
+  )
+
+  /* ----------------------------- agent CLIs ----------------------------- */
+
+  const externalStatus = async (): Promise<ExternalAgentsStatus> => {
+    const { config } = await loadConfig(platform)
+    return {
+      detected: await detectAgentClis(platform.homeDir),
+      ...(config.external ? { worker: config.external } : {})
+    }
+  }
+
+  ipcMain.handle('charliecode:external:list', () => externalStatus())
+
+  ipcMain.handle(
+    'charliecode:external:models',
+    async (_event, id: string): Promise<string[]> => agentModels(id, platform.homeDir)
+  )
+
+  ipcMain.handle(
+    'charliecode:external:test',
+    async (
+      _event,
+      payload: { id: string; model?: string }
+    ): Promise<ExternalTestResult> => {
+      const started = Date.now()
+      const { config } = await loadConfig(platform)
+      try {
+        const result = await runExternalAgent(
+          payload.id,
+          {
+            prompt:
+              'Rispondi soltanto con la parola ok. Non leggere file e non eseguire comandi.',
+            ...(payload.model ? { model: payload.model } : {}),
+            // A test must never modify the project.
+            plan: true,
+            workspace: config.workspace ?? platform.homeDir
+          },
+          { home: platform.homeDir, timeoutMs: 120_000 }
+        )
+        return {
+          ok: result.code === 0 && result.text.length > 0,
+          text: result.text.slice(0, 400),
+          ms: Date.now() - started
+        }
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+          ms: Date.now() - started
+        }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'charliecode:external:set-worker',
+    async (_event, worker: ExternalWorkerConfig | null): Promise<ExternalAgentsStatus> => {
+      const { config } = await loadConfig(platform)
+      const next: CharlieCodeConfig = { ...config }
+      if (worker?.id) next.external = worker
+      else delete next.external
+      await saveConfig(platform, next)
+      return externalStatus()
     }
   )
 

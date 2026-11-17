@@ -23,6 +23,15 @@ import type { SkillInfo, SkillSource } from '../shared/ipc'
  *   - `<workspace>/.charliecode/skills/<slug>/SKILL.md` (committable, per project)
  *   - `~/.charliecode/skills/<slug>/SKILL.md`        (yours, every project)
  *
+ * Skills that another agent already installed are read **where they are**, not
+ * copied: `.claude/skills`, `.opencode/skills`, `.agents/skills`, `.cursor/skills`
+ * in the project, and the matching folders under the home directory. The format
+ * is the same open one (`agentskills.io`), so a repository installed with
+ * `npx skills add …` works here without conversion.
+ *
+ * A skill folder can also carry `scripts/`, `references/` and `assets/`; the
+ * `skill` tool returns the folder path so the model can read them.
+ *
  * Only the name and description go in the system prompt. The body is read when
  * the model calls the `skill` tool, which is what keeps the context small.
  */
@@ -32,7 +41,30 @@ export interface SkillBody extends SkillInfo {
 }
 
 const SKILL_FILE = 'SKILL.md'
-const MAX_BODY_CHARS = 12_000
+/**
+ * Real skills are long: Salesforce's own Apex skill is ~15k characters with
+ * tables and templates. Truncating silently at 12k cut the rules in half, so the
+ * limit is generous and the cut is always announced.
+ */
+const MAX_BODY_CHARS = 40_000
+
+/** A directory that may contain skills, and who owns it. */
+export interface SkillRoot {
+  dir: string
+  source: SkillSource
+  /** Tool that owns the folder, for the UI. Ours is undefined. */
+  origin?: string
+  /** Skills found here belong to another tool: read them, never delete them. */
+  readOnly?: boolean
+}
+
+/** Tools whose skill folders we read as-is, project and home. */
+const FOREIGN_TOOLS: { folder: string; label: string }[] = [
+  { folder: '.claude', label: 'Claude Code' },
+  { folder: '.opencode', label: 'OpenCode' },
+  { folder: '.agents', label: 'Agent Skills' },
+  { folder: '.cursor', label: 'Cursor' }
+]
 
 export function globalSkillsDir(platform: Platform): string {
   return join(platform.configDir, 'skills')
@@ -40,6 +72,39 @@ export function globalSkillsDir(platform: Platform): string {
 
 export function projectSkillsDir(workspace: string): string {
   return join(workspace, '.charliecode', 'skills')
+}
+
+/**
+ * Lowest priority first: `listSkills` overwrites by id, so the last root wins.
+ * Our own project folder is last on purpose — if the same skill exists both
+ * here and in `.claude/skills`, the copy you can edit in CharlieCode wins.
+ */
+export function projectSkillRoots(workspace: string): SkillRoot[] {
+  return [
+    ...FOREIGN_TOOLS.map((tool) => ({
+      dir: join(workspace, tool.folder, 'skills'),
+      source: 'project' as const,
+      origin: tool.label,
+      readOnly: true
+    })),
+    { dir: join(workspace, 'skills'), source: 'project' },
+    { dir: projectSkillsDir(workspace), source: 'project' }
+  ]
+}
+
+export function globalSkillRoots(platform: Platform): SkillRoot[] {
+  const home = platform.homeDir
+  return [
+    ...(home
+      ? FOREIGN_TOOLS.map((tool) => ({
+          dir: join(home, tool.folder, 'skills'),
+          source: 'global' as const,
+          origin: tool.label,
+          readOnly: true
+        }))
+      : []),
+    { dir: globalSkillsDir(platform), source: 'global' }
+  ]
 }
 
 interface Frontmatter {
@@ -59,11 +124,33 @@ export function parseSkillFile(raw: string): { meta: Frontmatter; body: string }
   const body = normalized.slice(end + 4).replace(/^\n+/, '')
 
   const meta: Frontmatter = {}
-  for (const line of head.split('\n')) {
-    const match = /^([A-Za-z_-]+)\s*:\s*(.*)$/.exec(line.trim())
+  const headLines = head.split('\n')
+  for (let index = 0; index < headLines.length; index += 1) {
+    const line = headLines[index] ?? ''
+    // Indented lines belong to a nested block (`metadata:` with its own keys).
+    // Reading them as top-level keys would let a `version:` shadow `name:`.
+    if (/^\s/.test(line)) continue
+    const match = /^([A-Za-z_-]+)\s*:\s*(.*)$/.exec(line)
     if (!match) continue
     const key = match[1]?.toLowerCase()
-    const value = (match[2] ?? '').trim().replace(/^["']|["']$/g, '')
+    let value = (match[2] ?? '').trim()
+
+    // YAML folded (`>`) and literal (`|`) blocks: the value is on the lines below.
+    if (/^[>|][-+]?$/.test(value)) {
+      const block: string[] = []
+      while (index + 1 < headLines.length) {
+        const next = headLines[index + 1] ?? ''
+        if (next.trim() === '' || /^\s/.test(next)) {
+          index += 1
+          block.push(next.trim())
+          continue
+        }
+        break
+      }
+      value = block.join(' ').trim()
+    }
+
+    value = value.replace(/^["']|["']$/g, '').trim()
     if (!value) continue
     if (key === 'name') meta.name = value
     if (key === 'description') meta.description = value
@@ -78,27 +165,60 @@ function slugFromDir(name: string): string {
     .replace(/^-+|-+$/g, '')
 }
 
-async function readSkillsIn(dir: string, source: SkillSource): Promise<SkillInfo[]> {
-  if (!existsSync(dir)) return []
-  const entries = await readdir(dir, { withFileTypes: true }).catch(() => [])
-  const skills: SkillInfo[] = []
+/** Folders inside a skill root that never contain other skills. */
+const NESTED_IGNORED = new Set([
+  'node_modules',
+  'references',
+  'assets',
+  'scripts',
+  'docs',
+  'samples',
+  'templates',
+  'tests',
+  'test'
+])
 
+/**
+ * A repository can ship one skill at its root or many under `skills/`, which is
+ * how `sf-skills` and most collections are laid out. Walking a couple of levels
+ * is cheaper than asking the user to move folders around.
+ */
+async function findSkillFiles(dir: string, depth = 0): Promise<string[]> {
+  if (depth > 3 || !existsSync(dir)) return []
+  const own = join(dir, SKILL_FILE)
+  if (existsSync(own)) return [own]
+
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => [])
+  const found: string[] = []
   for (const entry of entries) {
     if (!entry.isDirectory()) continue
-    const path = join(dir, entry.name, SKILL_FILE)
-    if (!existsSync(path)) continue
+    if (entry.name.startsWith('.') || NESTED_IGNORED.has(entry.name)) continue
+    found.push(...(await findSkillFiles(join(dir, entry.name), depth + 1)))
+  }
+  return found
+}
+
+async function readSkillsIn(root: SkillRoot): Promise<SkillInfo[]> {
+  const paths = await findSkillFiles(root.dir)
+  const skills: SkillInfo[] = []
+
+  for (const path of paths) {
     const raw = await readFile(path, 'utf8').catch(() => '')
     if (!raw) continue
     const { meta, body } = parseSkillFile(raw)
-    const id = slugFromDir(meta.name ?? entry.name)
+    const folder = path.slice(0, -SKILL_FILE.length - 1)
+    const folderName = folder.split(sep).pop() ?? ''
+    const id = slugFromDir(meta.name ?? folderName)
     if (!id) continue
     skills.push({
       id,
-      name: meta.name ?? entry.name,
+      name: meta.name ?? folderName,
       description: meta.description ?? firstLine(body) ?? 'Nessuna descrizione.',
-      source,
+      source: root.source,
       path,
-      dir: join(dir, entry.name)
+      dir: folder,
+      ...(root.origin ? { origin: root.origin } : {}),
+      ...(root.readOnly ? { readOnly: true } : {})
     })
   }
 
@@ -113,14 +233,20 @@ function firstLine(text: string): string | undefined {
   return line ? line.slice(0, 160) : undefined
 }
 
-/** Project skills win over global ones with the same id. */
+/**
+ * Project skills win over global ones, and our own folders win over another
+ * tool's copy with the same id: the one you can edit here is the one that runs.
+ */
 export async function listSkills(platform: Platform, workspace?: string): Promise<SkillInfo[]> {
-  const global = await readSkillsIn(globalSkillsDir(platform), 'global')
-  const project = workspace ? await readSkillsIn(projectSkillsDir(workspace), 'project') : []
+  const roots = [
+    ...globalSkillRoots(platform),
+    ...(workspace ? projectSkillRoots(workspace) : [])
+  ]
 
   const merged = new Map<string, SkillInfo>()
-  for (const skill of global) merged.set(skill.id, skill)
-  for (const skill of project) merged.set(skill.id, skill)
+  for (const root of roots) {
+    for (const skill of await readSkillsIn(root)) merged.set(skill.id, skill)
+  }
   return [...merged.values()].sort((a, b) => a.name.localeCompare(b.name))
 }
 
@@ -139,7 +265,13 @@ export async function readSkill(
   const raw = await readFile(found.path, 'utf8').catch(() => '')
   if (!raw) return undefined
   const { body } = parseSkillFile(raw)
-  return { ...found, body: body.slice(0, MAX_BODY_CHARS) }
+  const truncated = body.length > MAX_BODY_CHARS
+  return {
+    ...found,
+    body: truncated
+      ? `${body.slice(0, MAX_BODY_CHARS)}\n\n[troncata a ${MAX_BODY_CHARS} caratteri. Il testo completo è in ${found.path}]`
+      : body
+  }
 }
 
 /**
@@ -156,10 +288,11 @@ export async function skillsSystemPrompt(
   return [
     'Skill disponibili (procedure riutilizzabili). Quando una è pertinente alla richiesta,',
     'caricala con il tool `skill` prima di improvvisare: contiene i passi già verificati.',
+    'Il tool restituisce anche la cartella della skill: se cita file in `assets/`,',
+    '`references/` o `scripts/`, leggili con `read` invece di inventarli.',
     ...skills.map((skill) => `- ${skill.id}: ${skill.description}`)
   ].join('\n')
 }
-
 const execFileAsync = promisify(execFile)
 
 export interface InstallSkillResult {
@@ -209,7 +342,12 @@ export async function installSkillFromGit(
     throw new Error(`git clone fallito: ${message.split('\n')[0]}`)
   }
 
-  const installed = await readSkillsIn(destination, target === 'project' ? 'project' : 'global')
+  // One repository can ship one skill at its root or many under `skills/`, which
+  // is the layout of every collection published with `npx skills add`.
+  const installed = await readSkillsIn({
+    dir: destination,
+    source: target === 'project' ? 'project' : 'global'
+  })
   if (installed.length === 0) {
     await rm(destination, { recursive: true, force: true })
     throw new Error('Il repository non contiene nessun SKILL.md.')
@@ -245,7 +383,9 @@ export async function writeLocalSkill(
   const dir = join(root, slug)
   const path = join(dir, SKILL_FILE)
   if (existsSync(path)) {
-    const existing = (await readSkillsIn(root, target)).find((skill) => skill.id === slug)
+    const existing = (await readSkillsIn({ dir: root, source: target })).find(
+      (skill) => skill.id === slug
+    )
     if (existing) return { skill: existing, created: false }
   }
 
@@ -268,9 +408,14 @@ export async function writeLocalSkill(
 
 export async function removeSkill(
   platform: Platform,
-  skill: Pick<SkillInfo, 'dir' | 'source'>,
+  skill: Pick<SkillInfo, 'dir' | 'source' | 'readOnly'>,
   workspace?: string
 ): Promise<void> {
+  if (skill.readOnly) {
+    throw new Error(
+      'Questa skill è installata da un altro strumento: rimuovila da lì, così resta coerente per entrambi.'
+    )
+  }
   const root = skill.source === 'project' ? projectSkillsDir(workspace ?? '') : globalSkillsDir(platform)
   // Never delete outside the skills directories, whatever the renderer sends.
   // The separator matters: `<skills>-evil` starts with `<skills>` but is not inside it.

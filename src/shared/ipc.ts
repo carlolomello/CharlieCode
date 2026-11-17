@@ -4,6 +4,7 @@ import type {
   CatalogError,
   EffortLevel,
   EngineEvent,
+  ExternalWorkerConfig,
   FileDiff,
   ModelEntry,
   PermissionDecision,
@@ -190,8 +191,44 @@ export interface CharlieCodeApi {
 
   skills(): Promise<SkillInfo[]>
   installSkill(payload: { url: string; target: 'global' | 'project' }): Promise<SkillInfo[]>
-  removeSkill(payload: { dir: string; source: 'global' | 'project' }): Promise<SkillInfo[]>
+  removeSkill(payload: {
+    dir: string
+    source: 'global' | 'project'
+    readOnly?: boolean
+  }): Promise<SkillInfo[]>
   openSkillsDir(target: 'global' | 'project'): Promise<void>
+
+  /** Agent CLIs already installed on this machine, plus the configured worker. */
+  externalAgents(): Promise<ExternalAgentsStatus>
+  externalAgentModels(id: string): Promise<string[]>
+  /** Runs a tiny prompt through the CLI, to prove it works before relying on it. */
+  testExternalAgent(payload: { id: string; model?: string }): Promise<ExternalTestResult>
+  setExternalWorker(worker: ExternalWorkerConfig | null): Promise<ExternalAgentsStatus>
+}
+
+/* ------------------------------ agent CLIs ------------------------------ */
+
+export interface ExternalAgentInfo {
+  id: string
+  label: string
+  path: string
+  version?: string
+  notes: string
+  docs?: string
+  canListModels: boolean
+}
+
+export interface ExternalAgentsStatus {
+  detected: ExternalAgentInfo[]
+  /** The CLI currently used for `task` subagents, if the user chose one. */
+  worker?: ExternalWorkerConfig
+}
+
+export interface ExternalTestResult {
+  ok: boolean
+  text?: string
+  ms: number
+  error?: string
 }
 
 export interface PluginStatus {
@@ -314,4 +351,8 @@ export interface SkillInfo {
   path: string
   /** Directory that holds the skill, removed when the user uninstalls it. */
   dir: string
+  /** Tool that owns the folder when it is not ours (`Claude Code`, …). */
+  origin?: string
+  /** Installed by another tool: we read it, we never delete it. */
+  readOnly?: boolean
 }

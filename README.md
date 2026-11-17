@@ -47,6 +47,7 @@ pnpm dev           # app with HMR
 - **Ask before it acts.** Destructive tools hit a permission gate: *allow once*, *allow always* (per tool, or per command prefix for `bash`), *deny*. Revocable from the settings drawer.
 - **Remembers the project.** Every chat is a saved session tied to a folder; the full model context (tool calls included) is persisted, so resuming actually continues instead of replaying a transcript.
 - **Knows your rules.** `AGENTS.md` — plus `CHARLIECODE.md` and `CLAUDE.md` — in the project root and globally in `~/.charliecode/` are injected into the system prompt.
+- **Uses the CLI you already have.** If your team approved Claude Code, Cline, Gaia or OpenCode, connect it in **✦ Collega un modello → CLI esistente**: subagents then run *inside* that CLI, with its own auth, quota and logs. CharlieCode orchestrates and shows the result; it never sees a corporate key.
 - **Free-first, zero lock-in.** One provider entry (FreeLLMAPI) routes across ~87 free tiers and picks the model itself. Add OpenAI, OpenRouter, Ollama, LM Studio, vLLM or a corporate gateway whenever you want.
 - **Speaks Markdown properly.** Headings, lists, tables, quotes and syntax-highlighted code blocks with a copy button — rendered by a small built-in renderer, not by injecting HTML into the app.
 
@@ -98,6 +99,8 @@ A skill is a reusable procedure in a `SKILL.md`, the same format Claude Code use
 | Project | `.charliecode/skills/<slug>/SKILL.md` | committable, travels with the repo |
 | Global | `~/.charliecode/skills/<slug>/SKILL.md` | every project |
 
+Skills already installed for another agent are read **where they are**, never copied: `.claude/skills`, `.opencode/skills`, `.agents/skills`, `.cursor/skills` in the project, and the same folders under your home directory. They show up with the name of the tool that owns them and cannot be deleted from here. A repository that ships many skills under `skills/` — like [Salesforce's `sf-skills`](https://github.com/forcedotcom/sf-skills) — works as-is, whether you installed it with `npx skills add` or cloned it.
+
 ```markdown
 ---
 name: typecheck
@@ -140,6 +143,18 @@ FreeLLMAPI is a separate project: <https://github.com/tashfeenahmed/freellmapi>.
 **Ports.** The desktop app listens on **31415**; Docker and a source run default to **3001**. CharlieCode auto-detects across `3001`, `31415`, `8080`, `8000`, `4000`, `11434`, so you usually do not need to care.
 
 **One entry, not 300.** FreeLLMAPI exposes every model it can reach, but routing is its job. CharlieCode therefore shows a single entry — *Automatico (il router sceglie il modello)* — and lets the router pick. If you really want the full list, tick *mostra tutti i modelli del router* in the provider drawer.
+
+### A CLI you already have
+
+Some teams do not hand out API keys: the approved tool is a CLI with its own login. **✦ Collega un modello → CLI esistente** finds what is installed (`claude`, `cline`, `gaia`, `opencode`, `kiro-cli`), runs one sentence through it to prove it answers, and lets you pick it as the worker for `task` subagents.
+
+What that means in practice:
+
+- the model calls happen inside that CLI — its auth, its quota, its audit log;
+- CharlieCode still plans, splits the work, and shows the diff afterwards;
+- **explorer** and **reviewer** subagents run read-only (`--permission-mode plan`, `-p`, `--auto-approve false`);
+- writing is opt-in per CLI, and only for **implementer** subagents;
+- a CLI that fails the test is reported as failed, not retried silently.
 
 ### Any other OpenAI-compatible API
 
