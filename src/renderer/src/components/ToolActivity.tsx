@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { ToolLog } from '../../../engine/types'
 import { DiffView } from './DiffView'
+import { Markdown } from './Markdown'
 
 export interface SubagentRun {
   agentId: string
@@ -9,6 +10,8 @@ export interface SubagentRun {
   modelKey: string
   status: 'running' | 'ok' | 'error'
   summary?: string
+  /** Text streamed by the worker while it runs. */
+  text?: string
   ms?: number
 }
 
@@ -107,6 +110,11 @@ function SubagentCard({
               {logs.map((log) => (
                 <ToolRow key={log.id} log={log} />
               ))}
+            </div>
+          )}
+          {run.text && run.status === 'running' && (
+            <div className="subagent-live">
+              <Markdown text={run.text} dense />
             </div>
           )}
           {run.summary && <div className="subagent-summary">{run.summary}</div>}

@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Mascot, type MascotMood } from './Mascot'
 import { baseName, relativeTime } from '../format'
 import type { AppInfo, ProviderStatus, RoutersStatus } from '../../../shared/ipc'
@@ -29,6 +30,121 @@ export interface SidebarProps {
   onOpenWizard: () => void
   onOpenSettings: () => void
   onOpenConfig: () => void
+}
+
+function SessionRow({
+  session,
+  active,
+  onOpen,
+  onRename,
+  onRemove
+}: {
+  session: SessionSummary
+  active: boolean
+  onOpen: () => void
+  onRename: (title: string) => void
+  onRemove: () => void
+}): React.JSX.Element {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(session.title)
+  const [confirming, setConfirming] = useState(false)
+
+  const commit = (): void => {
+    setEditing(false)
+    const next = draft.trim()
+    if (next && next !== session.title) onRename(next)
+  }
+
+  return (
+    <div
+      className={`session ${active ? 'active' : ''}`}
+      onClick={() => {
+        if (!editing) onOpen()
+      }}
+      title={session.preview || session.title}
+    >
+      <div className="session-main">
+        {editing ? (
+          <input
+            className="session-rename"
+            value={draft}
+            autoFocus
+            onChange={(event) => setDraft(event.target.value)}
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                commit()
+              }
+              if (event.key === 'Escape') {
+                event.preventDefault()
+                setDraft(session.title)
+                setEditing(false)
+              }
+            }}
+            onBlur={commit}
+            aria-label="Nuovo titolo della chat"
+          />
+        ) : (
+          <div className="session-title">{session.title}</div>
+        )}
+        <div className="session-meta">
+          {relativeTime(session.updatedAt)} · {session.messageCount} msg
+        </div>
+      </div>
+      <div className="session-actions">
+        {confirming ? (
+          <>
+            <button
+              className="icon danger-text"
+              title="Conferma eliminazione"
+              onClick={(event) => {
+                event.stopPropagation()
+                setConfirming(false)
+                onRemove()
+              }}
+            >
+              ✓
+            </button>
+            <button
+              className="icon"
+              title="Annulla"
+              onClick={(event) => {
+                event.stopPropagation()
+                setConfirming(false)
+              }}
+            >
+              ✕
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              className="icon"
+              title="Rinomina"
+              onClick={(event) => {
+                event.stopPropagation()
+                setDraft(session.title)
+                setEditing(true)
+              }}
+            >
+              ✎
+            </button>
+            <button
+              className="icon danger-text"
+              title="Elimina"
+              onClick={(event) => {
+                event.stopPropagation()
+                setConfirming(true)
+              }}
+            >
+              ✕
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  )
 }
 
 export function Sidebar({
@@ -109,41 +225,14 @@ export function Sidebar({
                     <div className="session-empty">Nessuna chat in questo progetto</div>
                   )}
                   {projectSessions.map((session) => (
-                    <div
+                    <SessionRow
                       key={session.id}
-                      className={`session ${session.id === sessionId ? 'active' : ''}`}
-                      onClick={() => onOpenSession(session.id)}
-                      title={session.preview || session.title}
-                    >
-                      <div className="session-main">
-                        <div className="session-title">{session.title}</div>
-                        <div className="session-meta">
-                          {relativeTime(session.updatedAt)} · {session.messageCount} msg
-                        </div>
-                      </div>
-                      <div className="session-actions">
-                        <button
-                          className="icon"
-                          title="Rinomina"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            onRenameSession(session.id, session.title)
-                          }}
-                        >
-                          ✎
-                        </button>
-                        <button
-                          className="icon danger-text"
-                          title="Elimina"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            onRemoveSession(session.id)
-                          }}
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    </div>
+                      session={session}
+                      active={session.id === sessionId}
+                      onOpen={() => onOpenSession(session.id)}
+                      onRename={(title) => onRenameSession(session.id, title)}
+                      onRemove={() => onRemoveSession(session.id)}
+                    />
                   ))}
                   <button className="new-chat nested" onClick={onNewChat}>
                     + Nuova chat

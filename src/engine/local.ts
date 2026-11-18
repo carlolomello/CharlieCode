@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { delimiter, join } from 'node:path'
 
 /**
  * Local model runtimes: Ollama, LM Studio, vLLM, llama.cpp/LocalAI, and any
@@ -112,11 +113,17 @@ export function hasBinary(name: string, extraPaths: string[] = []): boolean {
   ]
   if (candidates.some((path) => existsSync(path))) return true
 
-  const pathEnv = process.env.PATH ?? ''
-  return pathEnv
-    .split(':')
-    .filter(Boolean)
-    .some((dir) => existsSync(`${dir}/${name}`))
+  const pathEnv = process.env.PATH ?? process.env.Path ?? ''
+  const directories = pathEnv.split(delimiter).filter(Boolean)
+  // Windows resolves executables through PATHEXT: `ollama` is `ollama.exe`.
+  const extensions =
+    process.platform === 'win32'
+      ? (process.env.PATHEXT ?? '.EXE;.CMD;.BAT;.COM').split(';').filter(Boolean)
+      : ['']
+
+  return directories.some((directory) =>
+    extensions.some((extension) => existsSync(join(directory, `${name}${extension}`)))
+  )
 }
 
 /** Asks Docker whether its daemon is up; used to suggest container commands. */

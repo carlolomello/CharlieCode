@@ -9,7 +9,7 @@ import { isExclusiveCommand, withExclusive } from './exclusive'
 import { suggestSetup } from './advisor'
 import { rememberNote } from './plugins'
 import { listSkills, readSkill } from './skills'
-import type { Platform } from './platform'
+import { detectEol, type Platform } from './platform'
 import type {
   EngineEvent,
   FileDiff,
@@ -124,19 +124,102 @@ export function toolTitle(name: string, input: unknown): string {
   return toToolTitle(name, input)
 }
 
+/**
+ * A command may ride on an approved prefix only when it is a single command.
+ * Without this, `git status && curl … | sh` would be approved by the `git
+ * status` entry. Quotes are respected, so `git commit -m "a; b"` stays safe.
+ */
+export function hasShellOperator(command: string): boolean {
+  let quote: "'" | '"' | null = null
+
+  for (let index = 0; index < command.length; index++) {
+    const char = command[index]!
+
+    if (quote === "'") {
+      if (char === "'") quote = null
+      continue
+    }
+
+    if (quote === '"') {
+      if (char === '\\') {
+        index++
+        continue
+      }
+      if (char === '"') {
+        quote = null
+        continue
+      }
+      // Command substitution still runs inside double quotes.
+      if (char === '`' || (char === '$' && command[index + 1] === '(')) return true
+      continue
+    }
+
+    if (char === "'" || char === '"') {
+      quote = char
+      continue
+    }
+    if (char === '\\') {
+      index++
+      continue
+    }
+    if (';&|<>`'.includes(char)) return true
+    if (char === '$' && command[index + 1] === '(') return true
+    if (char === '\n' || char === '\r') return true
+  }
+
+  return false
+}
+
+/** Prefix match with a word boundary: `git status` never approves `git statusx`. */
+export function matchesApprovedCommand(command: string, prefixes: string[]): boolean {
+  const trimmed = command.trim()
+  if (!trimmed || hasShellOperator(trimmed)) return false
+
+  return prefixes.some((raw) => {
+    const prefix = raw.trim()
+    if (!prefix || !trimmed.startsWith(prefix)) return false
+    const next = trimmed[prefix.length]
+    return next === undefined || /\s/.test(next)
+  })
+}
+
 async function permission(
   runtime: ToolRuntime,
   request: Omit<PermissionRequest, 'id'>,
-  commandPrefix?: string
+  options: { commandPrefix?: string; force?: boolean } = {}
 ): Promise<void> {
   const auto =
-    runtime.autoApprove.includes(request.tool) ||
-    (commandPrefix !== undefined &&
-      runtime.autoApproveCommands.some((prefix) => prefix && commandPrefix.startsWith(prefix)))
+    !options.force &&
+    (runtime.autoApprove.includes(request.tool) ||
+      (options.commandPrefix !== undefined &&
+        matchesApprovedCommand(options.commandPrefix, runtime.autoApproveCommands)))
   if (auto) return
 
   const decision = await runtime.askPermission({ ...request, id: `${Date.now()}-${Math.random()}` })
   if (decision === 'deny') throw new DeniedError()
+}
+
+/**
+ * Reading outside the project is never silent: `read` and friends are in the
+ * default auto-approve list, so this gate deliberately bypasses it. A prompt
+ * injection in a project file must not be able to read `~/.ssh`.
+ */
+async function ensureInsideProject(
+  runtime: ToolRuntime,
+  target: ResolvedPath,
+  action = 'Leggere'
+): Promise<void> {
+  if (!target.outside) return
+  await permission(
+    runtime,
+    {
+      tool: 'read',
+      title: `${action} fuori dal progetto`,
+      detail: `${target.abs}\n\nIl percorso è fuori dalla cartella del progetto.`,
+      risk: 'high'
+    },
+    { force: true }
+  )
 }
 
 export class DeniedError extends Error {
@@ -299,6 +382,7 @@ export function buildTools(runtime: ToolRuntime) {
     }),
     run: async ({ path, offset, limit }) => {
       const target = resolveWorkspacePath(runtime, path)
+      await ensureInsideProject(runtime, target)
       const info = await stat(target.abs).catch(() => undefined)
       if (!info?.isFile()) throw new Error(`File non trovato: ${target.rel}`)
       if (info.size > MAX_READ_BYTES) throw new Error(`File troppo grande (${describeSize(info.size)}).`)
@@ -324,6 +408,7 @@ export function buildTools(runtime: ToolRuntime) {
     }),
     run: async ({ path }) => {
       const target = resolveWorkspacePath(runtime, path ?? '.')
+      await ensureInsideProject(runtime, target, 'Elencare')
       const entries = await readdir(target.abs, { withFileTypes: true }).catch(() => {
         throw new Error(`Directory non trovata: ${target.rel}`)
       })
@@ -347,19 +432,31 @@ export function buildTools(runtime: ToolRuntime) {
     }),
     run: async ({ pattern, path }) => {
       const root = resolveWorkspacePath(runtime, path ?? '.')
+      await ensureInsideProject(runtime, root, 'Cercare')
       const matcher = globToRegExp(pattern)
-      const matches: { rel: string; mtime: number }[] = []
+      const matches: { rel: string; abs: string; mtime: number }[] = []
 
       await walk(root.abs, (file) => {
         const rel = relative(runtime.workspace, file).split(sep).join('/')
         const candidate = rel.startsWith('..') ? relative(root.abs, file).split(sep).join('/') : rel
         if (!matcher.test(candidate) && !matcher.test(candidate.split('/').pop() ?? '')) return
-        matches.push({ rel: candidate, mtime: 0 })
+        matches.push({ rel: candidate, abs: file, mtime: 0 })
         if (matches.length >= MAX_RESULTS) return false
       })
 
       if (matches.length === 0) return { output: 'Nessun file trovato.', summary: `0 file per ${pattern}` }
-      const rows = matches.map((match) => match.rel).sort()
+
+      // The tool promises "most recent first": honour it on the matched files
+      // only, so a huge tree never pays for a stat per entry.
+      const dated = await Promise.all(
+        matches.map(async (match) => {
+          const info = await stat(match.abs).catch(() => undefined)
+          return { ...match, mtime: info?.mtimeMs ?? 0 }
+        })
+      )
+      const rows = dated
+        .sort((a, b) => b.mtime - a.mtime || a.rel.localeCompare(b.rel))
+        .map((match) => match.rel)
       return {
         output: rows.join('\n'),
         summary: `${rows.length} file per ${pattern}`
@@ -380,6 +477,7 @@ export function buildTools(runtime: ToolRuntime) {
     }),
     run: async ({ pattern, path, include, ignoreCase }) => {
       const root = resolveWorkspacePath(runtime, path ?? '.')
+      await ensureInsideProject(runtime, root, 'Cercare')
       let regex: RegExp
       try {
         regex = new RegExp(pattern, ignoreCase ? 'i' : '')
@@ -389,13 +487,8 @@ export function buildTools(runtime: ToolRuntime) {
       const includeMatcher = include ? globToRegExp(include) : undefined
       const results: string[] = []
 
-      await walk(root.abs, (file) => {
-        const name = file.split(sep).pop() ?? ''
-        if (includeMatcher && !includeMatcher.test(name)) return
-        return
-      })
-
-      // Second pass: reading is async, so collect candidates first.
+      // One walk, then batched reads: the old version walked the whole tree
+      // twice for nothing, which on a large repository doubled the cost.
       const candidates: string[] = []
       await walk(root.abs, (file) => {
         const name = file.split(sep).pop() ?? ''
@@ -403,29 +496,42 @@ export function buildTools(runtime: ToolRuntime) {
         candidates.push(file)
       })
 
-      for (const file of candidates) {
-        if (results.length >= MAX_GREP_MATCHES) break
+      const scan = async (file: string): Promise<string[]> => {
         let info
         try {
           info = await stat(file)
         } catch {
-          continue
+          return []
         }
-        if (!info.isFile() || info.size > MAX_GREP_FILE_BYTES) continue
+        if (!info.isFile() || info.size > MAX_GREP_FILE_BYTES) return []
 
         let content: string
         try {
           content = await readFile(file, 'utf8')
         } catch {
-          continue
+          return []
         }
-        if (content.includes('\u0000')) continue
+        if (content.includes('\u0000')) return []
 
         const rel = relative(runtime.workspace, file).split(sep).join('/')
         const lines = content.split(/\r?\n/)
-        for (let index = 0; index < lines.length && results.length < MAX_GREP_MATCHES; index++) {
+        const hits: string[] = []
+        for (let index = 0; index < lines.length; index++) {
           if (!regex.test(lines[index]!)) continue
-          results.push(`${rel}:${index + 1}:${lines[index]!.slice(0, 240)}`)
+          hits.push(`${rel}:${index + 1}:${lines[index]!.slice(0, 240)}`)
+        }
+        return hits
+      }
+
+      const BATCH = 8
+      for (let start = 0; start < candidates.length && results.length < MAX_GREP_MATCHES; start += BATCH) {
+        const batch = candidates.slice(start, start + BATCH)
+        const found = await Promise.all(batch.map((file) => scan(file)))
+        for (const hits of found) {
+          for (const hit of hits) {
+            if (results.length >= MAX_GREP_MATCHES) break
+            results.push(hit)
+          }
         }
       }
 
@@ -448,7 +554,15 @@ export function buildTools(runtime: ToolRuntime) {
     run: async ({ path, content }) => {
       const target = resolveWorkspacePath(runtime, path)
       const before = existsSync(target.abs) ? await readFile(target.abs, 'utf8').catch(() => '') : ''
-      const diff = createDiff(target.abs, before, content, target.rel)
+      // Rewriting a CRLF file with LF turns a one-line change into a whole-file
+      // diff. Preserve what the file already uses; new files keep the model's
+      // content untouched.
+      const eol = before ? detectEol(before) : undefined
+      const next =
+        !eol || eol === '\n'
+          ? content.replace(/\r\n/g, '\n')
+          : content.replace(/\r?\n/g, '\r\n')
+      const diff = createDiff(target.abs, before, next, target.rel)
 
       await permission(runtime, {
         tool: 'write',
@@ -459,9 +573,9 @@ export function buildTools(runtime: ToolRuntime) {
       })
 
       await mkdir(dirname(target.abs), { recursive: true })
-      await writeFile(target.abs, content, 'utf8')
+      await writeFile(target.abs, next, 'utf8')
       return {
-        output: `Scritto ${target.rel} (${content.length} caratteri).`,
+        output: `Scritto ${target.rel} (${next.length} caratteri).`,
         summary: `${target.rel} · +${diff.added} / -${diff.removed}`,
         diff
       }
@@ -532,26 +646,44 @@ export function buildTools(runtime: ToolRuntime) {
           risk: /rm\s+-rf|sudo|chmod\s+777|mkfs|dd\s+if=/i.test(command) ? 'high' : 'medium',
           command
         },
-        command.trim()
+        { commandPrefix: command.trim() }
       )
 
       const execute = (): Promise<ToolOutcome> =>
         new Promise<ToolOutcome>((resolvePromise) => {
         const started = Date.now()
+        // A shell is a process tree: killing only the shell leaves dev servers,
+        // deploys and watchers alive. `detached` makes the child a group leader
+        // on POSIX, so the whole tree can be signalled at once.
         const child = spawn(runtime.platform.shell.command, [...runtime.platform.shell.args, command], {
           cwd: runtime.workspace,
           env: process.env,
-          signal: runtime.signal
+          signal: runtime.signal,
+          detached: !runtime.platform.isWindows
         })
 
         let stdout = ''
         let stderr = ''
         let settled = false
 
+        const killTree = (signal: NodeJS.Signals): void => {
+          if (!child.pid) return
+          if (runtime.platform.isWindows) {
+            spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
+            return
+          }
+          try {
+            process.kill(-child.pid, signal)
+          } catch {
+            child.kill(signal)
+          }
+        }
+
         const finish = (code: number | null, timedOut: boolean): void => {
           if (settled) return
           settled = true
           clearTimeout(timer)
+          runtime.signal?.removeEventListener('abort', onAbort)
           const ms = Date.now() - started
           const output = [
             stdout ? `stdout:\n${stdout}` : '',
@@ -567,9 +699,15 @@ export function buildTools(runtime: ToolRuntime) {
           })
         }
 
+        const onAbort = (): void => {
+          killTree('SIGTERM')
+          setTimeout(() => killTree('SIGKILL'), 2000)
+        }
+        runtime.signal?.addEventListener('abort', onAbort)
+
         const timer = setTimeout(() => {
-          child.kill('SIGTERM')
-          setTimeout(() => child.kill('SIGKILL'), 2000)
+          killTree('SIGTERM')
+          setTimeout(() => killTree('SIGKILL'), 2000)
           finish(null, true)
         }, timeoutMs ?? 120_000)
 

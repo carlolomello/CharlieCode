@@ -50,7 +50,7 @@ export function ProjectWizard({
   const [openBody, setOpenBody] = useState<string | null>(null)
 
   const loadPreview = useCallback(
-    async (next: OnboardingAnswers): Promise<void> => {
+    async (next: OnboardingAnswers): Promise<boolean> => {
       setBusy(true)
       setError(null)
       try {
@@ -62,8 +62,10 @@ export function ProjectWizard({
         setAgentsText(preview.agentsMd)
         setSkillIds(preview.skills.map((skill) => skill.id))
         setAutoApprove(preview.autoApproveCommands)
+        return true
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : String(cause))
+        return false
       } finally {
         setBusy(false)
       }
@@ -361,7 +363,9 @@ export function ProjectWizard({
               <button
                 className="primary"
                 onClick={() => {
-                  void loadPreview(answers).then(() => setStep(1))
+                  void loadPreview(answers).then((ok) => {
+                    if (ok) setStep(1)
+                  })
                 }}
                 disabled={busy}
               >

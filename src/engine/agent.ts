@@ -261,11 +261,9 @@ export async function runAgent(
         })
 
         const allow =
-          role === 'explorer'
+          role === 'explorer' || role === 'reviewer'
             ? ['read', 'ls', 'glob', 'grep']
-            : role === 'reviewer'
-              ? ['read', 'ls', 'glob', 'grep', 'bash']
-              : undefined
+            : undefined
 
         const started = Date.now()
 

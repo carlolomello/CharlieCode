@@ -134,6 +134,7 @@ export default function App() {
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
   const [attachError, setAttachError] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
+  const [showJump, setShowJump] = useState(false)
   const [permission, setPermission] = useState<PermissionEnvelope | null>(null)
   const [wizardOpen, setWizardOpen] = useState(false)
   /** Workspace whose onboarding wizard is open, if any. */
@@ -261,7 +262,16 @@ export default function App() {
               }
             case 'delta':
               // Subagent text belongs to its own card, not to the main answer.
-              if (event.agentId) return item
+              if (event.agentId) {
+                return {
+                  ...item,
+                  subagents: (item.subagents ?? []).map((run) =>
+                    run.agentId === event.agentId
+                      ? { ...run, text: `${run.text ?? ''}${event.text}` }
+                      : run
+                  )
+                }
+              }
               return { ...item, content: item.content + event.text }
             case 'tool-call':
               return {
@@ -399,7 +409,35 @@ export default function App() {
     const node = scrollRef.current
     if (!node || !stickToBottom.current) return
     node.scrollTop = node.scrollHeight
+    setShowJump(false)
   }, [items])
+
+  // Esc closes the topmost overlay. The permission prompt is deliberately
+  // excluded: it requires an explicit decision.
+  useEffect(() => {
+    const onKey = (event: globalThis.KeyboardEvent): void => {
+      if (event.key !== 'Escape' || permission) return
+      if (teamPreview) {
+        setTeamPreview(false)
+        return
+      }
+      if (projectWizard) {
+        setProjectWizard(null)
+        return
+      }
+      if (wizardOpen) {
+        setWizardOpen(false)
+        return
+      }
+      if (settingsOpen) {
+        setSettingsOpen(false)
+        return
+      }
+      if (changesOpen) setChangesOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [permission, teamPreview, projectWizard, wizardOpen, settingsOpen, changesOpen])
 
   // Give the keyboard back as soon as a turn ends.
   useEffect(() => {
@@ -523,16 +561,20 @@ export default function App() {
   }, [models])
 
   const startNewChat = useCallback((): void => {
+    // Leaving a running turn in the background would keep burning tokens (and
+    // writing) in a chat the user can no longer see.
+    if (streamingId) void window.charliecode.stopChat(streamingId)
     setSessionId(null)
     setItems([])
     setInput('')
     setAttachments([])
     setAttachError(null)
     setStreamingId(null)
+    setShowJump(false)
     permissionRef.current = null
     permissionQueue.current = []
     setPermission(null)
-  }, [])
+  }, [streamingId])
 
   /** Projects in the sidebar: the open one first, then the recent ones. */
   const projects = useMemo(() => {
@@ -583,6 +625,21 @@ export default function App() {
   }, [refreshSessions, startNewChat])
 
   const openSession = useCallback(async (id: string): Promise<void> => {
+    // One conversation at a time: stop the previous turn before swapping the
+    // transcript, otherwise its events would land in the wrong chat.
+    if (streamingId) {
+      await window.charliecode.stopChat(streamingId)
+      setStreamingId(null)
+    }
+    // Composer state belongs to the chat, not to the window.
+    setInput('')
+    setAttachments([])
+    setAttachError(null)
+    setShowJump(false)
+    permissionRef.current = null
+    permissionQueue.current = []
+    setPermission(null)
+
     setLoadingSession(true)
     try {
       const session: Session | null = await window.charliecode.loadSession(id)
@@ -595,24 +652,22 @@ export default function App() {
     } finally {
       setLoadingSession(false)
     }
-  }, [])
+  }, [streamingId])
 
   const removeSession = useCallback(
     async (id: string): Promise<void> => {
-      const target = sessions.find((session) => session.id === id)
-      if (!window.confirm(`Eliminare la chat "${target?.title ?? id}"?`)) return
       await window.charliecode.deleteSession(id)
       if (sessionId === id) startNewChat()
       await refreshSessions()
     },
-    [refreshSessions, sessionId, sessions, startNewChat]
+    [refreshSessions, sessionId, startNewChat]
   )
 
   const renameSession = useCallback(
-    async (id: string, current: string): Promise<void> => {
-      const title = window.prompt('Nuovo titolo', current)
-      if (!title?.trim()) return
-      await window.charliecode.renameSession(id, title)
+    async (id: string, title: string): Promise<void> => {
+      const trimmed = title.trim()
+      if (!trimmed) return
+      await window.charliecode.renameSession(id, trimmed)
       await refreshSessions()
     },
     [refreshSessions]
@@ -766,7 +821,7 @@ export default function App() {
       )
       setStreamingId(null)
     }
-  }, [attachments, effort, input, mode, modelKey, sessionId, streamingId, workspace])
+  }, [attachments, effort, input, mode, modelKey, sessionId, streamingId, teamMode, workspace])
 
   const stop = useCallback(async (): Promise<void> => {
     if (!streamingId) return
@@ -1044,6 +1099,14 @@ export default function App() {
 
         {errors.length > 0 && (
           <div className="banner warn">
+            <button
+              className="banner-close"
+              onClick={() => setErrors([])}
+              title="Chiudi avvisi"
+              aria-label="Chiudi avvisi"
+            >
+              ✕
+            </button>
             {errors.map((error) => (
               <div key={error.providerId}>
                 <strong>{error.providerLabel}</strong>: {error.message}
@@ -1059,7 +1122,9 @@ export default function App() {
           ref={scrollRef}
           onScroll={(event) => {
             const node = event.currentTarget
-            stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 90
+            const distance = node.scrollHeight - node.scrollTop - node.clientHeight
+            stickToBottom.current = distance < 90
+            setShowJump(distance >= 90)
           }}
         >
           {needsSetup ? (
@@ -1237,6 +1302,21 @@ export default function App() {
           )}
         </main>
 
+        {showJump && (
+          <button
+            className="jump-bottom"
+            onClick={() => {
+              stickToBottom.current = true
+              setShowJump(false)
+              scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
+            }}
+            title="Torna all'ultimo messaggio"
+            aria-label="Torna all'ultimo messaggio"
+          >
+            ↓
+          </button>
+        )}
+
         <footer
           className={`composer ${dragging ? 'dragging' : ''}`}
           onDragOver={(event) => {
@@ -1351,7 +1431,6 @@ export default function App() {
       {wizardOpen && (
         <SetupWizard
           providers={providers}
-          onRefreshRouters={refreshRouters}
           onSetKey={wizardSetKey}
           onToggleProvider={wizardToggle}
           onAddProvider={wizardAddProvider}

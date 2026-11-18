@@ -113,6 +113,43 @@ function isAllowedExternal(url: string): boolean {
   }
 }
 
+/**
+ * Links the user clicked are untrusted content. Known documentation hosts open
+ * directly; anything else asks first, with the full URL visible. Silently
+ * refusing a link (the old allowlist) looked like a broken click.
+ */
+async function openExternalWithConsent(rawUrl: string): Promise<boolean> {
+  let url: URL
+  try {
+    url = new URL(rawUrl)
+  } catch {
+    return false
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return false
+
+  if (isAllowedExternal(rawUrl)) {
+    await shell.openExternal(rawUrl)
+    return true
+  }
+
+  const options: Electron.MessageBoxOptions = {
+    type: 'question',
+    buttons: ['Apri nel browser', 'Annulla'],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+    message: 'Aprire questo link?',
+    detail: rawUrl
+  }
+  const parent = BrowserWindow.getFocusedWindow()
+  const { response } = parent
+    ? await dialog.showMessageBox(parent, options)
+    : await dialog.showMessageBox(options)
+  if (response !== 0) return false
+  await shell.openExternal(rawUrl)
+  return true
+}
+
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1320,
@@ -135,7 +172,7 @@ function createWindow(): BrowserWindow {
   window.once('ready-to-show', () => window.show())
 
   window.webContents.setWindowOpenHandler(({ url }) => {
-    if (isAllowedExternal(url)) void shell.openExternal(url)
+    void openExternalWithConsent(url)
     return { action: 'deny' }
   })
 
@@ -541,8 +578,8 @@ hanno priorità su queste.
   })
 
   ipcMain.handle('charliecode:open-external', async (_event, url: string): Promise<void> => {
-    if (!isAllowedExternal(url)) throw new Error(`URL non consentito: ${url}`)
-    await shell.openExternal(url)
+    const opened = await openExternalWithConsent(url)
+    if (!opened && !/^https?:/i.test(url)) throw new Error(`URL non consentito: ${url}`)
   })
 
   ipcMain.handle('charliecode:sessions:list', async (): Promise<SessionSummary[]> => {
@@ -972,14 +1009,30 @@ if (process.platform === 'darwin' && !app.isPackaged) {
   }
 }
 
-app.whenReady().then(() => {
-  registerIpc()
-  createWindow()
+// Two instances would write the same config, sessions and context sidecars.
+// The second one hands focus to the first and exits.
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+if (!gotSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    const [window] = BrowserWindow.getAllWindows()
+    if (!window) return
+    if (window.isMinimized()) window.restore()
+    window.show()
+    window.focus()
   })
-})
+
+  app.whenReady().then(() => {
+    registerIpc()
+    createWindow()
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    })
+  })
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

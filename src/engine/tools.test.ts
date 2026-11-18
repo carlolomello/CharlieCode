@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createPlatform } from './platform'
-import { buildTools, DeniedError, resolveWorkspacePath, toolLogFromEvent, type ToolRuntime } from './tools'
+import { buildTools, DeniedError, matchesApprovedCommand, resolveWorkspacePath, toolLogFromEvent, type ToolRuntime } from './tools'
 import type { EngineEvent, PermissionDecision, PermissionRequest } from './types'
 
 type AnyTool = { execute?: (input: unknown, options?: unknown) => Promise<unknown> }
@@ -76,6 +76,12 @@ describe('file tools', () => {
     expect(output).toContain('riga due')
   })
 
+  it('preserva i fine riga CRLF quando riscrive un file esistente', async () => {
+    await writeFile(join(workspace, 'win.txt'), 'a\r\nb\r\n')
+    await run('write', { path: 'win.txt', content: 'a\nb\nc\n' })
+    expect(await readFile(join(workspace, 'win.txt'), 'utf8')).toBe('a\r\nb\r\nc\r\n')
+  })
+
   it('trova i file con glob e il testo con grep', async () => {
     await writeFile(join(workspace, 'one.ts'), 'export const x = 1\n')
     await writeFile(join(workspace, 'two.ts'), 'export const y = 2\n')
@@ -100,6 +106,40 @@ describe('permissions', () => {
     await writeFile(join(workspace, 'auto.txt'), 'x')
     await run('read', { path: 'auto.txt' }, runtime({ autoApprove: ['read'] }))
     expect(requests).toHaveLength(0)
+  })
+
+  it('chiede sempre permesso per una lettura fuori dal progetto', async () => {
+    decision = 'deny'
+    const output = await run(
+      'read',
+      { path: '../../etc/passwd' },
+      runtime({ autoApprove: ['read'] })
+    )
+    expect(output).toContain('negat')
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.tool).toBe('read')
+    expect(requests[0]?.risk).toBe('high')
+  })
+
+  it('un comando composto non eredita l’auto-approvazione del prefisso', async () => {
+    decision = 'deny'
+    const output = await run(
+      'bash',
+      { command: 'git status && echo pwned' },
+      runtime({ autoApproveCommands: ['git status'] })
+    )
+    expect(output).toContain('negat')
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.command).toBe('git status && echo pwned')
+  })
+
+  it('un comando singolo con lo stesso prefisso resta auto-approvato', () => {
+    expect(matchesApprovedCommand('git status --short', ['git status'])).toBe(true)
+    expect(matchesApprovedCommand('git status', ['git status'])).toBe(true)
+    expect(matchesApprovedCommand('git statusx', ['git status'])).toBe(false)
+    expect(matchesApprovedCommand('git status | sh', ['git status'])).toBe(false)
+    expect(matchesApprovedCommand('git status; rm -rf /', ['git status'])).toBe(false)
+    expect(matchesApprovedCommand('git commit -m "a; b"', ['git commit'])).toBe(true)
   })
 
   it('DeniedError è un errore riconoscibile', () => {

@@ -6,7 +6,6 @@ type Path = 'openrouter' | 'freellmapi' | 'local' | 'custom' | 'cli'
 
 interface SetupWizardProps {
   providers: ProviderStatus[]
-  onRefreshRouters: () => Promise<void>
   onSetKey: (providerId: string, key: string) => Promise<void>
   onToggleProvider: (providerId: string, enabled: boolean) => Promise<void>
   onAddProvider: (payload: {
@@ -72,7 +71,6 @@ function CopyRow({ command }: { command: string }): React.JSX.Element {
 
 export function SetupWizard({
   providers,
-  onRefreshRouters,
   onSetKey,
   onToggleProvider,
   onAddProvider,
@@ -90,12 +88,12 @@ export function SetupWizard({
   const scan = useCallback(async (): Promise<void> => {
     setScanning(true)
     try {
+      // One probe, not two: the app-level refresh happens when the wizard closes.
       setRouters(await window.charliecode.routers())
-      await onRefreshRouters()
     } finally {
       setScanning(false)
     }
-  }, [onRefreshRouters])
+  }, [])
 
   useEffect(() => {
     void scan()
@@ -158,7 +156,13 @@ export function SetupWizard({
               <button
                 key={entry.id}
                 className={`wizard-path ${path === entry.id ? 'active' : ''}`}
-                onClick={() => setPath(entry.id)}
+                onClick={() => {
+                  setPath(entry.id)
+                  // A key typed for OpenRouter must not follow the user into
+                  // the FreeLLMAPI or custom form.
+                  setKeyDraft('')
+                  setKeyError(null)
+                }}
               >
                 <span className="wizard-path-head">
                   <span>{entry.label}</span>
