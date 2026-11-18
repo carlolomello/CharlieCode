@@ -967,6 +967,38 @@ button.ghost.small {
   border-color: var(--accent);
 }
 
+.composer-context {
+  max-width: 920px;
+  margin: 7px auto 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 18px;
+}
+
+.ctx-badge {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 9px;
+  white-space: nowrap;
+}
+
+.ctx-badge.compacted {
+  color: var(--warn);
+  border-color: #4a3a1c;
+  background: #221b0f;
+}
+
+.ctx-notice {
+  font-size: 11.5px;
+  color: var(--accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .composer-actions {
   max-width: 920px;
   margin: 9px auto 0;

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import type { Platform } from './platform'
 import type {
   NewSessionInput,
@@ -46,6 +46,62 @@ function sessionPath(platform: Platform, id: string): string {
 
 function now(): string {
   return new Date().toISOString()
+}
+
+/**
+ * One writer per session at a time.
+ *
+ * A streamed answer is persisted while it is still being generated (so a crash
+ * does not lose it) and the final version replaces the draft. Without a lock
+ * two `read → modify → write` cycles interleave and one silently wins,
+ * dropping a message. The lock is a per-session promise chain, not a mutex:
+ * different sessions never wait for each other.
+ */
+const locks = new Map<string, Promise<void>>()
+
+function lockKey(platform: Platform, id: string): string {
+  return `${platform.configDir}\u0000${id}`
+}
+
+async function withSessionLock<T>(
+  platform: Platform,
+  id: string,
+  task: () => Promise<T>
+): Promise<T> {
+  const key = lockKey(platform, id)
+  const previous = locks.get(key) ?? Promise.resolve()
+  let release: () => void = () => undefined
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const tail = previous.then(() => gate)
+  locks.set(key, tail)
+
+  await previous.catch(() => undefined)
+  try {
+    return await task()
+  } finally {
+    release()
+    // Drop the entry only when nobody queued behind us.
+    if (locks.get(key) === tail) locks.delete(key)
+  }
+}
+
+/**
+ * `listSessions` runs on every window focus and after every turn. Parsing all
+ * JSONL files each time is wasted work on long chats, so summaries are cached
+ * by file mtime + size: a write always changes at least one of them.
+ */
+interface SummaryCacheEntry {
+  mtimeMs: number
+  size: number
+  summary: SessionSummary
+}
+
+const summaryCache = new Map<string, SummaryCacheEntry>()
+
+function invalidateSummary(platform: Platform, id: string): void {
+  summaryCache.delete(lockKey(platform, id))
 }
 
 /** First meaningful line of the first user message, trimmed for the sidebar. */
@@ -104,6 +160,7 @@ export async function createSession(
 
   await mkdir(sessionsDir(platform), { recursive: true })
   await writeAtomic(sessionPath(platform, session.id), serialize(toHeader(session), []))
+  invalidateSummary(platform, session.id)
   return session
 }
 
@@ -147,11 +204,23 @@ export async function listSessions(platform: Platform): Promise<SessionSummary[]
 
   for (const entry of entries) {
     if (!entry.endsWith(SESSION_EXT)) continue
-    const session = await readSession(platform, entry.slice(0, -SESSION_EXT.length))
+    const id = entry.slice(0, -SESSION_EXT.length)
+    const path = sessionPath(platform, id)
+    const info = await stat(path).catch(() => undefined)
+    if (!info) continue
+
+    const key = lockKey(platform, id)
+    const cached = summaryCache.get(key)
+    if (cached && cached.mtimeMs === info.mtimeMs && cached.size === info.size) {
+      summaries.push(cached.summary)
+      continue
+    }
+
+    const session = await readSession(platform, id)
     if (!session) continue
 
     const lastMessage = [...session.messages].reverse().find((message) => message.content.trim())
-    summaries.push({
+    const summary: SessionSummary = {
       id: session.id,
       title: session.title,
       createdAt: session.createdAt,
@@ -161,7 +230,9 @@ export async function listSessions(platform: Platform): Promise<SessionSummary[]
       effort: session.effort,
       messageCount: session.messages.length,
       preview: (lastMessage?.content ?? '').replace(/\s+/g, ' ').slice(0, 120)
-    })
+    }
+    summaryCache.set(key, { mtimeMs: info.mtimeMs, size: info.size, summary })
+    summaries.push(summary)
   }
 
   summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
@@ -174,9 +245,10 @@ export async function saveSession(platform: Platform, session: Session): Promise
     sessionPath(platform, session.id),
     serialize({ ...toHeader(session), updatedAt: session.updatedAt || now() }, session.messages)
   )
+  invalidateSummary(platform, session.id)
 }
 
-export async function appendMessage(
+async function appendMessageUnlocked(
   platform: Platform,
   id: string,
   message: StoredMessage
@@ -194,33 +266,78 @@ export async function appendMessage(
   return session
 }
 
-// SessionPatch is declared in session-types.ts and re-exported above.
+export async function appendMessage(
+  platform: Platform,
+  id: string,
+  message: StoredMessage
+): Promise<Session> {
+  return withSessionLock(platform, id, () => appendMessageUnlocked(platform, id, message))
+}
 
-// SessionPatch is declared in session-types.ts and re-exported above.
+/**
+ * Inserts a message or replaces the one with the same id.
+ *
+ * A streaming answer is written as a draft while it grows; the final version
+ * has the same id and must replace the draft, not be appended after it.
+ */
+async function upsertMessageUnlocked(
+  platform: Platform,
+  id: string,
+  message: StoredMessage
+): Promise<Session> {
+  const session = (await readSession(platform, id)) ?? (await createSession(platform, { id }))
+  const index = session.messages.findIndex((existing) => existing.id === message.id)
+
+  if (index >= 0) {
+    session.messages[index] = message
+  } else {
+    session.messages.push(message)
+    if (session.title === 'Nuova chat' && message.role === 'user' && message.content.trim()) {
+      session.title = deriveTitle(message.content)
+    }
+  }
+
+  session.updatedAt = message.createdAt || now()
+  await saveSession(platform, session)
+  return session
+}
+
+export async function upsertMessage(
+  platform: Platform,
+  id: string,
+  message: StoredMessage
+): Promise<Session> {
+  return withSessionLock(platform, id, () => upsertMessageUnlocked(platform, id, message))
+}
 
 export async function updateSession(
   platform: Platform,
   id: string,
   patch: SessionPatch
 ): Promise<Session | undefined> {
-  const session = await readSession(platform, id)
-  if (!session) return undefined
+  return withSessionLock(platform, id, async () => {
+    const session = await readSession(platform, id)
+    if (!session) return undefined
 
-  if (patch.title !== undefined) session.title = patch.title
-  if (patch.modelKey !== undefined) session.modelKey = patch.modelKey
-  if (patch.effort !== undefined) session.effort = patch.effort
-  if (patch.workspacePath !== undefined) session.workspacePath = patch.workspacePath
-  session.updatedAt = now()
+    if (patch.title !== undefined) session.title = patch.title
+    if (patch.modelKey !== undefined) session.modelKey = patch.modelKey
+    if (patch.effort !== undefined) session.effort = patch.effort
+    if (patch.workspacePath !== undefined) session.workspacePath = patch.workspacePath
+    session.updatedAt = now()
 
-  await saveSession(platform, session)
-  return session
+    await saveSession(platform, session)
+    return session
+  })
 }
 
 export async function deleteSession(platform: Platform, id: string): Promise<boolean> {
-  const path = sessionPath(platform, id)
-  if (!existsSync(path)) return false
-  await rm(path, { force: true })
-  return true
+  return withSessionLock(platform, id, async () => {
+    const path = sessionPath(platform, id)
+    if (!existsSync(path)) return false
+    await rm(path, { force: true })
+    invalidateSummary(platform, id)
+    return true
+  })
 }
 
 /** Messages that go to the model: no errors, no empty turns, most recent last. */

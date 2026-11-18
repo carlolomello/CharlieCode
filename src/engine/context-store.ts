@@ -1,6 +1,13 @@
 import { existsSync } from 'node:fs'
-import { readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import type { ModelMessage } from 'ai'
+import {
+  compactMessages,
+  contextStats,
+  sanitizeMessages,
+  trimToolOutputs,
+  type ContextStats
+} from './context'
 import type { Platform } from './platform'
 
 /**
@@ -9,73 +16,27 @@ import type { Platform } from './platform'
  *
  * The JSONL is what the UI shows and what survives a reload; this sidecar is
  * what keeps the model coherent across turns when tools are involved.
+ *
+ * Compaction never rewrites the sidecar on read: the full context stays on
+ * disk, the model receives a fitted version, and only an explicit "Compatta"
+ * from the user replaces the stored context with its summary.
  */
 
 const CONTEXT_DIR = 'sessions'
 const CONTEXT_SUFFIX = '.context.json'
+/** One pathological tool dump must not make every future write huge. */
+const WRITE_TOOL_CHARS = 80_000
+
+export { sanitizeMessages } from './context'
+export type { ContextStats } from './context'
 
 function contextPath(platform: Platform, sessionId: string): string {
   const safe = sessionId.replace(/[^a-zA-Z0-9._-]/g, '')
   return platform.configPath(CONTEXT_DIR, `${safe}${CONTEXT_SUFFIX}`)
 }
 
-/**
- * Assistant text whose only content is "I already did this". A weak model reads
- * it back and continues the refusal instead of working: it is the one message
- * class that must never be replayed.
- */
-const META_REFUSAL =
-  /(già\s+(stata\s+)?(completata|effettuata|analizzata)|già\s+completato|ho\s+già\s+(analizzato|fatto)|already\s+(completed|analysed|analyzed|done))/i
-
-function isReasoningPart(part: unknown): boolean {
-  return (
-    typeof part === 'object' &&
-    part !== null &&
-    (part as { type?: unknown }).type === 'reasoning'
-  )
-}
-
-function textOf(content: ModelMessage['content']): string {
-  if (typeof content === 'string') return content
-  return content
-    .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
-    .map((part) => part.text)
-    .join(' ')
-}
-
-/**
- * Cleans a model context before it is stored or replayed:
- *  - reasoning parts are internal monologue and must never go back to the model;
- *  - an assistant turn with no tool call that only says "already analysed" is
- *    poison: replaying it teaches the model to repeat itself instead of working.
- */
-export function sanitizeMessages(messages: ModelMessage[]): ModelMessage[] {
-  const cleaned: ModelMessage[] = []
-
-  for (const message of messages) {
-    let content = message.content
-    if (typeof content !== 'string') {
-      const parts = content.filter((part) => !isReasoningPart(part))
-      if (parts.length === 0) continue
-      content = parts as typeof content
-    }
-
-    if (message.role === 'assistant') {
-      const text = textOf(content)
-      const hasToolCall =
-        Array.isArray(content) && content.some((part) => part.type === 'tool-call')
-      if (!hasToolCall && text.length < 600 && META_REFUSAL.test(text)) continue
-    }
-
-    cleaned.push(
-      content === message.content ? message : ({ ...message, content } as ModelMessage)
-    )
-  }
-
-  return cleaned
-}
-
-export async function readAgentContext(
+/** Raw stored context, sanitized but not compacted. */
+export async function readAgentContextRaw(
   platform: Platform,
   sessionId: string
 ): Promise<ModelMessage[]> {
@@ -90,13 +51,65 @@ export async function readAgentContext(
   }
 }
 
+/**
+ * Context for the next turn. With a budget, the oldest turns are replaced by a
+ * summary so a small model can keep working; without one, the stored context
+ * is returned untouched.
+ */
+export async function readAgentContext(
+  platform: Platform,
+  sessionId: string,
+  budget?: number
+): Promise<ModelMessage[]> {
+  const stored = await readAgentContextRaw(platform, sessionId)
+  if (!budget || stored.length === 0) return stored
+  return compactMessages(stored, { budget }).messages
+}
+
 export async function writeAgentContext(
   platform: Platform,
   sessionId: string,
   messages: ModelMessage[]
 ): Promise<void> {
   const path = contextPath(platform, sessionId)
-  await writeFile(path, `${JSON.stringify(sanitizeMessages(messages))}\n`, 'utf8')
+  const cleaned = trimToolOutputs(sanitizeMessages(messages), WRITE_TOOL_CHARS).messages
+  await mkdir(platform.configPath(CONTEXT_DIR), { recursive: true })
+  await writeFile(path, `${JSON.stringify(cleaned)}\n`, 'utf8')
+}
+
+/**
+ * Stats for the badge in the composer. Legacy sessions have no sidecar: the
+ * caller passes the history rebuilt from the transcript as a fallback.
+ */
+export async function readAgentContextStats(
+  platform: Platform,
+  sessionId: string,
+  budget: number,
+  fallback: ModelMessage[] = []
+): Promise<ContextStats> {
+  const stored = await readAgentContextRaw(platform, sessionId)
+  return contextStats(stored.length > 0 ? stored : fallback, budget)
+}
+
+/**
+ * Explicit compaction: replaces the stored context with the fitted version.
+ * The JSONL transcript is untouched, so the chat stays readable and the
+ * sidecar can always be rebuilt from it.
+ */
+export async function compactAgentContext(
+  platform: Platform,
+  sessionId: string,
+  budget: number,
+  fallback: ModelMessage[] = []
+): Promise<ContextStats> {
+  const stored = await readAgentContextRaw(platform, sessionId)
+  const source = stored.length > 0 ? stored : fallback
+  const result = compactMessages(source, { budget })
+  const path = contextPath(platform, sessionId)
+  const cleaned = trimToolOutputs(result.messages, WRITE_TOOL_CHARS).messages
+  await mkdir(platform.configPath(CONTEXT_DIR), { recursive: true })
+  await writeFile(path, `${JSON.stringify(cleaned)}\n`, 'utf8')
+  return contextStats(cleaned, budget)
 }
 
 export async function deleteAgentContext(platform: Platform, sessionId: string): Promise<void> {

@@ -24,7 +24,7 @@ import type {
   WorkspaceChanges
 } from '../shared/ipc'
 import type { Session, SessionSummary } from '../engine/sessions'
-import type { ExternalWorkerConfig, FileDiff, PermissionDecision } from '../engine/types'
+import type { ContextStats, ExternalWorkerConfig, FileDiff, PermissionDecision } from '../engine/types'
 
 const api: CharlieCodeApi = {
   info: () => ipcRenderer.invoke('charliecode:info') as Promise<AppInfo>,
@@ -66,6 +66,10 @@ const api: CharlieCodeApi = {
     ipcRenderer.invoke('charliecode:sessions:delete', id) as Promise<boolean>,
   renameSession: (id: string, title: string) =>
     ipcRenderer.invoke('charliecode:sessions:rename', id, title) as Promise<Session | null>,
+  contextStats: (sessionId: string, modelKey?: string) =>
+    ipcRenderer.invoke('charliecode:context:stats', sessionId, modelKey) as Promise<ContextStats>,
+  compactContext: (sessionId: string, modelKey?: string) =>
+    ipcRenderer.invoke('charliecode:context:compact', sessionId, modelKey) as Promise<ContextStats>,
 
   startChat: (payload: ChatStartPayload) =>
     ipcRenderer.invoke('charliecode:chat:start', payload) as Promise<ChatStartResult>,

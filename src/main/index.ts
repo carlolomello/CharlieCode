@@ -19,10 +19,13 @@ import {
   writeCredentials
 } from '../engine/config'
 import {
+  compactAgentContext,
   deleteAgentContext,
   readAgentContext,
+  readAgentContextStats,
   writeAgentContext
 } from '../engine/context-store'
+import { compactMessages, contextBudget } from '../engine/context'
 import { agentModels, detectAgentClis, runExternalAgent } from '../engine/external-agents'
 import { dockerAvailable, hasBinary, probeEndpoint, scanLocalEndpoints } from '../engine/local'
 import { createPlatform } from '../engine/platform'
@@ -50,6 +53,7 @@ import {
   readSession,
   toChatHistory,
   updateSession,
+  upsertMessage,
   type SessionSummary
 } from '../engine/sessions'
 import { toolLogFromEvent } from '../engine/tools'
@@ -227,6 +231,15 @@ async function providerStatuses(config: CharlieCodeConfig): Promise<ProviderStat
 function rememberWorkspace(config: CharlieCodeConfig, workspace: string): CharlieCodeConfig {
   const recent = [workspace, ...config.recentWorkspaces.filter((entry) => entry !== workspace)]
   return { ...config, workspace, recentWorkspaces: recent.slice(0, 8) }
+}
+
+/** Token budget of the model in use, for the context badge and compaction. */
+async function modelContextBudget(modelKey?: string): Promise<number> {
+  const { config } = await loadConfig(platform)
+  const { models } = await loadCatalog(platform, config)
+  const entry =
+    (modelKey ? findModel(models, modelKey) : undefined) ?? pickDefaultModel(models, config)
+  return contextBudget(entry?.caps)
 }
 
 /** Wires one permission request to the renderer and waits for the answer. */
@@ -603,6 +616,32 @@ hanno priorità su queste.
     return (await updateSession(platform, id, { title: trimmed })) ?? null
   })
 
+  ipcMain.handle(
+    'charliecode:context:stats',
+    async (_event, sessionId: string, modelKey?: string) => {
+      const budget = await modelContextBudget(modelKey)
+      const session = await readSession(platform, sessionId)
+      // Legacy sessions predate the sidecar: measure the transcript instead of
+      // showing 0 tokens for a conversation that is clearly long.
+      const fallback = session
+        ? await materializeHistory(platform, toChatHistory(session))
+        : []
+      return readAgentContextStats(platform, sessionId, budget, fallback)
+    }
+  )
+
+  ipcMain.handle(
+    'charliecode:context:compact',
+    async (_event, sessionId: string, modelKey?: string) => {
+      const budget = await modelContextBudget(modelKey)
+      const session = await readSession(platform, sessionId)
+      const fallback = session
+        ? await materializeHistory(platform, toChatHistory(session))
+        : []
+      return compactAgentContext(platform, sessionId, budget, fallback)
+    }
+  )
+
   ipcMain.handle('charliecode:chat:permission-response', (_event, permissionId: string, decision: PermissionDecision): void => {
     permissionResolvers.get(permissionId)?.(decision)
   })
@@ -669,8 +708,37 @@ hanno priorità su queste.
         let failure: string | undefined
         let aborted = false
         let logs: ToolLog[] = []
-        let contextMessages: import('ai').ModelMessage[] | undefined
+        let fullHistory: import('ai').ModelMessage[] = []
+        let newMessages: import('ai').ModelMessage[] | undefined
         const workspace = payload.workspacePath ?? config.workspace
+
+        // The answer is persisted while it streams, so a crash or a quit does
+        // not lose ten minutes of work. Drafts and the final version share the
+        // message id, so the final `upsertMessage` replaces the draft.
+        let streamed = ''
+        let lastDraftAt = 0
+        let draftChain: Promise<void> = Promise.resolve()
+        const assistantCreatedAt = new Date().toISOString()
+
+        const flushDraft = (): void => {
+          if (!streamed.trim()) return
+          const at = Date.now()
+          if (at - lastDraftAt < 1_500) return
+          lastDraftAt = at
+          const content = streamed
+          draftChain = draftChain
+            .then(() =>
+              upsertMessage(platform, session.id, {
+                id: payload.assistantMessageId,
+                role: 'assistant',
+                content,
+                createdAt: assistantCreatedAt,
+                modelKey: usedModel
+              })
+            )
+            .then(() => undefined)
+            .catch(() => undefined)
+        }
 
         try {
           const { models } = await loadCatalog(platform, config)
@@ -678,17 +746,21 @@ hanno priorità su queste.
           // session restored from an older install). Falling back here keeps a
           // stale key from dead-ending the chat.
           const requested = findModel(models, payload.modelKey)
-          const modelKey = requested?.key ?? pickDefaultModel(models, config)?.key ?? payload.modelKey
+          const activeModel = requested ?? pickDefaultModel(models, config)
+          const modelKey = activeModel?.key ?? payload.modelKey
           if (modelKey !== payload.modelKey) {
             usedModel = modelKey
             await updateSession(platform, session.id, { modelKey })
           }
           const stored = (await readSession(platform, session.id)) ?? session
           const savedContext = await readAgentContext(platform, session.id)
-          const history =
+          fullHistory =
             savedContext.length > 0
               ? savedContext
               : await materializeHistory(platform, toChatHistory(stored))
+          // The model gets a fitted context; the sidecar keeps the full one.
+          const budget = contextBudget(activeModel?.caps)
+          const history = compactMessages(fullHistory, { budget }).messages
           const projectContext = await loadProjectContext(platform, workspace)
           const system =
             payload.system ?? buildSystemPrompt(projectContext.system, workspace)
@@ -717,6 +789,10 @@ hanno priorità su queste.
               emit: (engineEvent) => {
                 if (engineEvent.type === 'tool-call' || engineEvent.type === 'tool-result') {
                   logs = toolLogFromEvent(engineEvent, logs)
+                }
+                if (engineEvent.type === 'delta' && !engineEvent.agentId) {
+                  streamed += engineEvent.text
+                  flushDraft()
                 }
                 if (engineEvent.type === 'start') usedModel = engineEvent.modelKey
                 if (engineEvent.type === 'done') {
@@ -750,7 +826,7 @@ hanno priorità su queste.
           usedModel = result.modelKey || usedModel
           aborted = result.aborted
           if (result.error) failure = result.error
-          if (result.messages.length > 0) contextMessages = result.messages
+          if (result.newMessages.length > 0) newMessages = result.newMessages
         } catch (error) {
           failure = error instanceof Error ? error.message : String(error)
           if (!sender.isDestroyed()) {
@@ -769,18 +845,23 @@ hanno priorità su queste.
           }
 
           try {
-            await appendMessage(platform, session.id, {
+            // Wait for a draft already queued, then replace it with the final
+            // version: same id, no duplicate in the transcript.
+            await draftChain
+            await upsertMessage(platform, session.id, {
               id: payload.assistantMessageId,
               role: 'assistant',
-              content: text,
+              content: text || streamed,
               createdAt: new Date().toISOString(),
               modelKey: usedModel,
               error: failure,
               meta,
               ...(logs.length > 0 ? { tools: logs } : {})
             })
-            if (contextMessages) {
-              await writeAgentContext(platform, session.id, contextMessages)
+            if (newMessages) {
+              // Persist the *full* history, not the compacted one the model
+              // saw: compaction is a read-time view and must stay reversible.
+              await writeAgentContext(platform, session.id, [...fullHistory, ...newMessages])
             }
             const saved = await readSession(platform, session.id)
             if (!sender.isDestroyed()) {

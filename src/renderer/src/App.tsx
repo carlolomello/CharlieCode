@@ -4,6 +4,7 @@ import type { Session, SessionSummary, StoredMessage } from '../../engine/sessio
 import type {
   AttachmentRef,
   CatalogError,
+  ContextStats,
   EffortLevel,
   ModelEntry,
   PermissionDecision,
@@ -96,6 +97,11 @@ function shortKey(key: string): string {
   return key.length > 46 ? `${key.slice(0, 45)}…` : key
 }
 
+/** 8234 → "8.2k": compact enough for a composer badge. */
+function formatTokens(value: number): string {
+  return value >= 1000 ? `${(value / 1000).toFixed(1)}k` : String(value)
+}
+
 function modelLabel(model: ModelEntry): string {
   const free = /free/i.test(model.id)
   return `${free ? '★ ' : ''}${model.label === model.id ? shortKey(model.id) : model.label}`
@@ -135,6 +141,10 @@ export default function App() {
   const [attachError, setAttachError] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   const [showJump, setShowJump] = useState(false)
+  /** Tokens sent to the model, its budget and whether compaction is active. */
+  const [context, setContext] = useState<ContextStats | null>(null)
+  const [contextBusy, setContextBusy] = useState(false)
+  const [contextNotice, setContextNotice] = useState<string | null>(null)
   const [permission, setPermission] = useState<PermissionEnvelope | null>(null)
   const [wizardOpen, setWizardOpen] = useState(false)
   /** Workspace whose onboarding wizard is open, if any. */
@@ -176,6 +186,41 @@ export default function App() {
       setRouters(null)
     }
   }, [])
+
+  /**
+   * The badge answers "how much of the window am I using?". It is refreshed on
+   * session change and when a turn ends, not on every token.
+   */
+  const refreshContext = useCallback(async (): Promise<void> => {
+    if (!sessionId) {
+      setContext(null)
+      return
+    }
+    try {
+      setContext(await window.charliecode.contextStats(sessionId, modelKey || undefined))
+    } catch {
+      setContext(null)
+    }
+  }, [modelKey, sessionId])
+
+  const compactContext = useCallback(async (): Promise<void> => {
+    if (!sessionId || contextBusy) return
+    setContextBusy(true)
+    setContextNotice(null)
+    const before = context?.tokens ?? 0
+    try {
+      const next = await window.charliecode.compactContext(sessionId, modelKey || undefined)
+      setContext(next)
+      setContextNotice(
+        `Contesto compattato: ${formatTokens(before)} → ${formatTokens(next.tokens)} token. La chat resta completa.`
+      )
+      window.setTimeout(() => setContextNotice(null), 7000)
+    } catch (cause) {
+      setContextNotice(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setContextBusy(false)
+    }
+  }, [context?.tokens, contextBusy, modelKey, sessionId])
 
   const refreshAutoApprove = useCallback(async (): Promise<void> => {
     try {
@@ -443,6 +488,10 @@ export default function App() {
   useEffect(() => {
     if (!streamingId) inputRef.current?.focus()
   }, [streamingId])
+
+  useEffect(() => {
+    void refreshContext()
+  }, [refreshContext, streamingId])
 
   /**
    * The badge in the topbar: a cheap `git status` after every turn and on
@@ -1381,6 +1430,30 @@ export default function App() {
             rows={3}
             disabled={!modelKey || loadingSession}
           />
+          {(context || contextNotice) && (
+            <div className="composer-context">
+              {context && (
+                <span
+                  className={`ctx-badge ${context.compacted ? 'compacted' : ''}`}
+                  title={`Il prossimo turno invia ${context.tokens} token su un budget di ${context.budget}. Contesto salvato: ${context.totalTokens} token in ${context.messages} messaggi.`}
+                >
+                  contesto {formatTokens(context.tokens)} / {formatTokens(context.budget)}
+                  {context.compacted ? ` · da ${formatTokens(context.totalTokens)}` : ''}
+                </span>
+              )}
+              {context?.compacted && (
+                <button
+                  className="ghost small"
+                  onClick={() => void compactContext()}
+                  disabled={contextBusy}
+                  title="Sostituisce il contesto salvato con un riepilogo dei turni più vecchi. La chat e i file restano completi."
+                >
+                  {contextBusy ? 'Compatto…' : 'Compatta'}
+                </button>
+              )}
+              {contextNotice && <span className="ctx-notice">{contextNotice}</span>}
+            </div>
+          )}
           <div className="composer-actions">
             <input
               ref={fileInputRef}

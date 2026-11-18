@@ -1,6 +1,16 @@
 import type { ModelMessage } from 'ai'
-import { describe, expect, it } from 'vitest'
-import { sanitizeMessages } from './context-store'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import {
+  compactAgentContext,
+  readAgentContext,
+  readAgentContextRaw,
+  sanitizeMessages,
+  writeAgentContext
+} from './context-store'
+import { createPlatform, type Platform } from './platform'
 
 /**
  * The sidecar is what the model sees on the next turn. Two things in it are
@@ -68,5 +78,77 @@ describe('sanitizeMessages', () => {
     ] as unknown as ModelMessage[]
 
     expect(sanitizeMessages(messages)).toHaveLength(2)
+  })
+})
+
+describe('sidecar di contesto', () => {
+  let home: string
+  let platform: Platform
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), 'charliecode-context-'))
+    platform = createPlatform({ id: 'darwin', env: { HOME: home } })
+  })
+
+  afterEach(async () => {
+    await rm(home, { recursive: true, force: true })
+  })
+
+  function conversation(turns: number): ModelMessage[] {
+    return Array.from({ length: turns }, (_, index) => [
+      { role: 'user', content: `Richiesta ${index} ${'x'.repeat(300)}` },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: `Risposta ${index}` },
+          { type: 'tool-call', toolCallId: `c${index}`, toolName: 'read', input: { path: `f${index}.ts` } }
+        ]
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: `c${index}`,
+            toolName: 'read',
+            output: { type: 'text', value: `contenuto ${index} ${'y'.repeat(1_200)}` }
+          }
+        ]
+      }
+    ] as unknown as ModelMessage[]).flat()
+  }
+
+  it('scrive e rilegge il contesto', async () => {
+    const messages = conversation(1)
+    await writeAgentContext(platform, 's1', messages)
+    expect(await readAgentContextRaw(platform, 's1')).toHaveLength(messages.length)
+  })
+
+  it('compatta solo in lettura: il sidecar resta intero', async () => {
+    const messages = conversation(8)
+    await writeAgentContext(platform, 's1', messages)
+
+    const fitted = await readAgentContext(platform, 's1', 2_500)
+    expect(fitted[0]?.role).toBe('system')
+    expect(fitted.length).toBeLessThan(messages.length)
+    // The stored context is still the full one: compaction is a view.
+    expect(await readAgentContextRaw(platform, 's1')).toHaveLength(messages.length)
+  })
+
+  it('la compattazione esplicita sostituisce il contesto salvato', async () => {
+    const messages = conversation(8)
+    await writeAgentContext(platform, 's1', messages)
+
+    const stats = await compactAgentContext(platform, 's1', 2_500)
+    expect(stats.compacted).toBe(false)
+    expect(stats.tokens).toBeLessThanOrEqual(2_500)
+    expect((await readAgentContextRaw(platform, 's1')).length).toBeLessThan(messages.length)
+  })
+
+  it('un sidecar rotto non blocca la conversazione', async () => {
+    const { writeFile, mkdir } = await import('node:fs/promises')
+    await mkdir(platform.configPath('sessions'), { recursive: true })
+    await writeFile(platform.configPath('sessions', 's1.context.json'), '{rotto')
+    expect(await readAgentContextRaw(platform, 's1')).toEqual([])
   })
 })

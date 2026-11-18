@@ -2,6 +2,7 @@ import type { IncomingAttachment } from '../engine/types'
 import type { Session, SessionSummary } from '../engine/session-types'
 import type {
   CatalogError,
+  ContextStats,
   EffortLevel,
   EngineEvent,
   ExternalWorkerConfig,
@@ -150,6 +151,10 @@ export interface CharlieCodeApi {
   loadSession(id: string): Promise<Session | null>
   deleteSession(id: string): Promise<boolean>
   renameSession(id: string, title: string): Promise<Session | null>
+  /** Tokens used by the next turn, its budget, and whether it is compacted. */
+  contextStats(sessionId: string, modelKey?: string): Promise<ContextStats>
+  /** Replaces the stored model context with a compacted version. */
+  compactContext(sessionId: string, modelKey?: string): Promise<ContextStats>
 
   startChat(payload: ChatStartPayload): Promise<ChatStartResult>
   stopChat(requestId: string): Promise<void>

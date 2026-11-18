@@ -37,6 +37,23 @@ export interface ModelCaps {
   contextWindow: number
 }
 
+/**
+ * What the context badge shows: how many tokens the next turn sends, how big
+ * the stored conversation is, and the soft limit of the current model.
+ */
+export interface ContextStats {
+  /** Tokens the next turn will actually send to the model. */
+  tokens: number
+  /** Tokens of the full stored context, before compaction. */
+  totalTokens: number
+  /** Soft limit for this model. */
+  budget: number
+  messages: number
+  droppedMessages: number
+  /** The stored context does not fit and is compacted on read. */
+  compacted: boolean
+}
+
 export type CapsConfidence = 'guess' | 'probed' | 'manual'
 
 export interface ModelOverride {

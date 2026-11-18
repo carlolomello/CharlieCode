@@ -11,7 +11,8 @@ import {
   listSessions,
   readSession,
   toChatHistory,
-  updateSession
+  updateSession,
+  upsertMessage
 } from './sessions'
 
 let home: string
@@ -92,6 +93,44 @@ describe('sessions', () => {
     })
     expect(updated?.title).toBe('Rinominata')
     expect((await readSession(platform, session.id))?.effort).toBe('max')
+  })
+
+  it('upsert sostituisce il messaggio con lo stesso id', async () => {
+    const session = await createSession(platform)
+    await upsertMessage(platform, session.id, {
+      id: 'a1',
+      role: 'assistant',
+      content: 'bozza',
+      createdAt: '2026-01-01T10:00:00.000Z'
+    })
+    await upsertMessage(platform, session.id, {
+      id: 'a1',
+      role: 'assistant',
+      content: 'risposta finale',
+      createdAt: '2026-01-01T10:00:05.000Z'
+    })
+
+    const stored = await readSession(platform, session.id)
+    expect(stored?.messages).toHaveLength(1)
+    expect(stored?.messages[0]?.content).toBe('risposta finale')
+  })
+
+  it('append concorrenti non perdono messaggi', async () => {
+    const session = await createSession(platform)
+    await Promise.all(
+      Array.from({ length: 12 }, (_, index) =>
+        appendMessage(platform, session.id, {
+          id: `m${index}`,
+          role: 'user',
+          content: `messaggio ${index}`,
+          createdAt: `2026-01-01T10:00:${String(index).padStart(2, '0')}.000Z`
+        })
+      )
+    )
+
+    const stored = await readSession(platform, session.id)
+    expect(stored?.messages).toHaveLength(12)
+    expect(new Set(stored?.messages.map((message) => message.id)).size).toBe(12)
   })
 
   it('elimina e sopravvive a un id sconosciuto', async () => {
