@@ -47,7 +47,7 @@ pnpm dev           # app with HMR
 - **Ask before it acts.** Destructive tools hit a permission gate: *allow once*, *allow always* (per tool, or per command prefix for `bash`), *deny*. Revocable from the settings drawer.
 - **Remembers the project.** Every chat is a saved session tied to a folder; the full model context (tool calls included) is persisted, so resuming actually continues instead of replaying a transcript.
 - **Knows your rules.** `AGENTS.md` — plus `CHARLIECODE.md` and `CLAUDE.md` — in the project root and globally in `~/.charliecode/` are injected into the system prompt.
-- **Uses the CLI you already have.** If your team approved Claude Code, Cline, Gaia or OpenCode, connect it in **✦ Collega un modello → CLI esistente**: subagents then run *inside* that CLI, with its own auth, quota and logs. CharlieCode orchestrates and shows the result; it never sees a corporate key.
+- **Uses the CLI you already have.** If your team approved an agent CLI with its own login, define a profile in **✦ Collega un modello → CLI esterna**: subagents then run *inside* that CLI, with its own auth, quota and logs. CharlieCode orchestrates and shows the result; it never sees a corporate key.
 - **Free-first, zero lock-in.** One provider entry (FreeLLMAPI) routes across ~87 free tiers and picks the model itself. Add OpenAI, OpenRouter, Ollama, LM Studio, vLLM or a corporate gateway whenever you want.
 - **Speaks Markdown properly.** Headings, lists, tables, quotes and syntax-highlighted code blocks with a copy button — rendered by a small built-in renderer, not by injecting HTML into the app.
 
@@ -92,7 +92,7 @@ In the drawer you can also press **Consigli di setup** to run the advisor withou
 
 ## Skills
 
-A skill is a reusable procedure in a `SKILL.md`, the same format Claude Code uses. Two places, project first:
+A skill is a reusable procedure in a `SKILL.md`, the same format other coding agents use. Two places, project first:
 
 | Where | Path | Scope |
 | --- | --- | --- |
@@ -144,7 +144,7 @@ FreeLLMAPI is a separate project: <https://github.com/tashfeenahmed/freellmapi>.
 
 ### A CLI you already have
 
-Some teams do not hand out API keys: the approved tool is a CLI with its own login. **✦ Collega un modello → CLI esistente** finds what is installed (`claude`, `cline`, `gaia`, `opencode`, `kiro-cli`), runs one sentence through it to prove it answers, and lets you pick it as the worker for `task` subagents.
+Some teams do not hand out API keys: the approved tool is a CLI with its own login. **✦ Collega un modello → CLI esterna** lets you define that CLI as a profile — command, arguments, output format — test it with one sentence, and pick it as the worker for `task` subagents. No product is hardcoded: the profile is just JSON in `~/.charliecode/clis/`.
 
 What that means in practice:
 
@@ -300,7 +300,7 @@ The engine is the part that grows into the agent runtime, so it must be testable
 
 ## Roadmap
 
-The goal is a GUI equivalent of Claude Code / OpenCode. Each phase lands without a rewrite.
+The goal is a GUI equivalent of a terminal coding agent, with multi-agent work made visible. Each phase lands without a rewrite.
 
 **Phase 0 — foundation (done)**
 
@@ -359,7 +359,7 @@ The goal is a GUI equivalent of Claude Code / OpenCode. Each phase lands without
 
 **Phase 6 — browser control (last)**
 
-Queued deliberately, after the agent itself is solid. The goal is the OpenCode-style loop: drive a real browser, read the page, click, type, screenshot, and feed what it finds back into the same conversation — behind the same permission gate as `bash`.
+Queued deliberately, after the agent itself is solid. The goal is the terminal-agent loop: drive a real browser, read the page, click, type, screenshot, and feed what it finds back into the same conversation — behind the same permission gate as `bash`.
 
 - [ ] Browser session owned by the main process (Playwright/Chromium, or attach to an existing Chrome)
 - [ ] Tools: `browse_open`, `browse_snapshot`, `browse_click`, `browse_type`, `browse_screenshot`

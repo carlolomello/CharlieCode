@@ -7,8 +7,10 @@ import type {
   ChatSessionEnvelope,
   ChatStartPayload,
   ChatStartResult,
-  ExternalAgentsStatus,
-  ExternalTestResult,
+  CliPreview,
+  CliPreviewPayload,
+  CliProfilesStatus,
+  CliTestResult,
   ModelsResponse,
   OnboardingAnswers,
   OnboardingApplyPayload,
@@ -155,14 +157,19 @@ const api: CharlieCodeApi = {
   openSkillsDir: (target: 'global' | 'project') =>
     ipcRenderer.invoke('charliecode:skills:open-dir', target) as Promise<void>,
 
-  externalAgents: () =>
-    ipcRenderer.invoke('charliecode:external:list') as Promise<ExternalAgentsStatus>,
-  externalAgentModels: (id: string) =>
-    ipcRenderer.invoke('charliecode:external:models', id) as Promise<string[]>,
-  testExternalAgent: (payload: { id: string; model?: string }) =>
-    ipcRenderer.invoke('charliecode:external:test', payload) as Promise<ExternalTestResult>,
-  setExternalWorker: (worker: ExternalWorkerConfig | null) =>
-    ipcRenderer.invoke('charliecode:external:set-worker', worker) as Promise<ExternalAgentsStatus>
+  cliProfiles: () => ipcRenderer.invoke('charliecode:clis:list') as Promise<CliProfilesStatus>,
+  saveCliProfile: (profile: unknown) =>
+    ipcRenderer.invoke('charliecode:clis:save', profile) as Promise<CliProfilesStatus>,
+  deleteCliProfile: (id: string) =>
+    ipcRenderer.invoke('charliecode:clis:delete', id) as Promise<CliProfilesStatus>,
+  previewCliProfile: (payload: CliPreviewPayload) =>
+    ipcRenderer.invoke('charliecode:clis:preview', payload) as Promise<CliPreview>,
+  testCliProfile: (payload: { id: string; model?: string }) =>
+    ipcRenderer.invoke('charliecode:clis:test', payload) as Promise<CliTestResult>,
+  cliProfileModels: (id: string) =>
+    ipcRenderer.invoke('charliecode:clis:models', id) as Promise<string[]>,
+  setCliWorker: (worker: ExternalWorkerConfig | null) =>
+    ipcRenderer.invoke('charliecode:clis:set-worker', worker) as Promise<CliProfilesStatus>
 }
 
 contextBridge.exposeInMainWorld('charliecode', api)

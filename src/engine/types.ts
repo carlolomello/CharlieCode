@@ -94,17 +94,17 @@ export interface CharlieCodeConfig {
   /** Built-in plugin switches; a missing entry means "shipped default". */
   plugins?: Record<string, { enabled: boolean }>
   /**
-   * An agent CLI the user already has (Claude Code, Cline, Gaia, OpenCode…)
-   * used to run `task` subagents. When set, the model calls stay inside that
-   * CLI: CharlieCode never sees its keys, quota or logs.
+   * A CLI the user already has, used to run `task` subagents. When set, the
+   * model calls stay inside that CLI: CharlieCode never sees its keys, quota
+   * or logs.
    */
   external?: ExternalWorkerConfig
 }
 
 export interface ExternalWorkerConfig {
-  /** Id from the registry in `external-agents.ts`. */
+  /** Id of a profile in `<config>/clis/<id>.json`. */
   id: string
-  /** Model passed to the CLI as `-m`; empty means the CLI's own default. */
+  /** Model passed to the CLI; empty means the CLI's own default. */
   model?: string
   /**
    * Let the CLI write and run commands without asking. Off by default: an
@@ -112,6 +112,59 @@ export interface ExternalWorkerConfig {
    * surprise.
    */
   auto?: boolean
+}
+
+/**
+ * How a CLI prints a turn.
+ *
+ * - `text`: every stdout line is answer text;
+ * - `json-lines`: one JSON object per line, text extracted from common shapes;
+ * - `run-result`: JSON progress lines plus one final `run_result`/`result` line;
+ * - `stream-json`: assistant messages and tool_use events, streamed;
+ * - `auto`: try all of the above, per line.
+ */
+export type CliOutputFormat = 'auto' | 'text' | 'json-lines' | 'run-result' | 'stream-json'
+
+/**
+ * A user-defined CLI integration, stored as JSON in `<config>/clis/<id>.json`.
+ *
+ * There are no product presets on purpose: a corporate CLI is just a command
+ * with arguments, and hardcoding names would leak products the app should not
+ * know about. `args` is an argv array, never a shell string; placeholders are
+ * `{prompt}`, `{workspace}` and `{model}`.
+ */
+export interface CliProfile {
+  /** Slug, also the file name. */
+  id: string
+  label: string
+  /** Executable: a name resolved through PATH or an absolute path. */
+  command: string
+  /** Fixed argv, with optional placeholders. */
+  args: string[]
+  /** Prompt as the last argument (default) or on stdin. */
+  promptMode?: 'arg' | 'stdin'
+  /** Output shape; defaults to `auto`. */
+  output?: CliOutputFormat
+  /** Extra argv when a model is selected. */
+  modelArgs?: string[]
+  /** Extra argv for read-only exploration. */
+  planArgs?: string[]
+  /** Extra argv that lets the CLI write without asking. */
+  autoArgs?: string[]
+  /** Command that prints the models this CLI can use. */
+  modelsArgs?: string[]
+  /** How to read `modelsArgs` output. */
+  modelsFormat?: 'lines' | 'json'
+  /** Advanced: dot path of the text inside a JSON line. */
+  textPath?: string
+  /** Advanced: dot path of a tool/activity name inside a JSON line. */
+  activityPath?: string
+  /** Advanced: dot path of the model array inside JSON output. */
+  modelsPath?: string
+  /** Shown in the panel. */
+  notes?: string
+  /** One run timeout, in seconds. */
+  timeoutSeconds?: number
 }
 
 export interface ModelEntry {

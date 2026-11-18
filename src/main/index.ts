@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
 import { buildSystemPrompt, runAgent } from '../engine/agent'
@@ -26,7 +27,21 @@ import {
   writeAgentContext
 } from '../engine/context-store'
 import { compactMessages, contextBudget } from '../engine/context'
-import { agentModels, detectAgentClis, runExternalAgent } from '../engine/external-agents'
+import {
+  buildCliArgs,
+  findBinary,
+  formatCommand,
+  profileModels,
+  promptOnStdin,
+  runExternalAgent
+} from '../engine/external-agents'
+import {
+  deleteCliProfile,
+  listCliProfiles,
+  readCliProfile,
+  saveCliProfile,
+  validateCliProfile
+} from '../engine/cli-profiles'
 import { dockerAvailable, hasBinary, probeEndpoint, scanLocalEndpoints } from '../engine/local'
 import { createPlatform } from '../engine/platform'
 import { ensureProjectMemory, resolvePlugins } from '../engine/plugins'
@@ -68,9 +83,11 @@ import type {
   AddProviderPayload,
   AppInfo,
   ChatStartPayload,
+  CliPreview,
+  CliPreviewPayload,
+  CliProfilesStatus,
+  CliTestResult,
   DetectedLocal,
-  ExternalAgentsStatus,
-  ExternalTestResult,
   ModelsResponse,
   OnboardingAnswers,
   OnboardingApplyPayload,
@@ -91,7 +108,6 @@ const permissionRequests = new Map<string, string>()
 
 const OPEN_EXTERNAL_HOSTS = [
   'openrouter.ai',
-  'opencode.ai',
   'github.com',
   'ollama.com',
   'lmstudio.ai',
@@ -455,46 +471,107 @@ function registerIpc(): void {
 
   /* ----------------------------- agent CLIs ----------------------------- */
 
-  const externalStatus = async (): Promise<ExternalAgentsStatus> => {
+  const cliStatus = async (): Promise<CliProfilesStatus> => {
     const { config } = await loadConfig(platform)
+    const { profiles, errors } = await listCliProfiles(platform)
+
     return {
-      detected: await detectAgentClis(platform.homeDir),
+      profiles: profiles.map((profile) => {
+        const path = findBinary(profile.command, platform.homeDir, config.workspace)
+        return {
+          profile,
+          available: Boolean(path),
+          ...(path ? { path } : {})
+        }
+      }),
+      errors,
       ...(config.external ? { worker: config.external } : {})
     }
   }
 
-  ipcMain.handle('charliecode:external:list', () => externalStatus())
+  ipcMain.handle('charliecode:clis:list', () => cliStatus())
+
+  ipcMain.handle('charliecode:clis:save', async (_event, input: unknown): Promise<CliProfilesStatus> => {
+    await saveCliProfile(platform, input)
+    return cliStatus()
+  })
+
+  ipcMain.handle('charliecode:clis:delete', async (_event, id: string): Promise<CliProfilesStatus> => {
+    await deleteCliProfile(platform, id)
+    const { config } = await loadConfig(platform)
+    // Removing the profile the worker points at must not leave a dangling id.
+    if (config.external?.id === id) {
+      const next: CharlieCodeConfig = { ...config }
+      delete next.external
+      await saveConfig(platform, next)
+    }
+    return cliStatus()
+  })
 
   ipcMain.handle(
-    'charliecode:external:models',
-    async (_event, id: string): Promise<string[]> => agentModels(id, platform.homeDir)
+    'charliecode:clis:preview',
+    async (_event, payload: CliPreviewPayload): Promise<CliPreview> => {
+      const profile = validateCliProfile(payload.profile)
+      const { config } = await loadConfig(platform)
+      const workspace = config.workspace ?? platform.homeDir
+      const argv = buildCliArgs(profile, {
+        // A sample prompt, so the panel shows the shape of the command without
+        // sending the user's real text anywhere.
+        prompt: '<prompt>',
+        ...(payload.model ? { model: payload.model } : {}),
+        ...(payload.plan ? { plan: true } : {}),
+        ...(payload.auto ? { auto: true } : {}),
+        workspace
+      })
+      const binary = findBinary(profile.command, platform.homeDir, workspace)
+
+      return {
+        command: binary ?? profile.command,
+        argv,
+        display: `${formatCommand(binary ?? profile.command, argv)}${
+          promptOnStdin(profile) ? ' < <prompt>' : ''
+        }`,
+        promptMode: promptOnStdin(profile) ? 'stdin' : 'arg'
+      }
+    }
   )
 
   ipcMain.handle(
-    'charliecode:external:test',
-    async (
-      _event,
-      payload: { id: string; model?: string }
-    ): Promise<ExternalTestResult> => {
+    'charliecode:clis:test',
+    async (_event, payload: { id: string; model?: string }): Promise<CliTestResult> => {
       const started = Date.now()
       const { config } = await loadConfig(platform)
+      const profile = await readCliProfile(platform, payload.id)
+      if (!profile) {
+        return { ok: false, error: `Profilo "${payload.id}" non trovato.`, ms: 0 }
+      }
+
+      // A test must never touch the project: it runs in an empty temp folder.
+      const scratch = await mkdtemp(join(tmpdir(), 'charliecode-cli-test-'))
       try {
         const result = await runExternalAgent(
-          payload.id,
+          profile,
           {
             prompt:
               'Rispondi soltanto con la parola ok. Non leggere file e non eseguire comandi.',
             ...(payload.model ? { model: payload.model } : {}),
-            // A test must never modify the project.
             plan: true,
-            workspace: config.workspace ?? platform.homeDir
+            workspace: scratch
           },
-          { home: platform.homeDir, timeoutMs: 120_000 }
+          {
+            home: platform.homeDir,
+            timeoutMs: profile.timeoutSeconds
+              ? Math.min(profile.timeoutSeconds * 1_000, 120_000)
+              : 120_000
+          }
         )
+        const binary = findBinary(profile.command, platform.homeDir, config.workspace)
         return {
-          ok: result.code === 0 && result.text.length > 0,
+          ok: !result.error && result.text.length > 0,
           text: result.text.slice(0, 400),
-          ms: Date.now() - started
+          ms: Date.now() - started,
+          ...(result.error ? { error: result.error } : {}),
+          ...(binary ? { command: binary } : {})
         }
       } catch (error) {
         return {
@@ -502,19 +579,33 @@ function registerIpc(): void {
           error: error instanceof Error ? error.message : String(error),
           ms: Date.now() - started
         }
+      } finally {
+        await rm(scratch, { recursive: true, force: true }).catch(() => undefined)
       }
     }
   )
 
+  ipcMain.handle('charliecode:clis:models', async (_event, id: string): Promise<string[]> => {
+    const { config } = await loadConfig(platform)
+    const profile = await readCliProfile(platform, id)
+    if (!profile) return []
+    return profileModels(profile, platform.homeDir, config.workspace)
+  })
+
   ipcMain.handle(
-    'charliecode:external:set-worker',
-    async (_event, worker: ExternalWorkerConfig | null): Promise<ExternalAgentsStatus> => {
+    'charliecode:clis:set-worker',
+    async (_event, worker: ExternalWorkerConfig | null): Promise<CliProfilesStatus> => {
+      if (worker?.id) {
+        const profile = await readCliProfile(platform, worker.id)
+        if (!profile) throw new Error(`Profilo "${worker.id}" non trovato.`)
+      }
+
       const { config } = await loadConfig(platform)
       const next: CharlieCodeConfig = { ...config }
       if (worker?.id) next.external = worker
       else delete next.external
       await saveConfig(platform, next)
-      return externalStatus()
+      return cliStatus()
     }
   )
 
@@ -780,6 +871,7 @@ hanno priorità su queste.
               platform,
               config,
               models,
+              cliProfiles: (await listCliProfiles(platform)).profiles,
               workspace,
               modelMessages: history,
               maxSteps: config.agents.maxSteps,

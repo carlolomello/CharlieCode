@@ -1,53 +1,27 @@
-import { execFile, spawn } from 'node:child_process'
-import { accessSync, constants, existsSync, statSync } from 'node:fs'
+import { execFile, spawn, type ChildProcess } from 'node:child_process'
+import { accessSync, constants, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, isAbsolute, join } from 'node:path'
 import { promisify } from 'node:util'
+import type { CliProfile } from './types'
 
 /**
- * Existing agent CLIs as workers.
+ * User-defined CLIs as workers.
  *
- * The point is not to reimplement them: it is to let CharlieCode orchestrate a
- * CLI the user (or their company) already approved, without ever seeing its
- * credentials. Every model call stays inside that CLI, with its own auth, quota
- * and logs; we only spawn it, read its events, and show its diff.
+ * CharlieCode ships no product presets. A CLI is a command with an argv array
+ * and a description of how it prints a turn; everything else is the user's
+ * business. That keeps the app honest for anyone: a corporate wrapper, a
+ * personal script and a well-known agent CLI are all just profiles.
  *
- * Shapes differ, so each CLI is a small spec: how to build argv for one task,
- * and how to pull text out of a line of output. Verified against the real
- * binaries where possible — OpenCode 2.3 `run --format json` emits
- * `step_start` / `text` / `step_finish`, and Cline's `--json` ends with a
- * `run_result` line.
+ * Rules that matter:
+ *  - `args` is an argv array, never a shell string, so the prompt is data;
+ *  - the prompt goes as the last argument by default, or on stdin;
+ *  - a non-zero exit, a timeout and an abort are all failures, even when the
+ *    CLI printed something before dying;
+ *  - the whole process tree is killed: an agent CLI spawns tools of its own.
  */
 
 const run = promisify(execFile)
-
-export type AgentCliKind = 'opencode' | 'cline' | 'claude' | 'kiro' | 'generic'
-
-export interface AgentCliSpec {
-  id: string
-  label: string
-  kind: AgentCliKind
-  /** Binary names to look for, in order of preference. */
-  binaries: string[]
-  /** Directories outside PATH worth checking, relative to home. */
-  homePaths?: string[]
-  docs?: string
-  /** Shown in the wizard: what works, what does not. */
-  notes: string
-  /** One-shot task argv. */
-  args(options: AgentRunOptions): string[]
-  /** Extracts visible text from one stdout line. */
-  text?(line: string): string | undefined
-  /** Extracts a tool/activity description from one stdout line. */
-  activity?(line: string): string | undefined
-  /** Command that prints the models this CLI can use, and how to read it. */
-  modelsArgs?: string[]
-  modelsFrom?(stdout: string): string[]
-  /** The CLI can be told to only read, never write. */
-  readOnlyFlag?: (options: AgentRunOptions) => string[]
-  /** The CLI can write and run commands without asking. */
-  autoFlag?: (options: AgentRunOptions) => string[]
-}
 
 export interface AgentRunOptions {
   prompt: string
@@ -59,285 +33,420 @@ export interface AgentRunOptions {
   workspace: string
 }
 
-function parseJson(line: string): Record<string, unknown> | undefined {
-  const trimmed = line.trim()
-  if (!trimmed.startsWith('{')) return undefined
-  try {
-    return JSON.parse(trimmed) as Record<string, unknown>
-  } catch {
-    return undefined
-  }
+export interface ExternalRunResult {
+  text: string
+  /** Exit code, or -1 when the process was killed. */
+  code: number
+  stderr: string
+  ms: number
+  /** The process had to be killed for exceeding the timeout. */
+  timedOut: boolean
+  /** The user stopped the turn. */
+  aborted: boolean
+  /** Human-readable failure, when there is one. */
+  error?: string
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : undefined
+const MAX_OUTPUT = 2 * 1024 * 1024
+const DEFAULT_TIMEOUT_MS = 10 * 60_000
+const PLACEHOLDER = /\{(prompt|workspace|model)\}/g
+
+/* ------------------------------- argv ---------------------------------- */
+
+function expand(value: string, options: AgentRunOptions): string | undefined {
+  let missingModel = false
+  const expanded = value.replace(PLACEHOLDER, (_match, name: string) => {
+    if (name === 'prompt') return options.prompt
+    if (name === 'workspace') return options.workspace
+    if (options.model) return options.model
+    missingModel = true
+    return ''
+  })
+  // An argument that only makes sense with a model disappears without one,
+  // instead of being sent as an empty string the CLI would reject.
+  return missingModel ? undefined : expanded
 }
 
-export const AGENT_CLIS: AgentCliSpec[] = [
-  {
-    id: 'opencode',
-    label: 'OpenCode',
-    kind: 'opencode',
-    binaries: ['opencode', 'opencode2'],
-    homePaths: ['.opencode/bin', '.local/bin'],
-    docs: 'https://opencode.ai',
-    notes:
-      'Parla --format json: vediamo testo, step e fine turno. Con --agent usa i suoi agenti; con --auto accetta i permessi da sé.',
-    args: (options) => [
-      'run',
-      '--format',
-      'json',
-      ...(options.model ? ['-m', options.model] : []),
-      ...(options.plan ? ['--agent', 'plan'] : []),
-      ...(options.auto ? ['--auto'] : []),
-      options.prompt
-    ],
-    text: (line) => {
-      const event = parseJson(line)
-      if (!event) return undefined
-      const part = asRecord(event.part)
-      if (event.type === 'text' && typeof part?.text === 'string') return part.text
-      return undefined
-    },
-    activity: (line) => {
-      const event = parseJson(line)
-      if (!event) return undefined
-      const part = asRecord(event.part)
-      if (event.type === 'tool' && typeof part?.tool === 'string') return part.tool
-      return undefined
-    },
-    modelsArgs: ['models'],
-    modelsFrom: (stdout) =>
-      stdout
-        .split('\n')
-        .map((line) => line.trim())
-        .filter((line) => line.includes('/') && !line.includes(' '))
-  },
-  {
-    id: 'cline',
-    label: 'Cline',
-    kind: 'cline',
-    binaries: ['cline'],
-    docs: 'https://docs.cline.bot/usage/cli-overview',
-    notes:
-      'Headless con --json: l’ultima riga run_result contiene la risposta. --auto-approve resta spento salvo tuo consenso.',
-    args: (options) => [
-      '--json',
-      ...(options.model ? ['-m', options.model] : []),
-      ...(options.plan ? ['-p'] : []),
-      ...(options.auto ? ['--auto-approve', 'true'] : ['--auto-approve', 'false']),
-      '--cwd',
-      options.workspace,
-      options.prompt
-    ],
-    text: (line) => {
-      const event = parseJson(line)
-      if (!event) return undefined
-      if (event.type === 'run_result' && typeof event.text === 'string') return event.text
-      return undefined
-    },
-    modelsFrom: (stdout) =>
-      stdout
-        .split('\n')
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0 && line.length < 80 && !line.startsWith('{'))
-  },
-  {
-    id: 'claude',
-    label: 'Claude Code',
-    kind: 'claude',
-    binaries: ['claude'],
-    docs: 'https://docs.anthropic.com/en/docs/claude-code',
-    notes:
-      'Modalità -p (non interattiva). --permission-mode plan per la sola lettura; senza, scrive dove può.',
-    args: (options) => [
-      '-p',
-      options.prompt,
-      '--output-format',
-      'stream-json',
-      '--verbose',
-      ...(options.model ? ['--model', options.model] : []),
-      ...(options.plan ? ['--permission-mode', 'plan'] : [])
-    ],
-    text: (line) => {
-      const event = parseJson(line)
-      if (!event) return undefined
-      if (event.type !== 'assistant') return undefined
-      const message = asRecord(event.message)
-      const content = Array.isArray(message?.content) ? message.content : []
-      return content
-        .map((part) => {
-          const entry = asRecord(part)
-          return entry?.type === 'text' && typeof entry.text === 'string' ? entry.text : ''
-        })
-        .join('')
-    },
-    activity: (line) => {
-      const event = parseJson(line)
-      if (!event || event.type !== 'assistant') return undefined
-      const message = asRecord(event.message)
-      const content = Array.isArray(message?.content) ? message.content : []
-      for (const part of content) {
-        const entry = asRecord(part)
-        if (entry?.type === 'tool_use' && typeof entry.name === 'string') return entry.name
-      }
-      return undefined
-    }
-  },
-  {
-    id: 'gaia',
-    label: 'Gaia Axet (fork Cline)',
-    kind: 'generic',
-    binaries: ['gaia', 'gaia-axet', 'axet'],
-    notes:
-      'Presumo la stessa interfaccia di Cline (--json, run_result). Se la tua build differisce, il wizard lo dice quando la prova fallisce.',
-    args: (options) => [
-      '--json',
-      ...(options.model ? ['-m', options.model] : []),
-      ...(options.plan ? ['-p'] : []),
-      ...(options.auto ? ['--auto-approve', 'true'] : ['--auto-approve', 'false']),
-      '--cwd',
-      options.workspace,
-      options.prompt
-    ],
-    text: (line) => {
-      const event = parseJson(line)
-      if (!event) return undefined
-      if (event.type === 'run_result' && typeof event.text === 'string') return event.text
-      return undefined
-    }
-  },
-  {
-    id: 'kiro',
-    label: 'Kiro CLI',
-    kind: 'kiro',
-    binaries: ['kiro-cli'],
-    homePaths: ['.local/bin'],
-    notes:
-      'Sperimentale: non ha un formato JSON stabile, quindi il testo è quello che stampa. Usalo come worker, non come orchestratore.',
-    args: (options) => ['chat', '--no-interactive', options.prompt]
-  }
-]
-
-/** Searches PATH plus the usual per-user install directories. */
-export function findBinary(names: string[], home = homedir()): string | undefined {
-  const directories = (process.env.PATH ?? '')
-    .split(delimiter)
-    .filter(Boolean)
-    .concat([
-      join(home, '.opencode', 'bin'),
-      join(home, '.local', 'bin'),
-      join(home, '.bun', 'bin'),
-      join(home, 'Library', 'pnpm'),
-      '/opt/homebrew/bin',
-      '/usr/local/bin'
-    ])
-
-  for (const name of names) {
-    if (isAbsolute(name)) {
-      if (isExecutable(name)) return name
+function expandAll(values: string[], options: AgentRunOptions): string[] {
+  const output: string[] = []
+  for (const value of values) {
+    const expanded = expand(value, options)
+    if (expanded === undefined) {
+      // An argument that only makes sense with a model disappears together
+      // with the flag that introduced it: `--model {model}` must not become
+      // `--model` followed by the prompt.
+      const previous = output[output.length - 1]
+      if (previous && previous.startsWith('-')) output.pop()
       continue
     }
-    for (const directory of directories) {
-      const candidate = join(directory, name)
-      if (isExecutable(candidate)) return candidate
-    }
+    output.push(expanded)
   }
-  return undefined
+  return output
+}
+
+/**
+ * Builds the argv for one task. Exported because the settings panel shows the
+ * exact command before the user saves it: no surprises at spawn time.
+ */
+export function buildCliArgs(profile: CliProfile, options: AgentRunOptions): string[] {
+  const argv = expandAll(profile.args, options)
+  const hasPrompt = profile.args.some((arg) => arg.includes('{prompt}'))
+
+  if (options.model && profile.modelArgs?.length) {
+    argv.push(...expandAll(profile.modelArgs, options))
+  }
+  if (options.plan && profile.planArgs?.length) {
+    argv.push(...expandAll(profile.planArgs, options))
+  }
+  if (options.auto && profile.autoArgs?.length) {
+    argv.push(...expandAll(profile.autoArgs, options))
+  }
+
+  if (profile.promptMode !== 'stdin' && !hasPrompt) argv.push(options.prompt)
+  return argv
+}
+
+/** True when the prompt must be written to stdin instead of argv. */
+export function promptOnStdin(profile: CliProfile): boolean {
+  return profile.promptMode === 'stdin'
+}
+
+/** Display form of a command, quoted only for reading. */
+export function formatCommand(command: string, args: string[]): string {
+  const quote = (value: string): string =>
+    /[\s"'$`\\]/.test(value) ? `"${value.replace(/(["\\$`])/g, '\\$1')}"` : value
+  return [command, ...args.map(quote)].join(' ')
+}
+
+/* ------------------------------ binaries -------------------------------- */
+
+const WINDOWS_EXTENSIONS = ['.exe', '.cmd', '.bat', '.com']
+
+function executableExtensions(): string[] {
+  if (process.platform !== 'win32') return ['']
+  const fromEnv = (process.env.PATHEXT ?? '')
+    .split(';')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean)
+  return fromEnv.length > 0 ? fromEnv : WINDOWS_EXTENSIONS
 }
 
 function isExecutable(path: string): boolean {
   try {
     if (!statSync(path).isFile()) return false
-    accessSync(path, constants.X_OK)
+    if (process.platform !== 'win32') accessSync(path, constants.X_OK)
     return true
   } catch {
     return false
   }
 }
 
-export interface DetectedAgent {
-  id: string
-  label: string
-  path: string
-  /** `--version` output, first line. */
-  version?: string
-  notes: string
-  docs?: string
-  /** Whether the wizard can offer models for it. */
-  canListModels: boolean
+function candidatePaths(base: string): string[] {
+  const extensions = executableExtensions()
+  if (extensions.length === 1 && extensions[0] === '') return [base]
+  // On Windows the extension may already be there (`tool.cmd`).
+  if (extensions.some((extension) => base.toLowerCase().endsWith(extension))) return [base]
+  return [base, ...extensions.map((extension) => `${base}${extension}`)]
 }
 
-/** Probes the machine for agent CLIs. Never installs anything. */
-export async function detectAgentClis(home = homedir()): Promise<DetectedAgent[]> {
-  const found: DetectedAgent[] = []
+/**
+ * Resolves a command the way a shell would: an absolute path is used as is, a
+ * relative one is resolved against the workspace, and a bare name is searched
+ * in PATH plus the usual per-user install directories.
+ */
+export function findBinary(
+  command: string,
+  home = homedir(),
+  workspace?: string
+): string | undefined {
+  const cleaned = command.trim()
+  if (!cleaned) return undefined
 
-  for (const spec of AGENT_CLIS) {
-    const path = findBinary(spec.binaries, home)
-    if (!path) continue
-    let version: string | undefined
-    try {
-      const { stdout } = await run(path, ['--version'], { timeout: 8000, windowsHide: true })
-      version = stdout.split('\n')[0]?.trim() || undefined
-    } catch {
-      // A CLI that cannot answer --version is still usable; we just say so.
-    }
-    found.push({
-      id: spec.id,
-      label: spec.label,
-      path,
-      ...(version ? { version } : {}),
-      notes: spec.notes,
-      ...(spec.docs ? { docs: spec.docs } : {}),
-      canListModels: Boolean(spec.modelsArgs)
-    })
+  const absolute = cleaned.startsWith('~/')
+    ? join(home, cleaned.slice(2))
+    : isAbsolute(cleaned)
+      ? cleaned
+      : undefined
+
+  if (absolute) {
+    return candidatePaths(absolute).find(isExecutable)
   }
 
-  return found
+  if (cleaned.includes('/') || cleaned.includes('\\')) {
+    const base = workspace ? join(workspace, cleaned) : cleaned
+    return candidatePaths(base).find(isExecutable)
+  }
+
+  const directories = (process.env.PATH ?? '')
+    .split(delimiter)
+    .filter(Boolean)
+    .concat([
+      join(home, '.local', 'bin'),
+      join(home, '.bun', 'bin'),
+      join(home, 'Library', 'pnpm'),
+      join(home, '.npm-global', 'bin'),
+      '/opt/homebrew/bin',
+      '/usr/local/bin'
+    ])
+
+  for (const directory of directories) {
+    for (const candidate of candidatePaths(join(directory, cleaned))) {
+      if (isExecutable(candidate)) return candidate
+    }
+  }
+  return undefined
 }
 
-export function agentSpec(id: string): AgentCliSpec | undefined {
-  return AGENT_CLIS.find((spec) => spec.id === id)
+/* ------------------------------- parsing -------------------------------- */
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : undefined
 }
 
-/** Models the CLI already has access to. No key ever reaches this process. */
-export async function agentModels(id: string, home = homedir()): Promise<string[]> {
-  const spec = agentSpec(id)
-  if (!spec?.modelsArgs || !spec.modelsFrom) return []
-  const binary = findBinary(spec.binaries, home)
-  if (!binary) return []
+function parseJson(line: string): Record<string, unknown> | undefined {
+  const trimmed = line.trim()
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return undefined
   try {
-    const { stdout } = await run(binary, spec.modelsArgs, {
+    return asRecord(JSON.parse(trimmed))
+  } catch {
+    return undefined
+  }
+}
+
+/** Reads a dot path (`message.content`) from a parsed object. */
+function readPath(value: unknown, path: string): unknown {
+  let current: unknown = value
+  for (const segment of path.split('.')) {
+    const record = asRecord(current)
+    if (!record) return undefined
+    current = record[segment]
+  }
+  return current
+}
+
+function textOfContent(content: unknown): string | undefined {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return undefined
+  const pieces = content
+    .map((part) => {
+      const record = asRecord(part)
+      return record?.type === 'text' && typeof record.text === 'string' ? record.text : ''
+    })
+    .filter(Boolean)
+  return pieces.length > 0 ? pieces.join('') : undefined
+}
+
+/**
+ * Pulls visible text out of one parsed line. Covers the shapes agent CLIs
+ * actually emit, without naming any of them: plain `text`, OpenAI-style
+ * `choices[].delta.content`, assistant messages with content parts, and final
+ * `run_result`/`result` objects.
+ */
+export function extractText(event: Record<string, unknown>, textPath?: string): string | undefined {
+  if (textPath) {
+    const value = readPath(event, textPath)
+    if (typeof value === 'string' && value) return value
+  }
+
+  if (typeof event.text === 'string' && event.text) return event.text
+  if (typeof event.delta === 'string' && event.delta) return event.delta
+  if (typeof event.content === 'string' && event.content) return event.content
+  if (typeof event.result === 'string' && event.result) return event.result
+  if (typeof event.response === 'string' && event.response) return event.response
+  if (typeof event.message === 'string' && event.message) return event.message
+
+  const part = asRecord(event.part)
+  if (part && typeof part.text === 'string' && part.text) return part.text
+
+  const message = asRecord(event.message)
+  if (message) {
+    const fromParts = textOfContent(message.content)
+    if (fromParts) return fromParts
+    if (typeof message.content === 'string' && message.content) return message.content
+  }
+
+  const choices = Array.isArray(event.choices) ? event.choices : []
+  for (const choice of choices) {
+    const record = asRecord(choice)
+    const delta = asRecord(record?.delta)
+    if (typeof delta?.content === 'string' && delta.content) return delta.content
+    const choiceMessage = asRecord(record?.message)
+    if (typeof choiceMessage?.content === 'string' && choiceMessage.content) {
+      return choiceMessage.content
+    }
+  }
+
+  return undefined
+}
+
+/** Pulls a tool/activity name out of one parsed line. */
+export function extractActivity(
+  event: Record<string, unknown>,
+  activityPath?: string
+): string | undefined {
+  if (activityPath) {
+    const value = readPath(event, activityPath)
+    if (typeof value === 'string' && value) return value
+  }
+
+  const type = typeof event.type === 'string' ? event.type : ''
+  if (typeof event.tool === 'string' && event.tool) return event.tool
+  if (typeof event.name === 'string' && /tool|function|action/i.test(type)) return event.name
+
+  const part = asRecord(event.part)
+  if (typeof part?.tool === 'string' && part.tool) return part.tool
+  if (typeof part?.name === 'string' && /tool/i.test(type)) return part.name
+
+  const message = asRecord(event.message)
+  if (Array.isArray(message?.content)) {
+    for (const entry of message.content) {
+      const record = asRecord(entry)
+      if (record?.type === 'tool_use' && typeof record.name === 'string') return record.name
+      if (record?.type === 'tool_call' && typeof record.name === 'string') return record.name
+    }
+  }
+
+  return undefined
+}
+
+/** One line of output, interpreted according to the profile. */
+function lineText(profile: CliProfile, line: string): string | undefined {
+  const format = profile.output ?? 'auto'
+
+  if (format === 'text') return line
+
+  if (format === 'auto') {
+    const event = parseJson(line)
+    if (!event) return line
+    return extractText(event, profile.textPath)
+  }
+
+  const event = parseJson(line)
+  if (!event) return undefined
+
+  if (format === 'run-result') {
+    const type = typeof event.type === 'string' ? event.type : ''
+    if (type === 'run_result' || type === 'result' || type === 'final') {
+      return extractText(event, profile.textPath)
+    }
+    return undefined
+  }
+
+  return extractText(event, profile.textPath)
+}
+
+function lineActivity(profile: CliProfile, line: string): string | undefined {
+  if ((profile.output ?? 'auto') === 'text') return undefined
+  const event = parseJson(line)
+  return event ? extractActivity(event, profile.activityPath) : undefined
+}
+
+/* ------------------------------- models --------------------------------- */
+
+function modelNames(value: unknown, path?: string): string[] {
+  const target = path ? readPath(value, path) : value
+  if (!Array.isArray(target)) return []
+
+  const names: string[] = []
+  for (const entry of target) {
+    if (typeof entry === 'string') {
+      names.push(entry)
+      continue
+    }
+    const record = asRecord(entry)
+    const name = record?.id ?? record?.name ?? record?.model
+    if (typeof name === 'string') names.push(name)
+  }
+  return names
+}
+
+function modelsFromLines(stdout: string): string[] {
+  return stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && line.length < 120 && !line.startsWith('{'))
+    .slice(0, 400)
+}
+
+/**
+ * Models the CLI already has access to. No key ever reaches this process: the
+ * command runs inside the CLI's own environment.
+ */
+export async function profileModels(
+  profile: CliProfile,
+  home = homedir(),
+  workspace?: string
+): Promise<string[]> {
+  if (!profile.modelsArgs?.length) return []
+  const binary = findBinary(profile.command, home, workspace)
+  if (!binary) return []
+
+  const args = profile.modelsArgs.map((arg) =>
+    arg.replace(/\{workspace\}/g, workspace ?? '').replace(/\{model\}/g, '')
+  )
+
+  try {
+    const { stdout } = await run(binary, args, {
       timeout: 20_000,
       windowsHide: true,
-      maxBuffer: 4 * 1024 * 1024
+      maxBuffer: 4 * 1024 * 1024,
+      ...(workspace ? { cwd: workspace } : {})
     })
-    return spec.modelsFrom(stdout).slice(0, 400)
+
+    const format = profile.modelsFormat ?? 'lines'
+    if (format === 'json') {
+      const parsed: unknown = JSON.parse(stdout)
+      return [...new Set(modelNames(parsed, profile.modelsPath))].slice(0, 400)
+    }
+    return [...new Set(modelsFromLines(stdout))]
   } catch {
     return []
   }
 }
 
-export interface ExternalRunResult {
-  text: string
-  code: number
-  stderr: string
-  ms: number
-  /** The process had to be killed for exceeding the timeout. */
-  timedOut: boolean
-}
-
-const MAX_OUTPUT = 2 * 1024 * 1024
+/* ------------------------------- process -------------------------------- */
 
 /**
- * Runs one task through an external CLI.
+ * Kills the CLI and everything it started. A coding CLI spawns builds, tests
+ * and language servers: killing only the parent leaves them running and the
+ * user's next turn races with a zombie.
+ */
+function killTree(child: ChildProcess, signal: NodeJS.Signals): void {
+  if (!child.pid) return
+  if (process.platform === 'win32') {
+    try {
+      spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+        windowsHide: true,
+        stdio: 'ignore'
+      })
+    } catch {
+      child.kill()
+    }
+    return
+  }
+
+  try {
+    // Negative pid = process group, because the child is spawned detached.
+    process.kill(-child.pid, signal)
+  } catch {
+    try {
+      child.kill(signal)
+    } catch {
+      // Already gone.
+    }
+  }
+}
+
+/**
+ * Runs one task through a CLI profile.
  *
- * `spawn` with an argument array and no shell: the prompt is data. Output is
- * read line by line so the UI can show progress, and capped so a runaway CLI
- * cannot fill memory.
+ * Resolves with a result even on a non-zero exit, timeout or abort: the agent
+ * decides what to do with it, and the UI shows the real reason instead of a
+ * generic rejection. Only a spawn failure (binary missing, permissions)
+ * rejects.
  */
 export function runExternalAgent(
-  id: string,
+  profile: CliProfile,
   options: AgentRunOptions,
   hooks: {
     onText?: (text: string) => void
@@ -348,66 +457,78 @@ export function runExternalAgent(
     home?: string
   } = {}
 ): Promise<ExternalRunResult> {
-  const spec = agentSpec(id)
-  if (!spec) return Promise.reject(new Error(`CLI sconosciuta: ${id}`))
-  const binary = findBinary(spec.binaries, hooks.home ?? homedir())
+  if (hooks.signal?.aborted) {
+    return Promise.resolve({
+      text: '',
+      code: -1,
+      stderr: '',
+      ms: 0,
+      timedOut: false,
+      aborted: true,
+      error: `${profile.label} interrotta`
+    })
+  }
+
+  const binary = findBinary(profile.command, hooks.home ?? homedir(), options.workspace)
   if (!binary) {
     return Promise.reject(
-      new Error(`${spec.label} non è nel PATH. Installala o indica il percorso nelle impostazioni.`)
+      new Error(
+        `${profile.label}: comando "${profile.command}" non trovato. Controlla il percorso nel profilo.`
+      )
     )
   }
 
-  const argv = spec.args(options)
+  const argv = buildCliArgs(profile, options)
   const started = Date.now()
-  const timeoutMs = hooks.timeoutMs ?? 10 * 60_000
+  const timeoutMs =
+    hooks.timeoutMs ?? (profile.timeoutSeconds ? profile.timeoutSeconds * 1_000 : DEFAULT_TIMEOUT_MS)
+  const useStdin = promptOnStdin(profile)
 
   return new Promise<ExternalRunResult>((resolve, reject) => {
     const child = spawn(binary, argv, {
       cwd: options.workspace,
       shell: false,
       windowsHide: true,
-      env: { ...process.env, CI: '1', NO_COLOR: '1' }
+      // A process group of its own, so the whole tree can be killed.
+      detached: process.platform !== 'win32',
+      env: { ...process.env, CI: '1', NO_COLOR: '1', FORCE_COLOR: '0' }
     })
 
     let text = ''
     let stderr = ''
     let buffer = ''
     let timedOut = false
+    let aborted = false
+    let settled = false
 
     const timer = setTimeout(() => {
       timedOut = true
-      child.kill('SIGTERM')
+      killTree(child, 'SIGTERM')
       // Some CLIs ignore SIGTERM while a tool is running.
-      setTimeout(() => child.kill('SIGKILL'), 5000)
+      setTimeout(() => killTree(child, 'SIGKILL'), 5_000).unref?.()
     }, timeoutMs)
 
     const stop = (): void => {
-      clearTimeout(timer)
-      child.kill('SIGTERM')
+      aborted = true
+      killTree(child, 'SIGTERM')
+      setTimeout(() => killTree(child, 'SIGKILL'), 3_000).unref?.()
     }
     hooks.signal?.addEventListener('abort', stop, { once: true })
 
     const consume = (line: string): void => {
       if (!line.trim()) return
-      const activity = spec.activity?.(line)
+      const activity = lineActivity(profile, line)
       if (activity) hooks.onActivity?.(activity)
 
-      if (spec.text) {
-        const piece = spec.text(line)
-        if (piece) {
-          text += piece
-          hooks.onText?.(piece)
-        }
-        return
+      const piece = lineText(profile, line)
+      if (piece) {
+        text += piece
+        hooks.onText?.(piece)
       }
-
-      // No structured format: everything the CLI prints is the answer.
-      text += `${line}\n`
-      hooks.onText?.(`${line}\n`)
     }
 
-    child.stdout.setEncoding('utf8')
-    child.stdout.on('data', (chunk: string) => {
+    child.stdout?.setEncoding('utf8')
+    child.stdout?.on('data', (chunk: string) => {
       buffer += chunk
       if (buffer.length > MAX_OUTPUT) buffer = buffer.slice(-MAX_OUTPUT)
       let index = buffer.indexOf('\n')
@@ -418,63 +539,66 @@ export function runExternalAgent(
       }
     })
 
-    child.stderr.setEncoding('utf8')
-    child.stderr.on('data', (chunk: string) => {
+    child.stderr?.setEncoding('utf8')
+    child.stderr?.on('data', (chunk: string) => {
       stderr = (stderr + chunk).slice(-MAX_OUTPUT)
       for (const line of chunk.split('\n')) {
         if (line.trim()) hooks.onStderr?.(line)
       }
     })
 
+    if (useStdin && child.stdin) {
+      // A CLI that exits before reading stdin must not crash the app with EPIPE.
+      child.stdin.on('error', () => undefined)
+      child.stdin.end(options.prompt)
+    }
+
+    const finish = (code: number | null): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      hooks.signal?.removeEventListener('abort', stop)
+      if (buffer.trim()) consume(buffer)
+
+      const exitCode = code ?? -1
+      const failure = timedOut
+        ? `${profile.label} non ha risposto entro ${Math.round(timeoutMs / 1000)}s`
+        : aborted
+          ? `${profile.label} interrotta`
+          : exitCode !== 0
+            ? `${profile.label} è uscita con codice ${exitCode}${
+                stderr ? `: ${stderr.split('\n')[0]}` : ''
+              }`
+            : undefined
+
+      resolve({
+        text: text.trim(),
+        code: exitCode,
+        stderr: stderr.trim(),
+        ms: Date.now() - started,
+        timedOut,
+        aborted,
+        ...(failure ? { error: failure } : {})
+      })
+    }
+
     child.on('error', (error) => {
+      if (settled) return
+      settled = true
       clearTimeout(timer)
       hooks.signal?.removeEventListener('abort', stop)
       reject(error)
     })
 
-    child.on('close', (code) => {
-      clearTimeout(timer)
-      hooks.signal?.removeEventListener('abort', stop)
-      if (buffer.trim()) consume(buffer)
-      const result: ExternalRunResult = {
-        text: text.trim(),
-        code: code ?? 0,
-        stderr: stderr.trim(),
-        ms: Date.now() - started,
-        timedOut
-      }
-      if (code !== 0 && !result.text) {
-        reject(
-          new Error(
-            timedOut
-              ? `${spec.label} non ha risposto entro ${Math.round(timeoutMs / 1000)}s`
-              : `${spec.label} è uscita con codice ${code}${stderr ? `: ${stderr.split('\n')[0]}` : ''}`
-          )
-        )
-        return
-      }
-      resolve(result)
-    })
+    child.on('close', (code) => finish(code))
   })
 }
 
-/** True when the binary exists: the wizard uses it to enable a row. */
-export function agentAvailable(id: string, home = homedir()): boolean {
-  const spec = agentSpec(id)
-  return Boolean(spec && findBinary(spec.binaries, home))
-}
-
-/** Absolute path, for display. */
-export function agentPath(id: string, home = homedir()): string | undefined {
-  const spec = agentSpec(id)
-  return spec ? findBinary(spec.binaries, home) : undefined
-}
-
-export function isKnownAgent(id: string): boolean {
-  return AGENT_CLIS.some((spec) => spec.id === id)
-}
-
-/** Used by the wizard to explain a folder that has a CLI but no PATH entry. */
-export function looksInstalled(spec: AgentCliSpec, home = homedir()): boolean {
-  return (spec.homePaths ?? []).some((relative) => existsSync(join(home, relative)))
+/** True when the profile's command exists: the panel uses it to enable a row. */
+export function profileAvailable(
+  profile: CliProfile,
+  home = homedir(),
+  workspace?: string
+): boolean {
+  return Boolean(findBinary(profile.command, home, workspace))
 }

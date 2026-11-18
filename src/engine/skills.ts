@@ -9,8 +9,8 @@ import type { SkillInfo, SkillSource } from '../shared/ipc'
 /**
  * Skills: reusable procedures the agent loads only when it needs them.
  *
- * Same idea as Claude Code's `SKILL.md` packages. A skill is a directory with a
- * `SKILL.md` that starts with a small frontmatter block:
+ * A skill is a directory with a `SKILL.md` that starts with a small frontmatter
+ * block:
  *
  *   ---
  *   name: typecheck

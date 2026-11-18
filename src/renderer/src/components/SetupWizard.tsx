@@ -44,9 +44,9 @@ const PATHS: { id: Path; label: string; tag: string; blurb: string }[] = [
   },
   {
     id: 'cli',
-    label: 'CLI esistente',
+    label: 'CLI esterna',
     tag: 'azienda',
-    blurb: 'Claude Code, Cline, Gaia o OpenCode già installati: nessuna chiave da incollare.'
+    blurb: 'Una CLI già installata e approvata: nessuna chiave da incollare.'
   }
 ]
 

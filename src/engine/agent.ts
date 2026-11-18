@@ -9,6 +9,7 @@ import { skillsSystemPrompt } from './skills'
 import type { Platform } from './platform'
 import type {
   CharlieCodeConfig,
+  CliProfile,
   EngineEvent,
   ModelEntry,
   PermissionDecision,
@@ -21,6 +22,8 @@ export interface AgentDeps {
   platform: Platform
   config: CharlieCodeConfig
   models: ModelEntry[]
+  /** CLI profiles the user defined, used by the subagent worker. */
+  cliProfiles?: CliProfile[]
   workspace?: string
   /** Full model context from a previous turn, when available. */
   modelMessages?: ModelMessage[]
@@ -245,6 +248,9 @@ export async function runAgent(
         const name = sub.description.slice(0, 60)
         const role = sub.agent ?? 'explorer'
         const worker = deps.config.external
+        const workerProfile = worker?.id
+          ? deps.cliProfiles?.find((profile) => profile.id === worker.id)
+          : undefined
         const subModel =
           sub.model ??
           deps.config.agents.subagentModel ??
@@ -256,7 +262,7 @@ export async function runAgent(
           name,
           description: sub.prompt.slice(0, 200),
           modelKey: worker?.id
-            ? `${worker.id}${worker.model ? `/${worker.model}` : ''}`
+            ? `${workerProfile?.label ?? worker.id}${worker.model ? ` · ${worker.model}` : ''}`
             : subModel
         })
 
@@ -268,11 +274,24 @@ export async function runAgent(
         const started = Date.now()
 
         if (worker?.id) {
+          if (!workerProfile) {
+            const message = `Il profilo CLI "${worker.id}" non esiste più. Scegline un altro nelle impostazioni.`
+            deps.emit({
+              type: 'subagent-end',
+              agentId,
+              name,
+              ok: false,
+              summary: message,
+              ms: Date.now() - started
+            })
+            return { ok: false, text: `Subagente fallito: ${message}`, summary: message }
+          }
+
           // The user chose an existing CLI as the worker: the model calls happen
           // inside it, with its auth, quota and logs. We only orchestrate.
           try {
             const result = await runExternalAgent(
-              worker.id,
+              workerProfile,
               {
                 prompt: sub.prompt,
                 ...(worker.model ? { model: worker.model } : {}),
@@ -287,8 +306,11 @@ export async function runAgent(
                 onText: (chunk) => deps.emit({ type: 'delta', text: chunk, agentId })
               }
             )
-            const text = result.text || 'La CLI non ha prodotto output.'
-            const ok = result.code === 0
+            const text =
+              result.text ||
+              result.error ||
+              'La CLI non ha prodotto output.'
+            const ok = result.code === 0 && !result.aborted && !result.timedOut
             deps.emit({
               type: 'subagent-end',
               agentId,

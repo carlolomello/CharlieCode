@@ -1780,7 +1780,7 @@ export default function App() {
 
             <h3>Skill</h3>
             <p className="muted small">
-              Procedure riutilizzabili in <code>SKILL.md</code>, come in Claude Code. Stanno in{' '}
+              Procedure riutilizzabili in <code>SKILL.md</code>, come negli altri strumenti. Stanno in{' '}
               <code>.charliecode/skills</code> del progetto o in <code>~/.charliecode/skills</code>.
               L’agente vede solo nome e descrizione e carica il testo con il tool <code>skill</code>{' '}
               quando serve, quindi non consumano contesto.

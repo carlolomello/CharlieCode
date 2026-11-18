@@ -2,6 +2,7 @@ import type { IncomingAttachment } from '../engine/types'
 import type { Session, SessionSummary } from '../engine/session-types'
 import type {
   CatalogError,
+  CliProfile,
   ContextStats,
   EffortLevel,
   EngineEvent,
@@ -199,37 +200,58 @@ export interface CharlieCodeApi {
   removeSkill(payload: { dir: string; source: 'global' | 'project' }): Promise<SkillInfo[]>
   openSkillsDir(target: 'global' | 'project'): Promise<void>
 
-  /** Agent CLIs already installed on this machine, plus the configured worker. */
-  externalAgents(): Promise<ExternalAgentsStatus>
-  externalAgentModels(id: string): Promise<string[]>
+  /** CLI profiles the user defined, plus the configured worker. */
+  cliProfiles(): Promise<CliProfilesStatus>
+  /** Creates or replaces a profile. The whole list comes back. */
+  saveCliProfile(profile: unknown): Promise<CliProfilesStatus>
+  deleteCliProfile(id: string): Promise<CliProfilesStatus>
+  /** The exact argv that would be spawned, before saving anything. */
+  previewCliProfile(payload: CliPreviewPayload): Promise<CliPreview>
   /** Runs a tiny prompt through the CLI, to prove it works before relying on it. */
-  testExternalAgent(payload: { id: string; model?: string }): Promise<ExternalTestResult>
-  setExternalWorker(worker: ExternalWorkerConfig | null): Promise<ExternalAgentsStatus>
+  testCliProfile(payload: { id: string; model?: string }): Promise<CliTestResult>
+  cliProfileModels(id: string): Promise<string[]>
+  setCliWorker(worker: ExternalWorkerConfig | null): Promise<CliProfilesStatus>
 }
 
 /* ------------------------------ agent CLIs ------------------------------ */
 
-export interface ExternalAgentInfo {
-  id: string
-  label: string
-  path: string
-  version?: string
-  notes: string
-  docs?: string
-  canListModels: boolean
+export interface CliProfileInfo {
+  profile: CliProfile
+  /** Resolved command on this machine, when found. */
+  path?: string
+  available: boolean
 }
 
-export interface ExternalAgentsStatus {
-  detected: ExternalAgentInfo[]
+export interface CliProfilesStatus {
+  profiles: CliProfileInfo[]
+  /** Files that could not be parsed, with the reason. Never silently deleted. */
+  errors: { file: string; message: string }[]
   /** The CLI currently used for `task` subagents, if the user chose one. */
   worker?: ExternalWorkerConfig
 }
 
-export interface ExternalTestResult {
+export interface CliPreviewPayload {
+  profile: unknown
+  model?: string
+  plan?: boolean
+  auto?: boolean
+}
+
+export interface CliPreview {
+  command: string
+  argv: string[]
+  /** Readable one-liner shown in the panel. */
+  display: string
+  promptMode: 'arg' | 'stdin'
+}
+
+export interface CliTestResult {
   ok: boolean
   text?: string
   ms: number
   error?: string
+  /** The resolved command, for troubleshooting. */
+  command?: string
 }
 
 export interface PluginStatus {

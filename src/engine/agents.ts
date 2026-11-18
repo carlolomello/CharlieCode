@@ -3,8 +3,8 @@ import { readFile, stat } from 'node:fs/promises'
 import type { Platform } from './platform'
 
 /**
- * Project instructions, the same idea as AGENTS.md in OpenCode / CLAUDE.md in
- * Claude Code: plain markdown the user drops in a repo to steer the agent.
+ * Project instructions: plain markdown the user drops in a repo to steer the
+ * agent, plus the `AGENTS.md` convention already used by other coding tools.
  *
  * Layering, highest priority last (so later text can override earlier rules):
  *   1. global  ~/.charliecode/AGENTS.md

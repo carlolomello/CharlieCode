@@ -1,43 +1,145 @@
-import { useCallback, useEffect, useState } from 'react'
-import type {
-  ExternalAgentsStatus,
-  ExternalTestResult
-} from '../../../shared/ipc'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { CliProfile, CliOutputFormat } from '../../../engine/types'
+import type { CliProfilesStatus, CliTestResult } from '../../../shared/ipc'
 
 /**
- * "Collega una CLI esistente".
+ * "CLI esterne".
  *
- * For a lot of people the approved tool is already installed and already has a
- * good model behind it — Claude Code, Cline, Gaia, OpenCode. This panel does not
- * ask for a key: it finds the binary, proves it answers, and lets the user pick
- * it as the worker for `task` subagents. Model calls then happen inside that
- * CLI, with its own auth and quota; CharlieCode only orchestrates.
+ * CharlieCode ships no presets and knows no product names: a CLI is a command
+ * with arguments and a description of how it prints a turn. The user defines
+ * one profile per tool, tests it, and can point `task` subagents at it. Model
+ * calls then happen inside that CLI, with its own authentication and quota.
  *
- * Everything here is local. A failed test is shown as a failed test, not hidden.
+ * Nothing here installs software or copies keys. A failed test is shown as a
+ * failed test, with the exact command that was run.
  */
+
+interface Draft {
+  /** Present when editing an existing profile. */
+  id?: string
+  label: string
+  command: string
+  argsText: string
+  promptMode: 'arg' | 'stdin'
+  output: CliOutputFormat
+  modelArgsText: string
+  planArgsText: string
+  autoArgsText: string
+  modelsArgsText: string
+  modelsFormat: 'lines' | 'json'
+  textPath: string
+  activityPath: string
+  modelsPath: string
+  notes: string
+  timeoutSeconds: string
+}
+
+const EMPTY_DRAFT: Draft = {
+  label: '',
+  command: '',
+  argsText: '',
+  promptMode: 'arg',
+  output: 'auto',
+  modelArgsText: '',
+  planArgsText: '',
+  autoArgsText: '',
+  modelsArgsText: '',
+  modelsFormat: 'lines',
+  textPath: '',
+  activityPath: '',
+  modelsPath: '',
+  notes: '',
+  timeoutSeconds: ''
+}
+
+const OUTPUT_LABELS: Record<CliOutputFormat, string> = {
+  auto: 'automatico (righe di testo o JSON)',
+  text: 'testo semplice',
+  'json-lines': 'una riga JSON per evento',
+  'run-result': 'JSON con riga finale run_result/result',
+  'stream-json': 'stream JSON (messaggi e tool)'
+}
+
+function splitLines(value: string): string[] {
+  return value
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+}
+
+function joinLines(values?: string[]): string {
+  return (values ?? []).join('\n')
+}
+
+function draftFromProfile(profile: CliProfile): Draft {
+  return {
+    id: profile.id,
+    label: profile.label,
+    command: profile.command,
+    argsText: joinLines(profile.args),
+    promptMode: profile.promptMode ?? 'arg',
+    output: profile.output ?? 'auto',
+    modelArgsText: joinLines(profile.modelArgs),
+    planArgsText: joinLines(profile.planArgs),
+    autoArgsText: joinLines(profile.autoArgs),
+    modelsArgsText: joinLines(profile.modelsArgs),
+    modelsFormat: profile.modelsFormat ?? 'lines',
+    textPath: profile.textPath ?? '',
+    activityPath: profile.activityPath ?? '',
+    modelsPath: profile.modelsPath ?? '',
+    notes: profile.notes ?? '',
+    timeoutSeconds: profile.timeoutSeconds ? String(profile.timeoutSeconds) : ''
+  }
+}
+
+function profileFromDraft(draft: Draft): Record<string, unknown> {
+  const timeout = Number(draft.timeoutSeconds)
+  return {
+    ...(draft.id ? { id: draft.id } : {}),
+    label: draft.label.trim(),
+    command: draft.command.trim(),
+    args: splitLines(draft.argsText),
+    promptMode: draft.promptMode,
+    output: draft.output,
+    ...(splitLines(draft.modelArgsText).length ? { modelArgs: splitLines(draft.modelArgsText) } : {}),
+    ...(splitLines(draft.planArgsText).length ? { planArgs: splitLines(draft.planArgsText) } : {}),
+    ...(splitLines(draft.autoArgsText).length ? { autoArgs: splitLines(draft.autoArgsText) } : {}),
+    ...(splitLines(draft.modelsArgsText).length
+      ? { modelsArgs: splitLines(draft.modelsArgsText) }
+      : {}),
+    ...(splitLines(draft.modelsArgsText).length ? { modelsFormat: draft.modelsFormat } : {}),
+    ...(draft.textPath.trim() ? { textPath: draft.textPath.trim() } : {}),
+    ...(draft.activityPath.trim() ? { activityPath: draft.activityPath.trim() } : {}),
+    ...(draft.modelsPath.trim() ? { modelsPath: draft.modelsPath.trim() } : {}),
+    ...(draft.notes.trim() ? { notes: draft.notes.trim() } : {}),
+    ...(Number.isFinite(timeout) && timeout > 0 ? { timeoutSeconds: timeout } : {})
+  }
+}
+
 export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JSX.Element {
-  const [status, setStatus] = useState<ExternalAgentsStatus | null>(null)
+  const [status, setStatus] = useState<CliProfilesStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [testing, setTesting] = useState<string | null>(null)
-  const [tests, setTests] = useState<Record<string, ExternalTestResult>>({})
-  const [models, setModels] = useState<Record<string, string[]>>({})
-  const [draft, setDraft] = useState<{ id: string; model: string; auto: boolean } | null>(null)
+  const [draft, setDraft] = useState<Draft | null>(null)
   const [saving, setSaving] = useState(false)
+  const [testing, setTesting] = useState<string | null>(null)
+  const [tests, setTests] = useState<Record<string, CliTestResult>>({})
+  const [models, setModels] = useState<Record<string, string[]>>({})
+  const [workerModel, setWorkerModel] = useState('')
+  const [workerAuto, setWorkerAuto] = useState(false)
+  const [workerBusy, setWorkerBusy] = useState(false)
+  const [preview, setPreview] = useState<string | null>(null)
+  const [previewError, setPreviewError] = useState<string | null>(null)
+  const fileInput = useRef<HTMLInputElement | null>(null)
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true)
     setError(null)
     try {
-      const next = await window.charliecode.externalAgents()
+      const next = await window.charliecode.cliProfiles()
       setStatus(next)
-      if (next.worker) {
-        setDraft({
-          id: next.worker.id,
-          model: next.worker.model ?? '',
-          auto: next.worker.auto === true
-        })
-      }
+      setWorkerModel(next.worker?.model ?? '')
+      setWorkerAuto(next.worker?.auto === true)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -49,23 +151,30 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
     void load()
   }, [load])
 
-  const loadModels = async (id: string): Promise<void> => {
-    if (models[id]) return
+  const loadModels = async (id: string, force = false): Promise<void> => {
+    if (models[id] && !force) return
     try {
-      const list = await window.charliecode.externalAgentModels(id)
+      const list = await window.charliecode.cliProfileModels(id)
       setModels((previous) => ({ ...previous, [id]: list }))
     } catch {
       setModels((previous) => ({ ...previous, [id]: [] }))
     }
   }
 
-  const test = async (id: string): Promise<void> => {
+  // The worker's model list is useful immediately, not only after a click.
+  useEffect(() => {
+    const id = status?.worker?.id
+    if (id) void loadModels(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status?.worker?.id])
+
+  const test = async (id: string, model?: string): Promise<void> => {
     setTesting(id)
     setError(null)
     try {
-      const result = await window.charliecode.testExternalAgent({
+      const result = await window.charliecode.testCliProfile({
         id,
-        ...(draft?.id === id && draft.model ? { model: draft.model } : {})
+        ...(model ? { model } : {})
       })
       setTests((previous) => ({ ...previous, [id]: result }))
     } catch (cause) {
@@ -79,24 +188,10 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
     if (!draft) return
     setSaving(true)
     setError(null)
+    setPreview(null)
     try {
-      const next = await window.charliecode.setExternalWorker({
-        id: draft.id,
-        ...(draft.model.trim() ? { model: draft.model.trim() } : {}),
-        auto: draft.auto
-      })
+      const next = await window.charliecode.saveCliProfile(profileFromDraft(draft))
       setStatus(next)
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const disconnect = async (): Promise<void> => {
-    setSaving(true)
-    try {
-      setStatus(await window.charliecode.setExternalWorker(null))
       setDraft(null)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
@@ -105,80 +200,269 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
     }
   }
 
+  const remove = async (profile: CliProfile): Promise<void> => {
+    if (!window.confirm(`Eliminare il profilo "${profile.label}"?`)) return
+    setError(null)
+    try {
+      setStatus(await window.charliecode.deleteCliProfile(profile.id))
+      if (draft?.id === profile.id) setDraft(null)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
+  const runPreview = async (): Promise<void> => {
+    if (!draft) return
+    setPreviewError(null)
+    setPreview(null)
+    try {
+      const result = await window.charliecode.previewCliProfile({
+        profile: profileFromDraft(draft),
+        ...(workerModel.trim() ? { model: workerModel.trim() } : {})
+      })
+      setPreview(result.display)
+    } catch (cause) {
+      setPreviewError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
+  const useAsWorker = async (profile: CliProfile, model = workerModel): Promise<void> => {
+    setWorkerBusy(true)
+    setError(null)
+    try {
+      setStatus(
+        await window.charliecode.setCliWorker({
+          id: profile.id,
+          ...(model.trim() ? { model: model.trim() } : {}),
+          auto: workerAuto
+        })
+      )
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setWorkerBusy(false)
+    }
+  }
+
+  const disconnect = async (): Promise<void> => {
+    setWorkerBusy(true)
+    setError(null)
+    try {
+      setStatus(await window.charliecode.setCliWorker(null))
+      setWorkerModel('')
+      setWorkerAuto(false)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setWorkerBusy(false)
+    }
+  }
+
+  const exportProfile = (profile: CliProfile): void => {
+    const blob = new Blob([`${JSON.stringify(profile, null, 2)}\n`], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `${profile.id}.json`
+    anchor.click()
+    // Revoking synchronously can cancel the download in some Chromium builds.
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000)
+  }
+
+  const importFile = async (file: File): Promise<void> => {
+    setError(null)
+    try {
+      const parsed: unknown = JSON.parse(await file.text())
+      if (typeof parsed !== 'object' || parsed === null) {
+        throw new Error('Il file non contiene un oggetto JSON.')
+      }
+      setDraft(draftFromProfile(parsed as CliProfile))
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
   const worker = status?.worker
-  const detected = status?.detected ?? []
+  const profiles = status?.profiles ?? []
+  const workerLabel = profiles.find((entry) => entry.profile.id === worker?.id)?.profile.label
+  const workerChoices = models[worker?.id ?? ''] ?? []
 
   return (
     <div className="cli-panel">
-      <h3>Una CLI che hai già</h3>
+      <h3>CLI esterne</h3>
       <p className="muted small">
-        Se in azienda usi Claude Code, Cline, Gaia o OpenCode, CharlieCode può usarla come
-        lavoratore: i subagenti girano lì dentro, con la sua autenticazione e la sua quota. Qui non
-        si copiano chiavi e non si aggira nessun permesso — si orchestra uno strumento che è già
-        approvato.
+        CharlieCode non conosce marche: una CLI è un comando con i suoi argomenti. Definisci un
+        profilo, provalo e, se vuoi, usalo per i subagenti <code>task</code>. Le chiamate al modello
+        restano dentro la CLI, con la sua autenticazione e la sua quota; qui non si copiano chiavi.
       </p>
 
       {worker && (
-        <div className="banner ok small">
-          Subagenti su{' '}
-          <strong>{detected.find((agent) => agent.id === worker.id)?.label ?? worker.id}</strong>
-          {worker.model ? ` · modello ${worker.model}` : ' · modello predefinito della CLI'}
-          {worker.auto ? ' · scrittura automatica attiva' : ' · sola lettura per esploratori e reviewer'}
-          <button className="ghost small" onClick={() => void disconnect()} disabled={saving}>
-            scollega
-          </button>
+        <div className="banner ok small cli-worker">
+          <div>
+            Subagenti su <strong>{workerLabel ?? worker.id}</strong>
+            {worker.model ? ` · modello ${worker.model}` : ' · modello predefinito della CLI'}
+            {worker.auto
+              ? ' · scrittura automatica per gli implementer'
+              : ' · sola lettura per esploratori e reviewer'}
+          </div>
+          <div className="cli-worker-controls">
+            {workerChoices.length > 0 ? (
+              <select value={workerModel} onChange={(event) => setWorkerModel(event.target.value)}>
+                <option value="">modello predefinito della CLI</option>
+                {workerChoices.map((model) => (
+                  <option key={model} value={model}>
+                    {model}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                placeholder="modello (vuoto = quello della CLI)"
+                value={workerModel}
+                onChange={(event) => setWorkerModel(event.target.value)}
+              />
+            )}
+            <label className="provider-toggle small-toggle">
+              <input
+                type="checkbox"
+                checked={workerAuto}
+                onChange={(event) => setWorkerAuto(event.target.checked)}
+              />
+              <span>scrittura automatica</span>
+            </label>
+            <button
+              className="ghost small"
+              disabled={workerBusy}
+              onClick={() => {
+                const entry = profiles.find((item) => item.profile.id === worker.id)
+                if (entry) void useAsWorker(entry.profile)
+              }}
+            >
+              aggiorna
+            </button>
+            <button className="ghost small" onClick={() => void disconnect()} disabled={workerBusy}>
+              scollega
+            </button>
+          </div>
         </div>
       )}
 
       {error && <div className="message-error">{error}</div>}
 
-      {loading && <p className="muted small">Cerco le CLI installate…</p>}
-
-      {!loading && detected.length === 0 && (
+      {status && status.errors.length > 0 && (
         <div className="banner warn small">
-          Nessuna CLI trovata nel PATH (cerco <code>claude</code>, <code>cline</code>,{' '}
-          <code>gaia</code>, <code>opencode</code>, <code>kiro-cli</code>). Se una c&apos;è ma non
-          viene vista, apri CharlieCode dal terminale in cui funziona, oppure installala e premi
-          «ricontrolla».
+          <strong>File di profilo non validi</strong>
+          <ul className="cli-errors">
+            {status.errors.map((entry) => (
+              <li key={entry.file}>
+                <code>{entry.file}</code>: {entry.message}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
-      {detected.map((agent) => {
-        const result = tests[agent.id]
-        const chosen = draft?.id === agent.id
+      <div className="cli-toolbar">
+        <button className="primary small" onClick={() => setDraft({ ...EMPTY_DRAFT })}>
+          + Nuovo profilo
+        </button>
+        <button className="ghost small" onClick={() => fileInput.current?.click()}>
+          Importa JSON
+        </button>
+        <input
+          ref={fileInput}
+          type="file"
+          accept="application/json,.json"
+          hidden
+          onChange={(event) => {
+            const file = event.target.files?.[0]
+            if (file) void importFile(file)
+            event.target.value = ''
+          }}
+        />
+        <button className="ghost small" onClick={() => void load()} disabled={loading}>
+          ricarica
+        </button>
+      </div>
+
+      {loading && <p className="muted small">Leggo i profili…</p>}
+
+      {!loading && profiles.length === 0 && (
+        <div className="banner warn small">
+          Nessun profilo. Creane uno con il comando della CLI che usi già: CharlieCode non ne
+          installa e non ne presume nessuna.
+        </div>
+      )}
+
+      {profiles.map(({ profile, path, available }) => {
+        const result = tests[profile.id]
+        const isWorker = worker?.id === profile.id
         return (
-          <div key={agent.id} className={`cli-row ${chosen ? 'on' : ''}`}>
+          <div key={profile.id} className={`cli-row ${isWorker ? 'on' : ''}`}>
             <div className="cli-head">
               <div>
                 <div className="cli-name">
-                  {agent.label}
-                  {agent.version && <span className="cli-version">{agent.version}</span>}
+                  {profile.label}
+                  {isWorker && <span className="cli-version">worker</span>}
                 </div>
                 <div className="cli-path">
-                  <code>{agent.path}</code>
+                  {available ? (
+                    <code>{path}</code>
+                  ) : (
+                    <span className="muted small">
+                      comando non trovato: <code>{profile.command}</code>
+                    </span>
+                  )}
                 </div>
               </div>
               <div className="cli-actions">
                 <button
                   className="ghost small"
-                  onClick={() => void test(agent.id)}
-                  disabled={testing === agent.id}
+                  onClick={() => void test(profile.id, isWorker ? workerModel : undefined)}
+                  disabled={testing === profile.id}
                 >
-                  {testing === agent.id ? 'provo…' : 'prova'}
+                  {testing === profile.id ? 'provo…' : 'prova'}
                 </button>
                 <button
-                  className={`ghost small ${chosen ? 'active' : ''}`}
+                  className="ghost small"
                   onClick={() => {
-                    setDraft({ id: agent.id, model: '', auto: false })
-                    void loadModels(agent.id)
+                    setDraft(draftFromProfile(profile))
+                    setPreview(null)
+                    setPreviewError(null)
                   }}
                 >
-                  {chosen ? 'selezionata' : 'usa per i subagenti'}
+                  modifica
+                </button>
+                <button className="ghost small" onClick={() => exportProfile(profile)}>
+                  esporta
+                </button>
+                <button className="ghost small" onClick={() => void remove(profile)}>
+                  elimina
+                </button>
+                <button
+                  className={`ghost small ${isWorker ? 'active' : ''}`}
+                  onClick={() => {
+                    void loadModels(profile.id)
+                    // A model chosen for another CLI must not leak into this one.
+                    setWorkerModel('')
+                    void useAsWorker(profile, '')
+                  }}
+                  disabled={workerBusy || !available}
+                >
+                  {isWorker ? 'in uso' : 'usa per i subagenti'}
                 </button>
               </div>
             </div>
 
-            <p className="muted small cli-notes">{agent.notes}</p>
+            {profile.notes && <p className="muted small cli-notes">{profile.notes}</p>}
+
+            <div className="cli-summary muted small">
+              <code>{profile.command}</code>
+              {profile.args.length > 0 && <> {profile.args.join(' ')}</>}
+              {' · '}
+              output {OUTPUT_LABELS[profile.output ?? 'auto']}
+              {profile.promptMode === 'stdin' ? ' · prompt su stdin' : ''}
+            </div>
 
             {result && (
               <div className={`cli-test ${result.ok ? 'ok' : 'bad'}`}>
@@ -189,67 +473,226 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
                 ) : (
                   <>non ha risposto: {result.error ?? 'output vuoto'}</>
                 )}
-              </div>
-            )}
-
-            {chosen && (
-              <div className="cli-config">
-                {(models[agent.id]?.length ?? 0) > 0 ? (
-                  <select
-                    value={draft.model}
-                    onChange={(event) => setDraft({ ...draft, model: event.target.value })}
-                  >
-                    <option value="">modello predefinito della CLI</option>
-                    {models[agent.id]?.map((model) => (
-                      <option key={model} value={model}>
-                        {model}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    placeholder="modello (vuoto = quello che usa già la CLI)"
-                    value={draft.model}
-                    onChange={(event) => setDraft({ ...draft, model: event.target.value })}
-                  />
+                {result.command && (
+                  <div className="muted small">
+                    comando: <code>{result.command}</code>
+                  </div>
                 )}
-
-                <label className="provider-toggle small-toggle">
-                  <input
-                    type="checkbox"
-                    checked={draft.auto}
-                    onChange={(event) => setDraft({ ...draft, auto: event.target.checked })}
-                  />
-                  <span>
-                    Lascia che la CLI scriva ed esegua senza chiedere
-                    <span className="muted small">
-                      {' '}
-                      — solo per i subagenti «implementer». Se è spento, lavorano in sola lettura.
-                    </span>
-                  </span>
-                </label>
-
-                <div className="cli-save">
-                  <button className="primary" onClick={() => void save()} disabled={saving}>
-                    {saving ? 'salvo…' : 'Usa questa CLI'}
-                  </button>
-                  <button className="ghost" onClick={onClose}>
-                    Chiudi
-                  </button>
-                </div>
               </div>
             )}
           </div>
         )
       })}
 
+      {draft && (
+        <div className="cli-editor">
+          <h4>{draft.id ? `Modifica ${draft.label || draft.id}` : 'Nuovo profilo CLI'}</h4>
+
+          <label className="cli-field">
+            <span>Nome</span>
+            <input
+              value={draft.label}
+              placeholder="es. CLI aziendale"
+              onChange={(event) => setDraft({ ...draft, label: event.target.value })}
+            />
+          </label>
+
+          <label className="cli-field">
+            <span>Comando</span>
+            <input
+              value={draft.command}
+              placeholder="nome nel PATH oppure percorso assoluto"
+              onChange={(event) => setDraft({ ...draft, command: event.target.value })}
+            />
+          </label>
+
+          <label className="cli-field">
+            <span>
+              Argomenti <span className="muted small">— uno per riga</span>
+            </span>
+            <textarea
+              rows={4}
+              value={draft.argsText}
+              placeholder={'run\n--format\njson'}
+              onChange={(event) => setDraft({ ...draft, argsText: event.target.value })}
+            />
+          </label>
+
+          <p className="muted small">
+            Segnaposto: <code>{'{prompt}'}</code>, <code>{'{workspace}'}</code>,{' '}
+            <code>{'{model}'}</code>. Senza <code>{'{prompt}'}</code> il prompt viene aggiunto come
+            ultimo argomento.
+          </p>
+
+          <div className="cli-grid">
+            <label className="cli-field">
+              <span>Prompt</span>
+              <select
+                value={draft.promptMode}
+                onChange={(event) =>
+                  setDraft({ ...draft, promptMode: event.target.value as Draft['promptMode'] })
+                }
+              >
+                <option value="arg">come argomento</option>
+                <option value="stdin">su stdin</option>
+              </select>
+            </label>
+
+            <label className="cli-field">
+              <span>Output</span>
+              <select
+                value={draft.output}
+                onChange={(event) =>
+                  setDraft({ ...draft, output: event.target.value as CliOutputFormat })
+                }
+              >
+                {Object.entries(OUTPUT_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <details className="cli-advanced">
+            <summary>Argomenti facoltativi</summary>
+
+            <label className="cli-field">
+              <span>
+                Modello <span className="muted small">— aggiunti solo se scegli un modello</span>
+              </span>
+              <textarea
+                rows={2}
+                value={draft.modelArgsText}
+                placeholder={'-m\n{model}'}
+                onChange={(event) => setDraft({ ...draft, modelArgsText: event.target.value })}
+              />
+            </label>
+
+            <label className="cli-field">
+              <span>
+                Sola lettura <span className="muted small">— per esploratori e reviewer</span>
+              </span>
+              <textarea
+                rows={2}
+                value={draft.planArgsText}
+                placeholder={'--plan'}
+                onChange={(event) => setDraft({ ...draft, planArgsText: event.target.value })}
+              />
+            </label>
+
+            <label className="cli-field">
+              <span>
+                Scrittura automatica{' '}
+                <span className="muted small">— solo se l’utente la abilita</span>
+              </span>
+              <textarea
+                rows={2}
+                value={draft.autoArgsText}
+                placeholder={'--yes'}
+                onChange={(event) => setDraft({ ...draft, autoArgsText: event.target.value })}
+              />
+            </label>
+
+            <div className="cli-grid">
+              <label className="cli-field">
+                <span>Comando per elencare i modelli</span>
+                <textarea
+                  rows={2}
+                  value={draft.modelsArgsText}
+                  placeholder={'models'}
+                  onChange={(event) => setDraft({ ...draft, modelsArgsText: event.target.value })}
+                />
+              </label>
+              <label className="cli-field">
+                <span>Formato dei modelli</span>
+                <select
+                  value={draft.modelsFormat}
+                  onChange={(event) =>
+                    setDraft({ ...draft, modelsFormat: event.target.value as Draft['modelsFormat'] })
+                  }
+                >
+                  <option value="lines">una riga per modello</option>
+                  <option value="json">JSON</option>
+                </select>
+              </label>
+            </div>
+
+            <div className="cli-grid">
+              <label className="cli-field">
+                <span>
+                  Percorso del testo <span className="muted small">— es. message.content</span>
+                </span>
+                <input
+                  value={draft.textPath}
+                  onChange={(event) => setDraft({ ...draft, textPath: event.target.value })}
+                />
+              </label>
+              <label className="cli-field">
+                <span>Percorso dell’attività</span>
+                <input
+                  value={draft.activityPath}
+                  onChange={(event) => setDraft({ ...draft, activityPath: event.target.value })}
+                />
+              </label>
+              <label className="cli-field">
+                <span>Percorso dei modelli</span>
+                <input
+                  value={draft.modelsPath}
+                  onChange={(event) => setDraft({ ...draft, modelsPath: event.target.value })}
+                />
+              </label>
+              <label className="cli-field">
+                <span>Timeout (secondi)</span>
+                <input
+                  value={draft.timeoutSeconds}
+                  inputMode="numeric"
+                  placeholder="600"
+                  onChange={(event) => setDraft({ ...draft, timeoutSeconds: event.target.value })}
+                />
+              </label>
+            </div>
+
+            <label className="cli-field">
+              <span>Note</span>
+              <textarea
+                rows={2}
+                value={draft.notes}
+                placeholder="Come si autentica, cosa sa fare, cosa evitare."
+                onChange={(event) => setDraft({ ...draft, notes: event.target.value })}
+              />
+            </label>
+          </details>
+
+          {preview && (
+            <div className="cli-preview">
+              <div className="muted small">Comando che verrà eseguito:</div>
+              <code>{preview}</code>
+            </div>
+          )}
+          {previewError && <div className="message-error">{previewError}</div>}
+
+          <div className="cli-save">
+            <button className="primary" onClick={() => void save()} disabled={saving}>
+              {saving ? 'salvo…' : 'Salva profilo'}
+            </button>
+            <button className="ghost" onClick={() => void runPreview()}>
+              Anteprima comando
+            </button>
+            <button className="ghost" onClick={() => setDraft(null)}>
+              Annulla
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="cli-foot">
-        <button className="ghost small" onClick={() => void load()} disabled={loading}>
-          ricontrolla
+        <button className="ghost small" onClick={onClose}>
+          Chiudi
         </button>
         <span className="muted small">
-          Il test manda una sola frase e non tocca il progetto. Nessuna CLI viene installata da
-          qui.
+          Il test esegue una sola frase in una cartella temporanea e non tocca il progetto.
         </span>
       </div>
     </div>
