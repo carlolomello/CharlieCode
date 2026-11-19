@@ -3337,6 +3337,69 @@ button.ghost:hover,
   font-weight: 600;
 }
 
+.cli-command-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cli-analysis {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--panel-2);
+}
+
+.cli-analysis p {
+  margin: 0;
+}
+
+.cli-analysis code {
+  word-break: break-all;
+}
+
+.cli-findings {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cli-findings li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.cli-findings li > span {
+  color: var(--muted);
+  min-width: 130px;
+}
+
+.cli-help summary {
+  cursor: pointer;
+}
+
+.cli-help pre {
+  max-height: 220px;
+  overflow: auto;
+  background: #0b0f16;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  font-size: 10.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .cli-hint {
   margin: 0;
   line-height: 1.5;

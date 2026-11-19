@@ -131,7 +131,7 @@ export type CliOutputFormat = 'auto' | 'text' | 'json-lines' | 'run-result' | 's
  * There are no product presets on purpose: a corporate CLI is just a command
  * with arguments, and hardcoding names would leak products the app should not
  * know about. `args` is an argv array, never a shell string; placeholders are
- * `{prompt}`, `{workspace}` and `{model}`.
+ * `{prompt}`, `{workspace}`, `{model}` and `{effort}`.
  */
 export interface CliProfile {
   /** Slug, also the file name. */
@@ -147,6 +147,10 @@ export interface CliProfile {
   output?: CliOutputFormat
   /** Extra argv when a model is selected. */
   modelArgs?: string[]
+  /** Extra argv when an effort level is selected; `{effort}` is replaced. */
+  effortArgs?: string[]
+  /** Effort values the CLI accepts, lowest to highest. Empty means the level name. */
+  effortValues?: string[]
   /** Extra argv for read-only exploration. */
   planArgs?: string[]
   /** Extra argv that lets the CLI write without asking. */
@@ -165,6 +169,31 @@ export interface CliProfile {
   notes?: string
   /** One run timeout, in seconds. */
   timeoutSeconds?: number
+}
+
+/** One useful flag found in a CLI's own help. */
+export interface CliFinding {
+  field: 'args' | 'model' | 'effort' | 'plan' | 'auto' | 'output' | 'models' | 'prompt'
+  /** Short Italian label shown in the panel. */
+  label: string
+  /** The flag(s) that produced the proposal. */
+  evidence: string
+}
+
+/** What `--help` revealed about a CLI, and the profile it suggests. */
+export interface CliIntrospection {
+  command: string
+  /** Resolved executable, when the name exists on this machine. */
+  path?: string
+  /** First line of `--version`, when the CLI answered quickly. */
+  version?: string
+  /** False when the binary did not print any help. */
+  helpRead: boolean
+  /** First few thousand characters of help, for the panel. */
+  helpExcerpt?: string
+  proposal: Partial<CliProfile>
+  findings: CliFinding[]
+  warnings: string[]
 }
 
 export interface ModelEntry {

@@ -4,7 +4,7 @@ import { readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, delimiter, extname, isAbsolute, join } from 'node:path'
 import { promisify } from 'node:util'
-import type { CliProfile } from './types'
+import type { CliProfile, EffortLevel } from './types'
 
 /**
  * User-defined CLIs as workers.
@@ -27,6 +27,8 @@ const run = promisify(execFile)
 export interface AgentRunOptions {
   prompt: string
   model?: string
+  /** Reasoning effort the user picked for this turn. */
+  effort?: EffortLevel
   /** Let the CLI modify files and run commands. Off unless the user opts in. */
   auto?: boolean
   /** Read-only exploration. */
@@ -50,25 +52,34 @@ export interface ExternalRunResult {
 
 const MAX_OUTPUT = 2 * 1024 * 1024
 const DEFAULT_TIMEOUT_MS = 10 * 60_000
-const PLACEHOLDER = /\{(prompt|workspace|model)\}/g
+const PLACEHOLDER = /\{(prompt|workspace|model|effort)\}/g
 
 /* ------------------------------- argv ---------------------------------- */
 
-function expand(value: string, options: AgentRunOptions): string | undefined {
-  let missingModel = false
+interface ExpandOptions extends AgentRunOptions {
+  effortValue?: string
+}
+
+function expand(value: string, options: ExpandOptions): string | undefined {
+  let missing = false
   const expanded = value.replace(PLACEHOLDER, (_match, name: string) => {
     if (name === 'prompt') return options.prompt
     if (name === 'workspace') return options.workspace
-    if (options.model) return options.model
-    missingModel = true
+    if (name === 'model') {
+      if (options.model) return options.model
+      missing = true
+      return ''
+    }
+    if (options.effortValue) return options.effortValue
+    missing = true
     return ''
   })
-  // An argument that only makes sense with a model disappears without one,
+  // An argument that only makes sense with a model or an effort disappears
   // instead of being sent as an empty string the CLI would reject.
-  return missingModel ? undefined : expanded
+  return missing ? undefined : expanded
 }
 
-function expandAll(values: string[], options: AgentRunOptions): string[] {
+function expandAll(values: string[], options: ExpandOptions): string[] {
   const output: string[] = []
   for (const value of values) {
     const expanded = expand(value, options)
@@ -86,6 +97,20 @@ function expandAll(values: string[], options: AgentRunOptions): string[] {
 }
 
 /**
+ * Maps CharlieCode's four levels to the values a CLI advertises in `--help`.
+ * `none` means "do not pass anything": the CLI default is the default.
+ */
+export function effortValue(profile: CliProfile, effort: EffortLevel): string {
+  if (effort === 'none') return ''
+  const values = profile.effortValues ?? []
+  if (values.length === 0) return effort
+  if (effort === 'low') return values[0] ?? effort
+  if (effort === 'max') return values[values.length - 1] ?? effort
+  const high = values.find((value) => /high|strong|deep/i.test(value))
+  return high ?? values[Math.max(0, values.length - 2)] ?? effort
+}
+
+/**
  * Builds the argv for one task. Exported because the settings panel shows the
  * exact command before the user saves it: no surprises at spawn time.
  */
@@ -96,6 +121,12 @@ export function buildCliArgs(profile: CliProfile, options: AgentRunOptions): str
   if (options.model && profile.modelArgs?.length) {
     argv.push(...expandAll(profile.modelArgs, options))
   }
+
+  const effort = options.effort ? effortValue(profile, options.effort) : ''
+  if (effort && profile.effortArgs?.length) {
+    argv.push(...expandAll(profile.effortArgs, { ...options, effortValue: effort }))
+  }
+
   if (options.plan && profile.planArgs?.length) {
     argv.push(...expandAll(profile.planArgs, options))
   }

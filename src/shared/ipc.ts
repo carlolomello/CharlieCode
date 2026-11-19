@@ -1,5 +1,7 @@
-import type { IncomingAttachment } from '../engine/types'
+import type { CliIntrospection, IncomingAttachment } from '../engine/types'
 import type { Session, SessionSummary } from '../engine/session-types'
+
+export type { CliIntrospection }
 import type {
   CatalogError,
   CliProfile,
@@ -204,6 +206,8 @@ export interface CharlieCodeApi {
   cliProfiles(): Promise<CliProfilesStatus>
   /** Finds commands on this machine while the user types a name. */
   searchCliCommands(query: string): Promise<CliCommandMatch[]>
+  /** Reads the CLI's own `--help` and proposes a profile for it. */
+  introspectCli(command: string, args?: string[]): Promise<CliIntrospection>
   /** Creates or replaces a profile. The whole list comes back. */
   saveCliProfile(profile: unknown): Promise<CliProfilesStatus>
   deleteCliProfile(id: string): Promise<CliProfilesStatus>

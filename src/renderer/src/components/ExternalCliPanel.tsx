@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CliProfile, CliOutputFormat } from '../../../engine/types'
-import type { CliCommandMatch, CliProfilesStatus, CliTestResult } from '../../../shared/ipc'
+import type {
+  CliCommandMatch,
+  CliIntrospection,
+  CliProfilesStatus,
+  CliTestResult
+} from '../../../shared/ipc'
 
 /**
  * "CLI esterne".
@@ -23,6 +28,8 @@ interface Draft {
   promptMode: 'arg' | 'stdin'
   output: CliOutputFormat
   modelArgsText: string
+  effortArgsText: string
+  effortValuesText: string
   planArgsText: string
   autoArgsText: string
   modelsArgsText: string
@@ -41,6 +48,8 @@ const EMPTY_DRAFT: Draft = {
   promptMode: 'arg',
   output: 'auto',
   modelArgsText: '',
+  effortArgsText: '',
+  effortValuesText: '',
   planArgsText: '',
   autoArgsText: '',
   modelsArgsText: '',
@@ -80,6 +89,8 @@ function draftFromProfile(profile: CliProfile): Draft {
     promptMode: profile.promptMode ?? 'arg',
     output: profile.output ?? 'auto',
     modelArgsText: joinLines(profile.modelArgs),
+    effortArgsText: joinLines(profile.effortArgs),
+    effortValuesText: (profile.effortValues ?? []).join(', '),
     planArgsText: joinLines(profile.planArgs),
     autoArgsText: joinLines(profile.autoArgs),
     modelsArgsText: joinLines(profile.modelsArgs),
@@ -102,6 +113,20 @@ function profileFromDraft(draft: Draft): Record<string, unknown> {
     promptMode: draft.promptMode,
     output: draft.output,
     ...(splitLines(draft.modelArgsText).length ? { modelArgs: splitLines(draft.modelArgsText) } : {}),
+    ...(splitLines(draft.effortArgsText).length
+      ? { effortArgs: splitLines(draft.effortArgsText) }
+      : {}),
+    ...(draft.effortValuesText
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean).length
+      ? {
+          effortValues: draft.effortValuesText
+            .split(',')
+            .map((value) => value.trim())
+            .filter(Boolean)
+        }
+      : {}),
     ...(splitLines(draft.planArgsText).length ? { planArgs: splitLines(draft.planArgsText) } : {}),
     ...(splitLines(draft.autoArgsText).length ? { autoArgs: splitLines(draft.autoArgsText) } : {}),
     ...(splitLines(draft.modelsArgsText).length
@@ -138,6 +163,9 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
     state: 'idle' | 'searching' | 'exact' | 'similar' | 'missing'
     matches: CliCommandMatch[]
   }>({ state: 'idle', matches: [] })
+  const [analyzing, setAnalyzing] = useState(false)
+  const [analysis, setAnalysis] = useState<CliIntrospection | null>(null)
+  const [analysisError, setAnalysisError] = useState<string | null>(null)
   const fileInput = useRef<HTMLInputElement | null>(null)
 
   const load = useCallback(async (): Promise<void> => {
@@ -269,6 +297,58 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
     setSearchError(null)
   }
 
+  // Opening another profile must not show the previous profile's help analysis.
+  const openDraft = (next: Draft | null): void => {
+    setAnalysis(null)
+    setAnalysisError(null)
+    setDraft(next)
+  }
+
+  // Reads the CLI's own help and fills the fields it can prove. The proposal
+  // is never saved here: the user checks the argv preview and presses Salva.
+  const analyze = async (): Promise<void> => {
+    if (!draft) return
+    const command = draft.command.trim()
+    if (!command) {
+      setAnalysisError('Scrivi prima il comando della CLI.')
+      return
+    }
+
+    setAnalyzing(true)
+    setAnalysis(null)
+    setAnalysisError(null)
+    try {
+      const result = await window.charliecode.introspectCli(
+        command,
+        splitLines(draft.argsText)
+      )
+      setAnalysis(result)
+      const proposal = result.proposal
+      setDraft((previous) => {
+        if (!previous) return previous
+        return {
+          ...previous,
+          ...(proposal.args ? { argsText: joinLines(proposal.args) } : {}),
+          ...(proposal.promptMode ? { promptMode: proposal.promptMode } : {}),
+          ...(proposal.output ? { output: proposal.output } : {}),
+          ...(proposal.modelArgs ? { modelArgsText: joinLines(proposal.modelArgs) } : {}),
+          ...(proposal.effortArgs ? { effortArgsText: joinLines(proposal.effortArgs) } : {}),
+          ...(proposal.effortValues
+            ? { effortValuesText: proposal.effortValues.join(', ') }
+            : {}),
+          ...(proposal.planArgs ? { planArgsText: joinLines(proposal.planArgs) } : {}),
+          ...(proposal.autoArgs ? { autoArgsText: joinLines(proposal.autoArgs) } : {}),
+          ...(proposal.modelsArgs ? { modelsArgsText: joinLines(proposal.modelsArgs) } : {}),
+          ...(proposal.modelsFormat ? { modelsFormat: proposal.modelsFormat } : {})
+        }
+      })
+    } catch (cause) {
+      setAnalysisError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setAnalyzing(false)
+    }
+  }
+
   const test = async (id: string, model?: string): Promise<void> => {
     setTesting(id)
     setError(null)
@@ -293,7 +373,7 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
     try {
       const next = await window.charliecode.saveCliProfile(profileFromDraft(draft))
       setStatus(next)
-      setDraft(null)
+      openDraft(null)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -306,7 +386,7 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
     setError(null)
     try {
       setStatus(await window.charliecode.deleteCliProfile(profile.id))
-      if (draft?.id === profile.id) setDraft(null)
+      if (draft?.id === profile.id) openDraft(null)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     }
@@ -377,7 +457,7 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
       if (typeof parsed !== 'object' || parsed === null) {
         throw new Error('Il file non contiene un oggetto JSON.')
       }
-      setDraft(draftFromProfile(parsed as CliProfile))
+      openDraft(draftFromProfile(parsed as CliProfile))
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     }
@@ -464,7 +544,7 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
       )}
 
       <div className="cli-toolbar">
-        <button className="primary small" onClick={() => setDraft({ ...EMPTY_DRAFT })}>
+        <button className="primary small" onClick={() => openDraft({ ...EMPTY_DRAFT })}>
           + Nuovo profilo
         </button>
         <button className="ghost small" onClick={() => fileInput.current?.click()}>
@@ -559,7 +639,7 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
                 <button
                   className="ghost small"
                   onClick={() => {
-                    setDraft(draftFromProfile(profile))
+                    openDraft(draftFromProfile(profile))
                     setPreview(null)
                     setPreviewError(null)
                   }}
@@ -701,6 +781,64 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
             </p>
           )}
 
+          <div className="cli-command-actions">
+            <button
+              type="button"
+              className="ghost small"
+              onClick={() => void analyze()}
+              disabled={analyzing || !draft.command.trim()}
+            >
+              {analyzing ? 'Leggo --help…' : 'Analizza --help'}
+            </button>
+            <span className="muted small">
+              legge l’aiuto della CLI e propone i flag che riconosce; niente viene salvato
+            </span>
+          </div>
+
+          {analysisError && <p className="cli-hint bad small">{analysisError}</p>}
+
+          {analysis && (
+            <div className="cli-analysis">
+              <p className="small">
+                {analysis.path ? (
+                  <>
+                    Trovata: <code>{analysis.path}</code>
+                  </>
+                ) : (
+                  'Comando non trovato'
+                )}
+                {analysis.version ? ` · ${analysis.version}` : ''}
+                {analysis.helpRead ? ' · aiuto letto' : ' · aiuto non disponibile'}
+              </p>
+              {analysis.findings.length > 0 && (
+                <ul className="cli-findings">
+                  {analysis.findings.map((finding) => (
+                    <li key={`${finding.field}-${finding.evidence}`}>
+                      <span>{finding.label}</span>
+                      <code>{finding.evidence}</code>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {analysis.warnings.map((warning) => (
+                <p className="cli-hint warn small" key={warning}>
+                  {warning}
+                </p>
+              ))}
+              {analysis.helpExcerpt && (
+                <details className="cli-help">
+                  <summary className="muted small">Aiuto letto</summary>
+                  <pre>{analysis.helpExcerpt}</pre>
+                </details>
+              )}
+              {analysis.findings.length > 0 && (
+                <p className="muted small">
+                  Controlla l’anteprima e prova il profilo: ogni proposta resta modificabile.
+                </p>
+              )}
+            </div>
+          )}
+
           <label className="cli-field">
             <span>
               Argomenti <span className="muted small">— uno per riga</span>
@@ -715,8 +853,8 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
 
           <p className="muted small">
             Segnaposto: <code>{'{prompt}'}</code>, <code>{'{workspace}'}</code>,{' '}
-            <code>{'{model}'}</code>. Senza <code>{'{prompt}'}</code> il prompt viene aggiunto come
-            ultimo argomento.
+            <code>{'{model}'}</code>, <code>{'{effort}'}</code>. Senza <code>{'{prompt}'}</code> il
+            prompt viene aggiunto come ultimo argomento.
           </p>
 
           <div className="cli-grid">
@@ -764,6 +902,35 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
                 onChange={(event) => setDraft({ ...draft, modelArgsText: event.target.value })}
               />
             </label>
+
+            <div className="cli-grid">
+              <label className="cli-field">
+                <span>
+                  Effort{' '}
+                  <span className="muted small">— aggiunti solo se scegli un livello</span>
+                </span>
+                <textarea
+                  rows={2}
+                  value={draft.effortArgsText}
+                  placeholder={'--effort\n{effort}'}
+                  onChange={(event) => setDraft({ ...draft, effortArgsText: event.target.value })}
+                />
+              </label>
+
+              <label className="cli-field">
+                <span>
+                  Valori effort{' '}
+                  <span className="muted small">— dal più basso, separati da virgola</span>
+                </span>
+                <input
+                  value={draft.effortValuesText}
+                  placeholder="low, medium, high"
+                  onChange={(event) =>
+                    setDraft({ ...draft, effortValuesText: event.target.value })
+                  }
+                />
+              </label>
+            </div>
 
             <label className="cli-field">
               <span>
@@ -875,7 +1042,7 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
             <button className="ghost" onClick={() => void runPreview()}>
               Anteprima comando
             </button>
-            <button className="ghost" onClick={() => setDraft(null)}>
+            <button className="ghost" onClick={() => openDraft(null)}>
               Annulla
             </button>
           </div>

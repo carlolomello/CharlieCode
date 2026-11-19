@@ -295,6 +295,7 @@ export async function runAgent(
               {
                 prompt: sub.prompt,
                 ...(worker.model ? { model: worker.model } : {}),
+                ...(request.effort ? { effort: request.effort } : {}),
                 // Reading is always allowed; writing only for an implementer.
                 ...(planMode || role !== 'implementer' ? { plan: true } : {}),
                 auto: worker.auto === true && !planMode && role === 'implementer',

@@ -143,6 +143,12 @@ export function validateCliProfile(value: unknown, fallbackId?: string): CliProf
     ...(readStringArray(record, 'modelArgs', 'Gli argomenti del modello').length
       ? { modelArgs: readStringArray(record, 'modelArgs', 'Gli argomenti del modello') }
       : {}),
+    ...(readStringArray(record, 'effortArgs', "Gli argomenti dell'effort").length
+      ? { effortArgs: readStringArray(record, 'effortArgs', "Gli argomenti dell'effort") }
+      : {}),
+    ...(readStringArray(record, 'effortValues', "I valori dell'effort").length
+      ? { effortValues: readStringArray(record, 'effortValues', "I valori dell'effort") }
+      : {}),
     ...(readStringArray(record, 'planArgs', 'Gli argomenti di sola lettura').length
       ? { planArgs: readStringArray(record, 'planArgs', 'Gli argomenti di sola lettura') }
       : {}),

@@ -8,6 +8,7 @@ import type {
   ChatStartPayload,
   ChatStartResult,
   CliCommandMatch,
+  CliIntrospection,
   CliPreview,
   CliPreviewPayload,
   CliProfilesStatus,
@@ -161,6 +162,8 @@ const api: CharlieCodeApi = {
   cliProfiles: () => ipcRenderer.invoke('charliecode:clis:list') as Promise<CliProfilesStatus>,
   searchCliCommands: (query: string) =>
     ipcRenderer.invoke('charliecode:clis:search', query) as Promise<CliCommandMatch[]>,
+  introspectCli: (command: string, args?: string[]) =>
+    ipcRenderer.invoke('charliecode:clis:introspect', { command, args }) as Promise<CliIntrospection>,
   saveCliProfile: (profile: unknown) =>
     ipcRenderer.invoke('charliecode:clis:save', profile) as Promise<CliProfilesStatus>,
   deleteCliProfile: (id: string) =>

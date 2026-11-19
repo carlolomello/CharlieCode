@@ -36,6 +36,7 @@ import {
   runExternalAgent,
   searchBinaries
 } from '../engine/external-agents'
+import { introspectCli } from '../engine/cli-introspect'
 import {
   deleteCliProfile,
   listCliProfiles,
@@ -496,6 +497,24 @@ function registerIpc(): void {
     const { config } = await loadConfig(platform)
     return searchBinaries(query, platform.homeDir, config.workspace)
   })
+
+  ipcMain.handle(
+    'charliecode:clis:introspect',
+    async (_event, payload: { command?: unknown; args?: unknown }) => {
+      if (typeof payload?.command !== 'string' || !payload.command.trim()) {
+        throw new Error('Comando mancante.')
+      }
+      const args = Array.isArray(payload.args)
+        ? payload.args.filter((arg): arg is string => typeof arg === 'string').slice(0, 64)
+        : []
+      const { config } = await loadConfig(platform)
+      return introspectCli(payload.command, {
+        home: platform.homeDir,
+        ...(config.workspace ? { workspace: config.workspace } : {}),
+        args
+      })
+    }
+  )
 
   ipcMain.handle('charliecode:clis:save', async (_event, input: unknown): Promise<CliProfilesStatus> => {
     await saveCliProfile(platform, input)

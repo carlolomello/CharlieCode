@@ -144,13 +144,13 @@ FreeLLMAPI is a separate project: <https://github.com/tashfeenahmed/freellmapi>.
 
 ### A CLI you already have
 
-Some teams do not hand out API keys: the approved tool is a CLI with its own login. **✦ Collega un modello → CLI esterna** lets you define that CLI as a profile — command, arguments, output format — test it with one sentence, and pick it as the worker for `task` subagents. Write the command name and the panel searches PATH and the usual tool-manager directories, showing the resolved path before you save. No product is hardcoded: the profile is just JSON in `~/.charliecode/clis/`.
+Some teams do not hand out API keys: the approved tool is a CLI with its own login. **✦ Collega un modello → CLI esterna** lets you define that CLI as a profile — command, arguments, output format — test it with one sentence, and pick it as the worker for `task` subagents. Write the command name and the panel searches PATH and the usual tool-manager directories, showing the resolved path before you save. Then press **Analizza --help**: CharlieCode reads the CLI's own help and proposes the flags it recognizes — model, effort levels, read-only mode, automatic writes, JSON output, the command that lists models — all editable. No product is hardcoded: the profile is just JSON in `~/.charliecode/clis/`.
 
 What that means in practice:
 
 - the model calls happen inside that CLI — its auth, its quota, its audit log;
 - CharlieCode still plans, splits the work, and shows the diff afterwards;
-- **explorer** and **reviewer** subagents run read-only (`--permission-mode plan`, `-p`, `--auto-approve false`);
+- **explorer** and **reviewer** subagents run with the profile's read-only flags;
 - writing is opt-in per CLI, and only for **implementer** subagents;
 - a CLI that fails the test is reported as failed, not retried silently.
 

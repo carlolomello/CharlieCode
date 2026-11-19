@@ -66,6 +66,22 @@ describe('buildCliArgs', () => {
     expect(argv).toEqual(['run', '-m', 'm1', '--plan', '--yes', 'ciao'])
   })
 
+  it('traduce i livelli di effort nei valori dichiarati dalla CLI', () => {
+    const base = profile({
+      args: ['run'],
+      effortArgs: ['--effort', '{effort}'],
+      effortValues: ['low', 'medium', 'high']
+    })
+    const run = (effort?: 'none' | 'low' | 'high' | 'max'): string[] =>
+      buildCliArgs(base, { prompt: 'x', workspace: '/p', ...(effort ? { effort } : {}) })
+
+    expect(run('low')).toEqual(['run', '--effort', 'low', 'x'])
+    expect(run('high')).toEqual(['run', '--effort', 'high', 'x'])
+    expect(run('max')).toEqual(['run', '--effort', 'high', 'x'])
+    expect(run('none')).toEqual(['run', 'x'])
+    expect(run()).toEqual(['run', 'x'])
+  })
+
   it('con prompt su stdin non lo aggiunge agli argomenti', () => {
     const argv = buildCliArgs(profile({ args: ['run'], promptMode: 'stdin' }), {
       prompt: 'ciao',
