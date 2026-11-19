@@ -928,9 +928,14 @@ hanno priorità su queste.
               failure = message
               emit({ type: 'error', message })
             } else {
-              // Documents are inlined into the history; images cannot be read
-              // by most CLIs, so their path is listed in the briefing instead.
-              const history = await materializeHistory(platform, toChatHistory(stored))
+              // The briefing summarises older turns itself, so it gets the whole
+              // transcript instead of the last forty messages.
+              const history = await materializeHistory(
+                platform,
+                toChatHistory(stored, stored.messages.length)
+              )
+              // Images cannot be read by most CLIs, so the briefing lists their
+              // path on disk instead of inlining the bytes.
               const cliAttachments = attachmentRefs.flatMap((ref) =>
                 ref.path ? [{ name: ref.name, path: platform.configPath(ref.path) }] : []
               )

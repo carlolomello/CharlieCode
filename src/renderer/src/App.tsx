@@ -561,6 +561,22 @@ export default function App() {
     [models, modelKey]
   )
 
+  /**
+   * Where the backend changed mid-conversation. The canonical context lives in
+   * the session, so the switch is safe; the chip says so instead of leaving the
+   * user to wonder whether the new model saw the old turns.
+   */
+  const handoffIds = useMemo(() => {
+    const ids = new Set<string>()
+    let previous: string | undefined
+    for (const item of items) {
+      if (item.role !== 'assistant' || !item.modelKey) continue
+      if (previous && previous !== item.modelKey) ids.add(item.id)
+      previous = item.modelKey
+    }
+    return ids
+  }, [items])
+
   // A selection can go stale: the provider is removed, the model is retired,
   // or a restored session points at something this install no longer has. The
   // picker would then show one thing while `modelKey` held another, and every
@@ -1357,6 +1373,14 @@ export default function App() {
                           ? shortKey(item.modelKey)
                           : 'assistant'}
                     </span>
+                    {handoffIds.has(item.id) && (
+                      <span
+                        className="handoff-chip"
+                        title="Hai cambiato backend: la conversazione e il progetto sono gli stessi"
+                      >
+                        ↪ contesto condiviso
+                      </span>
+                    )}
                     {item.pending && <span className="pulse">sta scrivendo</span>}
                   </div>
                   {(item.attachments?.length ?? 0) > 0 && (

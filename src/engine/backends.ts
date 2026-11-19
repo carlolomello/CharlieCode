@@ -9,6 +9,7 @@ import type {
 } from './types'
 import type { CliProfileInfo, WorkspaceChanges } from '../shared/ipc'
 import { changeDiff, listChanges } from './changes'
+import { buildSummary } from './context'
 import { runExternalAgent } from './external-agents'
 import { cliModelKey } from '../shared/cli-key'
 
@@ -69,6 +70,7 @@ export function buildCliBriefing(input: {
 
   const recent: string[] = []
   let used = 0
+  let start = history.length
   for (let index = history.length - 1; index >= 0; index--) {
     const message = history[index]
     if (!message) continue
@@ -77,10 +79,11 @@ export function buildCliBriefing(input: {
     const entry = `${message.role === 'user' ? 'Utente' : 'Assistente'}:\n${text}`
     if (recent.length > 0 && used + entry.length > MAX_BRIEFING_CHARS) break
     recent.unshift(entry)
+    start = index
     used += entry.length
   }
 
-  const omitted = history.length - recent.length
+  const omitted = history.slice(0, start)
 
   return [
     'Sei il motore di una conversazione gestita da CharlieCode. Lavora sul progetto nella directory corrente e rispondi alla richiesta finale.',
@@ -88,7 +91,9 @@ export function buildCliBriefing(input: {
     input.mode === 'plan'
       ? 'Modalità piano: esplora e proponi, non modificare file.'
       : 'Modalità build: puoi modificare il progetto.',
-    omitted > 0 ? `(${omitted} messaggi precedenti sono stati omessi per spazio.)` : '',
+    omitted.length > 0
+      ? `(${omitted.length} messaggi precedenti non entrano nel briefing. Riepilogo automatico:)\n${buildSummary(omitted, 4000)}`
+      : '',
     recent.length > 0 ? `Conversazione finita qui:\n\n${recent.join('\n\n')}` : '',
     input.attachments?.length
       ? `Allegati di questo turno (file su disco):\n${input.attachments

@@ -455,6 +455,16 @@ button.ghost.small {
   animation: pulse 1.4s ease-in-out infinite;
 }
 
+.handoff-chip {
+  font-size: 11px;
+  color: #9fd0ff;
+  background: #12202f;
+  border: 1px solid #2b4a6b;
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+
 @keyframes pulse {
   0%,
   100% {

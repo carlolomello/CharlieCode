@@ -93,13 +93,14 @@ describe('buildCliBriefing', () => {
     expect(briefing).toContain('- screen.png: /tmp/screen.png')
   })
 
-  it('segnala i messaggi omessi quando la cronologia è troppo lunga', () => {
+  it('riassume i messaggi che non entrano nel briefing', () => {
     const messages = Array.from({ length: 200 }, (_, index) => ({
       role: 'user' as const,
       content: `messaggio ${index} ${'x'.repeat(500)}`
     }))
     const briefing = buildCliBriefing({ messages, prompt: 'ultima' })
-    expect(briefing).toMatch(/messaggi precedenti sono stati omessi/)
+    expect(briefing).toMatch(/messaggi precedenti non entrano nel briefing/)
+    expect(briefing).toContain('Riepilogo automatico')
     expect(briefing).toContain('Richiesta attuale:\nultima')
   })
 })
