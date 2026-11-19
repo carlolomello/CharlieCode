@@ -144,7 +144,7 @@ FreeLLMAPI is a separate project: <https://github.com/tashfeenahmed/freellmapi>.
 
 ### A CLI you already have
 
-Some teams do not hand out API keys: the approved tool is a CLI with its own login. **✦ Collega un modello → CLI esterna** lets you define that CLI as a profile — command, arguments, output format — test it with one sentence, and pick it as the worker for `task` subagents. No product is hardcoded: the profile is just JSON in `~/.charliecode/clis/`.
+Some teams do not hand out API keys: the approved tool is a CLI with its own login. **✦ Collega un modello → CLI esterna** lets you define that CLI as a profile — command, arguments, output format — test it with one sentence, and pick it as the worker for `task` subagents. Write the command name and the panel searches PATH and the usual tool-manager directories, showing the resolved path before you save. No product is hardcoded: the profile is just JSON in `~/.charliecode/clis/`.
 
 What that means in practice:
 

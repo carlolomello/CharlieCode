@@ -33,7 +33,8 @@ import {
   formatCommand,
   profileModels,
   promptOnStdin,
-  runExternalAgent
+  runExternalAgent,
+  searchBinaries
 } from '../engine/external-agents'
 import {
   deleteCliProfile,
@@ -490,6 +491,11 @@ function registerIpc(): void {
   }
 
   ipcMain.handle('charliecode:clis:list', () => cliStatus())
+
+  ipcMain.handle('charliecode:clis:search', async (_event, query: string) => {
+    const { config } = await loadConfig(platform)
+    return searchBinaries(query, platform.homeDir, config.workspace)
+  })
 
   ipcMain.handle('charliecode:clis:save', async (_event, input: unknown): Promise<CliProfilesStatus> => {
     await saveCliProfile(platform, input)

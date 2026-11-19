@@ -202,6 +202,8 @@ export interface CharlieCodeApi {
 
   /** CLI profiles the user defined, plus the configured worker. */
   cliProfiles(): Promise<CliProfilesStatus>
+  /** Finds commands on this machine while the user types a name. */
+  searchCliCommands(query: string): Promise<CliCommandMatch[]>
   /** Creates or replaces a profile. The whole list comes back. */
   saveCliProfile(profile: unknown): Promise<CliProfilesStatus>
   deleteCliProfile(id: string): Promise<CliProfilesStatus>
@@ -220,6 +222,14 @@ export interface CliProfileInfo {
   /** Resolved command on this machine, when found. */
   path?: string
   available: boolean
+}
+
+/** One executable found while searching for a CLI name. */
+export interface CliCommandMatch {
+  name: string
+  path: string
+  /** `--version` first line, when the binary answered quickly. */
+  version?: string
 }
 
 export interface CliProfilesStatus {

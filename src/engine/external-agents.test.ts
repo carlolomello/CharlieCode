@@ -1,6 +1,6 @@
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   buildCliArgs,
@@ -8,7 +8,8 @@ import {
   extractText,
   findBinary,
   formatCommand,
-  runExternalAgent
+  runExternalAgent,
+  searchBinaries
 } from './external-agents'
 import type { CliProfile } from './types'
 
@@ -149,6 +150,50 @@ describe('findBinary', () => {
     await writeFile(script, '#!/bin/sh\necho ok\n')
     await chmod(script, 0o755)
     expect(findBinary('scripts/agent', dir, dir)).toBe(script)
+  })
+})
+
+describe('searchBinaries', () => {
+  let dir: string
+  let oldPath: string | undefined
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'charliecode-search-'))
+    oldPath = process.env.PATH
+    process.env.PATH = `${dir}${delimiter}${oldPath ?? ''}`
+  })
+
+  afterEach(async () => {
+    process.env.PATH = oldPath
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  it.runIf(process.platform !== 'win32')('trova un comando esatto e ne legge la versione', async () => {
+    const binary = join(dir, 'agent-one')
+    await writeFile(binary, '#!/bin/sh\necho 1.2.3\n')
+    await chmod(binary, 0o755)
+
+    const matches = await searchBinaries('agent-one', dir)
+    expect(matches).toHaveLength(1)
+    expect(matches[0]?.path).toBe(binary)
+    expect(matches[0]?.version).toBe('1.2.3')
+  })
+
+  it.runIf(process.platform !== 'win32')('trova per prefisso mentre si scrive', async () => {
+    const binary = join(dir, 'agent-one')
+    await writeFile(binary, '#!/bin/sh\nexit 0\n')
+    await chmod(binary, 0o755)
+
+    const matches = await searchBinaries('agent', dir)
+    expect(matches.map((match) => match.name)).toContain('agent-one')
+  })
+
+  it('non scansiona con una sola lettera', async () => {
+    expect(await searchBinaries('a', dir)).toEqual([])
+  })
+
+  it('restituisce una lista vuota quando non c’è nulla', async () => {
+    expect(await searchBinaries('comando-che-non-esiste-123', dir)).toEqual([])
   })
 })
 

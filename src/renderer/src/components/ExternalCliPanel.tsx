@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CliProfile, CliOutputFormat } from '../../../engine/types'
-import type { CliProfilesStatus, CliTestResult } from '../../../shared/ipc'
+import type { CliCommandMatch, CliProfilesStatus, CliTestResult } from '../../../shared/ipc'
 
 /**
  * "CLI esterne".
@@ -130,6 +130,14 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
   const [workerBusy, setWorkerBusy] = useState(false)
   const [preview, setPreview] = useState<string | null>(null)
   const [previewError, setPreviewError] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  const [searchBusy, setSearchBusy] = useState(false)
+  const [searchResults, setSearchResults] = useState<CliCommandMatch[]>([])
+  const [searchError, setSearchError] = useState<string | null>(null)
+  const [commandProbe, setCommandProbe] = useState<{
+    state: 'idle' | 'searching' | 'exact' | 'similar' | 'missing'
+    matches: CliCommandMatch[]
+  }>({ state: 'idle', matches: [] })
   const fileInput = useRef<HTMLInputElement | null>(null)
 
   const load = useCallback(async (): Promise<void> => {
@@ -167,6 +175,99 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
     if (id) void loadModels(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status?.worker?.id])
+
+  // Search-as-you-type in the dedicated box: one command name, many installs.
+  useEffect(() => {
+    const query = search.trim()
+    if (query.length < 2) {
+      setSearchResults([])
+      setSearchError(null)
+      setSearchBusy(false)
+      return
+    }
+
+    let cancelled = false
+    setSearchBusy(true)
+    setSearchError(null)
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const matches = await window.charliecode.searchCliCommands(query)
+          if (cancelled) return
+          setSearchResults(matches)
+          setSearchError(matches.length === 0 ? `Nessun comando trovato per “${query}”.` : null)
+        } catch (cause) {
+          if (!cancelled) {
+            setSearchResults([])
+            setSearchError(cause instanceof Error ? cause.message : String(cause))
+          }
+        } finally {
+          if (!cancelled) setSearchBusy(false)
+        }
+      })()
+    }, 250)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [search])
+
+  // The command field itself resolves what the user is typing, so a typo or a
+  // CLI that is not installed is visible before saving the profile.
+  useEffect(() => {
+    const command = draft?.command.trim() ?? ''
+    if (!draft || command.length < 2) {
+      setCommandProbe({ state: 'idle', matches: [] })
+      return
+    }
+
+    let cancelled = false
+    setCommandProbe({ state: 'searching', matches: [] })
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const matches = await window.charliecode.searchCliCommands(command)
+          if (cancelled) return
+          const lower = command.toLowerCase()
+          const exact = matches.find(
+            (match) => match.name.toLowerCase() === lower || match.path === command
+          )
+          if (exact) {
+            setCommandProbe({
+              state: 'exact',
+              matches: [exact, ...matches.filter((match) => match.path !== exact.path)]
+            })
+          } else {
+            setCommandProbe({ state: matches.length > 0 ? 'similar' : 'missing', matches })
+          }
+        } catch {
+          if (!cancelled) setCommandProbe({ state: 'idle', matches: [] })
+        }
+      })()
+    }, 350)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [draft?.command])
+
+  const applyMatch = (match: CliCommandMatch): void => {
+    setDraft((previous) => {
+      const base = previous ?? { ...EMPTY_DRAFT }
+      return {
+        ...base,
+        // The absolute path keeps working even when the app was launched with
+        // a different PATH than the user's shell.
+        command: match.path,
+        label: base.label.trim() ? base.label : match.name
+      }
+    })
+    setSearch('')
+    setSearchResults([])
+    setSearchError(null)
+  }
 
   const test = async (id: string, model?: string): Promise<void> => {
     setTesting(id)
@@ -385,6 +486,38 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
         </button>
       </div>
 
+      <div className="cli-search">
+        <label className="cli-search-box">
+          <span className="muted small">Cerca una CLI già installata</span>
+          <input
+            value={search}
+            placeholder="scrivi il nome del comando, es. il tuo agente"
+            spellCheck={false}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </label>
+        {searchBusy && <span className="muted small">cerco nel PATH…</span>}
+        {searchError && <span className="muted small">{searchError}</span>}
+        {searchResults.length > 0 && (
+          <div className="cli-search-results">
+            {searchResults.map((match) => (
+              <button
+                key={match.path}
+                type="button"
+                className="cli-search-hit"
+                onClick={() => applyMatch(match)}
+              >
+                <span className="cli-search-name">
+                  {match.name}
+                  {match.version && <span className="cli-version">{match.version}</span>}
+                </span>
+                <code>{match.path}</code>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
       {loading && <p className="muted small">Leggo i profili…</p>}
 
       {!loading && profiles.length === 0 && (
@@ -505,6 +638,68 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
               onChange={(event) => setDraft({ ...draft, command: event.target.value })}
             />
           </label>
+
+          {commandProbe.state === 'searching' && (
+            <p className="cli-hint muted small">cerco nel PATH…</p>
+          )}
+          {commandProbe.state === 'exact' && (
+            <p className="cli-hint ok small">
+              trovato: <code>{commandProbe.matches[0]?.path}</code>
+              {commandProbe.matches[0] && commandProbe.matches[0].path !== draft.command && (
+                <button
+                  type="button"
+                  className="ghost small"
+                  onClick={() =>
+                    setDraft({ ...draft, command: commandProbe.matches[0]!.path })
+                  }
+                >
+                  usa il percorso assoluto
+                </button>
+              )}
+              {commandProbe.matches.length > 1 && (
+                <span className="cli-hint-more">
+                  {' '}
+                  altre installazioni:{' '}
+                  {commandProbe.matches.slice(1, 4).map((match) => (
+                    <button
+                      key={match.path}
+                      type="button"
+                      className="ghost small"
+                      onClick={() => setDraft({ ...draft, command: match.path })}
+                    >
+                      {match.path}
+                    </button>
+                  ))}
+                </span>
+              )}
+            </p>
+          )}
+          {commandProbe.state === 'similar' && (
+            <p className="cli-hint warn small">
+              Nessuna corrispondenza esatta. Forse cercavi:{' '}
+              {commandProbe.matches.slice(0, 5).map((match) => (
+                <button
+                  key={match.path}
+                  type="button"
+                  className="ghost small"
+                  onClick={() =>
+                    setDraft({
+                      ...draft,
+                      command: match.path,
+                      label: draft.label.trim() ? draft.label : match.name
+                    })
+                  }
+                >
+                  {match.name}
+                </button>
+              ))}
+            </p>
+          )}
+          {commandProbe.state === 'missing' && (
+            <p className="cli-hint bad small">
+              Non trovato nel PATH. Indica un percorso assoluto oppure installa la CLI e riprova.
+            </p>
+          )}
 
           <label className="cli-field">
             <span>

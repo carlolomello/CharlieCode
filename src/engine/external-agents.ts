@@ -1,7 +1,8 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
-import { accessSync, constants, statSync } from 'node:fs'
+import { accessSync, constants, readdirSync, statSync, type Dirent } from 'node:fs'
+import { readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { delimiter, isAbsolute, join } from 'node:path'
+import { basename, delimiter, extname, isAbsolute, join } from 'node:path'
 import { promisify } from 'node:util'
 import type { CliProfile } from './types'
 
@@ -149,6 +150,62 @@ function candidatePaths(base: string): string[] {
   return [base, ...extensions.map((extension) => `${base}${extension}`)]
 }
 
+function searchDirectories(home: string): string[] {
+  const directories = new Set<string>(
+    (process.env.PATH ?? '').split(delimiter).filter(Boolean)
+  )
+
+  // Finder/Explorer launches do not inherit the shell PATH. These are generic
+  // tool-manager locations, not product presets: whatever the user installed
+  // there is found by name like anything else.
+  const fixed = [
+    join(home, '.local', 'bin'),
+    join(home, '.local', 'share', 'pnpm'),
+    join(home, '.bun', 'bin'),
+    join(home, '.cargo', 'bin'),
+    join(home, '.deno', 'bin'),
+    join(home, '.volta', 'bin'),
+    join(home, '.asdf', 'shims'),
+    join(home, 'Library', 'pnpm'),
+    join(home, '.npm-global', 'bin'),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+    '/usr/bin',
+    '/bin'
+  ]
+  for (const directory of fixed) directories.add(directory)
+
+  for (const variable of ['PNPM_HOME', 'VOLTA_HOME', 'CARGO_HOME', 'DENO_INSTALL', 'NVM_BIN']) {
+    const value = process.env[variable]
+    if (!value) continue
+    directories.add(variable === 'NVM_BIN' ? value : join(value, 'bin'))
+  }
+
+  if (process.platform === 'win32') {
+    const appData = process.env.APPDATA
+    const localAppData = process.env.LOCALAPPDATA
+    if (appData) directories.add(join(appData, 'npm'))
+    if (localAppData) directories.add(join(localAppData, 'Programs'))
+  }
+
+  // nvm keeps one bin directory per Node version; the shell PATH only points
+  // at the active one, and the app usually starts with a different PATH.
+  try {
+    const versions = readdirSync(join(home, '.nvm', 'versions', 'node'), {
+      withFileTypes: true
+    })
+    for (const version of versions) {
+      if (version.isDirectory()) {
+        directories.add(join(home, '.nvm', 'versions', 'node', version.name, 'bin'))
+      }
+    }
+  } catch {
+    // No nvm: nothing to add.
+  }
+
+  return [...directories]
+}
+
 /**
  * Resolves a command the way a shell would: an absolute path is used as is, a
  * relative one is resolved against the workspace, and a bare name is searched
@@ -177,24 +234,126 @@ export function findBinary(
     return candidatePaths(base).find(isExecutable)
   }
 
-  const directories = (process.env.PATH ?? '')
-    .split(delimiter)
-    .filter(Boolean)
-    .concat([
-      join(home, '.local', 'bin'),
-      join(home, '.bun', 'bin'),
-      join(home, 'Library', 'pnpm'),
-      join(home, '.npm-global', 'bin'),
-      '/opt/homebrew/bin',
-      '/usr/local/bin'
-    ])
-
-  for (const directory of directories) {
+  for (const directory of searchDirectories(home)) {
     for (const candidate of candidatePaths(join(directory, cleaned))) {
       if (isExecutable(candidate)) return candidate
     }
   }
   return undefined
+}
+
+/* ------------------------------- search --------------------------------- */
+
+export interface BinaryMatch {
+  /** Command name without the Windows extension. */
+  name: string
+  path: string
+  /** `--version` first line, when the binary answered quickly. */
+  version?: string
+}
+
+function displayName(name: string): string {
+  if (process.platform !== 'win32') return name
+  const extension = extname(name).toLowerCase()
+  return executableExtensions().includes(extension) ? name.slice(0, -extension.length) : name
+}
+
+function hasRunnableExtension(name: string): boolean {
+  if (process.platform !== 'win32') return true
+  return executableExtensions().includes(extname(name).toLowerCase())
+}
+
+async function versionOf(path: string): Promise<string | undefined> {
+  try {
+    const { stdout } = await run(path, ['--version'], {
+      timeout: 1_500,
+      windowsHide: true,
+      maxBuffer: 128 * 1024
+    })
+    return stdout.split('\n')[0]?.trim() || undefined
+  } catch {
+    // A CLI that cannot answer --version is still usable.
+    return undefined
+  }
+}
+
+/**
+ * Finds commands by name while the user types.
+ *
+ * Exact names go through `findBinary` (fast, respects PATH order). A partial
+ * query scans the same directories and returns the first match per command
+ * name, capped: this is a picker, not a package manager. Versions are fetched
+ * for the first few matches only, with a short timeout, so a slow binary never
+ * blocks the panel.
+ */
+export async function searchBinaries(
+  query: string,
+  home = homedir(),
+  workspace?: string
+): Promise<BinaryMatch[]> {
+  const cleaned = query.trim()
+  if (!cleaned) return []
+
+  const exact = findBinary(cleaned, home, workspace)
+  if (exact) {
+    const version = await versionOf(exact)
+    return [
+      {
+        name: displayName(basename(exact)),
+        path: exact,
+        ...(version ? { version } : {})
+      }
+    ]
+  }
+
+  // One character would list half the machine; wait for a real query.
+  if (cleaned.length < 2) return []
+
+  const lower = cleaned.toLowerCase()
+  const seen = new Set<string>()
+  const matches: BinaryMatch[] = []
+
+  for (const directory of searchDirectories(home)) {
+    let entries: Dirent[]
+    try {
+      entries = await readdir(directory, { withFileTypes: true })
+    } catch {
+      continue
+    }
+
+    for (const entry of entries) {
+      if (!entry.isFile() && !entry.isSymbolicLink()) continue
+      if (!entry.name.toLowerCase().includes(lower)) continue
+      if (!hasRunnableExtension(entry.name)) continue
+
+      const name = displayName(entry.name)
+      const key = process.platform === 'win32' ? name.toLowerCase() : name
+      if (seen.has(key)) continue
+
+      const path = join(directory, entry.name)
+      if (!isExecutable(path)) continue
+
+      seen.add(key)
+      matches.push({ name, path })
+      if (matches.length >= 40) break
+    }
+    if (matches.length >= 40) break
+  }
+
+  const score = (match: BinaryMatch): number => {
+    const name = match.name.toLowerCase()
+    if (name === lower) return 0
+    if (name.startsWith(lower)) return 1
+    return 2
+  }
+  matches.sort((a, b) => score(a) - score(b) || a.name.localeCompare(b.name))
+
+  const top = matches.slice(0, 40)
+  const versions = await Promise.all(top.slice(0, 6).map((match) => versionOf(match.path)))
+  return top.map((match, index) => {
+    const version = versions[index]
+    return version ? { ...match, version } : match
+  })
 }
 
 /* ------------------------------- parsing -------------------------------- */
