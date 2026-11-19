@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Mascot, type MascotMood } from './Mascot'
 import { baseName, relativeTime } from '../format'
 import type { AppInfo, ProviderStatus, RoutersStatus } from '../../../shared/ipc'
@@ -35,12 +35,15 @@ export interface SidebarProps {
 function SessionRow({
   session,
   active,
+  projectLabel,
   onOpen,
   onRename,
   onRemove
 }: {
   session: SessionSummary
   active: boolean
+  /** Shown in search results, where chats from every project are mixed. */
+  projectLabel?: string
   onOpen: () => void
   onRename: (title: string) => void
   onRemove: () => void
@@ -89,6 +92,7 @@ function SessionRow({
           <div className="session-title">{session.title}</div>
         )}
         <div className="session-meta">
+          {projectLabel ? `${baseName(projectLabel)} · ` : ''}
           {relativeTime(session.updatedAt)} · {session.messageCount} msg
         </div>
       </div>
@@ -167,6 +171,15 @@ export function Sidebar({
   onOpenSettings,
   onOpenConfig
 }: SidebarProps): React.JSX.Element {
+  const [query, setQuery] = useState('')
+  const needle = query.trim().toLowerCase()
+  const matches = useMemo(() => {
+    if (!needle) return []
+    return sessions.filter((session) =>
+      `${session.title} ${session.preview}`.toLowerCase().includes(needle)
+    )
+  }, [needle, sessions])
+
   return (
     <aside className="sidebar">
       <div className="sidebar-top">
@@ -193,55 +206,86 @@ export function Sidebar({
           <span className="project-icon">＋</span>
           <span>Nuovo progetto</span>
         </button>
+
+        <input
+          className="sidebar-search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Cerca nelle chat…"
+          aria-label="Cerca nelle chat"
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') setQuery('')
+          }}
+        />
       </div>
 
       <div className="project-tree">
-        {projects.length === 0 && <div className="session-empty">Nessun progetto aperto</div>}
-        {projects.map((project) => {
-          const active = project === workspace
-          // Sessions are per project: one without a workspace belongs to the
-          // project that is open now.
-          const projectSessions = sessions.filter((session) =>
-            session.workspacePath ? session.workspacePath === project : active
+        {needle ? (
+          matches.length === 0 ? (
+            <div className="session-empty">Nessuna chat trovata</div>
+          ) : (
+            matches.map((session) => (
+              <SessionRow
+                key={session.id}
+                session={session}
+                active={session.id === sessionId}
+                {...(session.workspacePath ? { projectLabel: session.workspacePath } : {})}
+                onOpen={() => onOpenSession(session.id)}
+                onRename={(title) => onRenameSession(session.id, title)}
+                onRemove={() => onRemoveSession(session.id)}
+              />
+            ))
           )
-          return (
-            <div key={project} className={`project-node ${active ? 'active' : ''}`}>
-              <button
-                className="project-row"
-                onClick={() => onSwitchProject(project)}
-                title={project}
-                aria-expanded={active}
-              >
-                <span className="project-caret">{active ? '▾' : '▸'}</span>
-                <span className="project-label">{baseName(project)}</span>
-                {projectSessions.length > 0 && (
-                  <span className="project-count">{projectSessions.length}</span>
-                )}
-              </button>
-
-              {active && (
-                <div className="project-children">
-                  {projectSessions.length === 0 && (
-                    <div className="session-empty">Nessuna chat in questo progetto</div>
-                  )}
-                  {projectSessions.map((session) => (
-                    <SessionRow
-                      key={session.id}
-                      session={session}
-                      active={session.id === sessionId}
-                      onOpen={() => onOpenSession(session.id)}
-                      onRename={(title) => onRenameSession(session.id, title)}
-                      onRemove={() => onRemoveSession(session.id)}
-                    />
-                  ))}
-                  <button className="new-chat nested" onClick={onNewChat}>
-                    + Nuova chat
+        ) : (
+          <>
+            {projects.length === 0 && <div className="session-empty">Nessun progetto aperto</div>}
+            {projects.map((project) => {
+              const active = project === workspace
+              // Sessions are per project: one without a workspace belongs to
+              // the project that is open now.
+              const projectSessions = sessions.filter((session) =>
+                session.workspacePath ? session.workspacePath === project : active
+              )
+              return (
+                <div key={project} className={`project-node ${active ? 'active' : ''}`}>
+                  <button
+                    className="project-row"
+                    onClick={() => onSwitchProject(project)}
+                    title={project}
+                    aria-expanded={active}
+                  >
+                    <span className="project-caret">{active ? '▾' : '▸'}</span>
+                    <span className="project-label">{baseName(project)}</span>
+                    {projectSessions.length > 0 && (
+                      <span className="project-count">{projectSessions.length}</span>
+                    )}
                   </button>
+
+                  {active && (
+                    <div className="project-children">
+                      {projectSessions.length === 0 && (
+                        <div className="session-empty">Nessuna chat in questo progetto</div>
+                      )}
+                      {projectSessions.map((session) => (
+                        <SessionRow
+                          key={session.id}
+                          session={session}
+                          active={session.id === sessionId}
+                          onOpen={() => onOpenSession(session.id)}
+                          onRename={(title) => onRenameSession(session.id, title)}
+                          onRemove={() => onRemoveSession(session.id)}
+                        />
+                      ))}
+                      <button className="new-chat nested" onClick={onNewChat}>
+                        + Nuova chat
+                      </button>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-          )
-        })}
+              )
+            })}
+          </>
+        )}
       </div>
 
       <div className="sidebar-bottom">

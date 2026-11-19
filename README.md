@@ -208,13 +208,13 @@ Rules worth knowing:
 | Area | What you get |
 | --- | --- |
 | **Piano / Build** | Read-only exploration and a plan, then one click to implement it. Plan mode restricts the agent to `read`, `ls`, `glob`, `grep`, `task` and forces subagents to `explorer`. |
-| **Projects** | Pick any local folder. The last project and a recent list are remembered; every chat belongs to its project. |
+| **Projects** | Pick any local folder. The last project and a recent list are remembered; every chat belongs to its project. The sidebar searches across all chats, and an unsent draft follows its chat. |
 | **Sessions** | JSONL under `~/.charliecode/sessions`, with rename and delete. The model context lives beside it in `<id>.context.json`. |
 | **Tools** | `read`, `ls`, `glob`, `grep`, `write`, `edit`, `bash`, `task`. Each call is a card with arguments and result; failures are shown, not swallowed. |
-| **Diffs** | Unified diff before every write, rendered inline. |
+| **Diffs** | Unified diff before every write, rendered inline. If the folder is not a git repository, the panel offers `git init` (no commit, no staged files). |
 | **Permissions** | Ask-first for destructive tools, with allow-always per tool and per command prefix. |
 | **Subagents** | Parallel, isolated, role-scoped, depth 2. |
-| **Model picker** | Grouped by provider, `★` marks free models, one entry per router. |
+| **Model picker** | Grouped by provider, `★` marks free models, one entry per router. CLI profiles appear in the same list, with their own model selector when the CLI exposes one. |
 | **Effort** | Per model: `default` / `low` / `high` / `max`, forwarded as `reasoning_effort`. Non-reasoning models only offer `default`. |
 | **Attachments** | Drag, paste or **+ Allega**. Images go to vision models; documents are inlined as fenced blocks. |
 | **Streaming** | Token-by-token with a stop button; whatever was produced is kept. Scroll only follows when you are at the bottom. |

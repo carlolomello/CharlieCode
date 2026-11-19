@@ -48,7 +48,7 @@ import { dockerAvailable, hasBinary, probeEndpoint, scanLocalEndpoints } from '.
 import { createPlatform } from '../engine/platform'
 import { ensureProjectMemory, resolvePlugins } from '../engine/plugins'
 import { suggestSetup } from '../engine/advisor'
-import { changeDiff, listChanges, revertChange, workspacePath } from '../engine/changes'
+import { changeDiff, initRepository, listChanges, revertChange, workspacePath } from '../engine/changes'
 import {
   globalSkillsDir,
   installSkillFromGit,
@@ -1216,6 +1216,11 @@ hanno priorità su queste.
   ipcMain.handle(
     'charliecode:changes:list',
     async (_event, workspace: string): Promise<WorkspaceChanges> => listChanges(workspace)
+  )
+
+  ipcMain.handle(
+    'charliecode:changes:init',
+    async (_event, workspace: string): Promise<WorkspaceChanges> => initRepository(workspace)
   )
 
   ipcMain.handle(

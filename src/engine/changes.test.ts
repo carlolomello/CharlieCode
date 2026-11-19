@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { changeDiff, listChanges, revertChange, workspacePath } from './changes'
+import { changeDiff, initRepository, listChanges, revertChange, workspacePath } from './changes'
 
 const run = promisify(execFile)
 
@@ -118,6 +118,19 @@ describe('changes', () => {
     // The preview hint still works: it only needs package.json.
     expect(result.previewScripts).toEqual(['dev'])
     expect(result.previewUrl).toBe('http://localhost:5173')
+  })
+
+  it('initialises a repository on request and then reports the files', async () => {
+    const plain = join(root, 'plain-init')
+    await mkdir(plain, { recursive: true })
+    await writeFile(join(plain, 'x.ts'), 'export const x = 1\n', 'utf8')
+
+    expect((await listChanges(plain)).git).toBe(false)
+    const after = await initRepository(plain)
+
+    expect(after.git).toBe(true)
+    expect(existsSync(join(plain, '.git'))).toBe(true)
+    expect(after.changes.find((change) => change.path === 'x.ts')?.status).toBe('untracked')
   })
 
   it('reads the port from the script when it is written there', async () => {

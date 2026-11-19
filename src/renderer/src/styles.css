@@ -2866,6 +2866,10 @@ button.ghost:hover,
   line-height: 1.55;
 }
 
+.changes-empty button {
+  margin: 8px 0;
+}
+
 .change-row {
   display: flex;
   align-items: center;
@@ -3121,6 +3125,22 @@ button.ghost:hover,
 
 .new-project:hover {
   background: #7c9cff33;
+}
+
+.sidebar-search {
+  width: 100%;
+  margin-top: 8px;
+  padding: 7px 9px;
+  background: #0d131b;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.sidebar-search:focus {
+  outline: none;
+  border-color: #3b5377;
 }
 
 .project-tree {

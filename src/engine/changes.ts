@@ -149,6 +149,17 @@ function previewHints(
   return { previewScripts }
 }
 
+/**
+ * Creates a repository in an existing project folder. No commit, no config, no
+ * files staged: `git init` only writes `.git`, and the user clicked the button.
+ */
+export async function initRepository(workspace: string): Promise<WorkspaceChanges> {
+  if (!existsSync(workspace)) throw new Error(`La cartella non esiste: ${workspace}`)
+  const result = await git(workspace, ['init'])
+  if (!result.ok) throw new Error(result.stderr || 'git init non è riuscito')
+  return listChanges(workspace)
+}
+
 export async function listChanges(workspace: string): Promise<WorkspaceChanges> {
   const inside = await git(workspace, ['rev-parse', '--is-inside-work-tree'])
   if (!inside.ok || inside.stdout.trim() !== 'true') {

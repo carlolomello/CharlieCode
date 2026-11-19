@@ -152,6 +152,8 @@ const api: CharlieCodeApi = {
 
   changes: (workspace: string) =>
     ipcRenderer.invoke('charliecode:changes:list', workspace) as Promise<WorkspaceChanges>,
+  initRepository: (workspace: string) =>
+    ipcRenderer.invoke('charliecode:changes:init', workspace) as Promise<WorkspaceChanges>,
   changeDiff: (payload: { workspace: string; path: string }) =>
     ipcRenderer.invoke('charliecode:changes:diff', payload) as Promise<FileDiff>,
   revertChange: (payload: { workspace: string; change: WorkspaceChange }) =>

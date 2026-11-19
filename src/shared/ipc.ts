@@ -194,6 +194,8 @@ export interface CharlieCodeApi {
   onboardingSkip(workspace: string): Promise<void>
 
   changes(workspace: string): Promise<WorkspaceChanges>
+  /** `git init` in an existing project folder; returns the fresh status. */
+  initRepository(workspace: string): Promise<WorkspaceChanges>
   changeDiff(payload: { workspace: string; path: string }): Promise<FileDiff>
   revertChange(payload: { workspace: string; change: WorkspaceChange }): Promise<WorkspaceChanges>
   /** Opens a file of the project in the user's editor. */

@@ -1,4 +1,4 @@
-import { type ReactNode } from 'react'
+import { memo, useDeferredValue, useMemo, type ReactNode } from 'react'
 
 /**
  * A small, dependency-free Markdown renderer.
@@ -317,8 +317,12 @@ function ListBlock({ block, keyBase }: { block: Block; keyBase: string }): React
   return <div className="md-list-wrap">{nodes}</div>
 }
 
-export function Markdown({ text, dense }: MarkdownProps): React.JSX.Element {
-  const blocks = parseBlocks(text)
+function MarkdownView({ text, dense }: MarkdownProps): React.JSX.Element {
+  // During streaming `text` changes on every token. Parsing the deferred value
+  // keeps the composer and the tool cards responsive; React catches up as soon
+  // as the stream pauses.
+  const deferred = useDeferredValue(text)
+  const blocks = useMemo(() => parseBlocks(deferred), [deferred])
   return (
     <div className={`md ${dense ? 'dense' : ''}`}>
       {blocks.map((block, i) => {
@@ -383,3 +387,6 @@ export function Markdown({ text, dense }: MarkdownProps): React.JSX.Element {
     </div>
   )
 }
+
+/** Memoised: tool events re-render the turn, not the Markdown inside it. */
+export const Markdown = memo(MarkdownView)

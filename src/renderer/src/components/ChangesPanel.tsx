@@ -50,6 +50,7 @@ export function ChangesPanel({ workspace, onClose }: ChangesPanelProps): React.J
   const [previewUrl, setPreviewUrl] = useState('')
   const [embed, setEmbed] = useState(false)
   const [frameKey, setFrameKey] = useState(0)
+  const [gitBusy, setGitBusy] = useState(false)
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true)
@@ -101,6 +102,25 @@ export function ChangesPanel({ workspace, onClose }: ChangesPanelProps): React.J
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setBusy(null)
+    }
+  }
+
+  const initGit = async (): Promise<void> => {
+    if (
+      !window.confirm(
+        `Inizializzo un repository git in:\n${workspace}\n\nViene creata solo la cartella .git: nessun file viene committato.`
+      )
+    ) {
+      return
+    }
+    setGitBusy(true)
+    try {
+      setData(await window.charliecode.initRepository(workspace))
+      setError(null)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setGitBusy(false)
     }
   }
 
@@ -163,11 +183,19 @@ export function ChangesPanel({ workspace, onClose }: ChangesPanelProps): React.J
 
       <div className="changes-body">
         {!data?.git && !loading && (
-          <p className="muted small changes-empty">
-            Senza git non posso dire cosa è cambiato: il pannello legge lo stato reale del
-            repository, non la memoria dell’agente. Inizializza un repository (<code>git init</code>)
-            per vederlo qui.
-          </p>
+          <div className="changes-empty">
+            <p className="muted small">
+              Senza git non posso dire cosa è cambiato: il pannello legge lo stato reale del
+              repository, non la memoria dell’agente.
+            </p>
+            <button className="primary small" onClick={() => void initGit()} disabled={gitBusy}>
+              {gitBusy ? 'inizializzo…' : 'Inizializza git'}
+            </button>
+            <p className="muted small">
+              Viene creata solo la cartella <code>.git</code>: nessun file viene committato o
+              aggiunto all’indice.
+            </p>
+          </div>
         )}
 
         {data?.git && changes.length === 0 && !loading && (

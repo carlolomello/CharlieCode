@@ -459,6 +459,48 @@ export default function App() {
     [refreshModels]
   )
 
+  /**
+   * One composer draft per conversation. Switching chats used to throw away
+   * half-written prompts; now the text follows the chat, and the unsent text of
+   * a new chat survives a reload too.
+   */
+  const draftKey = `charliecode.draft.${sessionId ?? 'new'}`
+  const draftRef = useRef<{ key: string; value: string }>({ key: draftKey, value: '' })
+
+  useEffect(() => {
+    const previous = draftRef.current
+    if (previous.key !== draftKey) {
+      try {
+        if (previous.value) window.localStorage.setItem(previous.key, previous.value)
+        else window.localStorage.removeItem(previous.key)
+      } catch {
+        // Storage can be blocked; the draft is a convenience, not state.
+      }
+    }
+
+    let loaded = ''
+    try {
+      loaded = window.localStorage.getItem(draftKey) ?? ''
+    } catch {
+      loaded = ''
+    }
+    draftRef.current = { key: draftKey, value: loaded }
+    setInput(loaded)
+  }, [draftKey])
+
+  useEffect(() => {
+    draftRef.current = { key: draftKey, value: input }
+    const timer = window.setTimeout(() => {
+      try {
+        if (input) window.localStorage.setItem(draftKey, input)
+        else window.localStorage.removeItem(draftKey)
+      } catch {
+        // Same: losing a draft is better than breaking the composer.
+      }
+    }, 400)
+    return () => window.clearTimeout(timer)
+  }, [draftKey, input])
+
   // Only follow the stream when the user is already at the bottom; otherwise
   // reading scrollback would be yanked away on every token.
   const stickToBottom = useRef(true)
@@ -744,8 +786,8 @@ export default function App() {
       await window.charliecode.stopChat(streamingId)
       setStreamingId(null)
     }
-    // Composer state belongs to the chat, not to the window.
-    setInput('')
+    // Attachments belong to the chat, not to the window. The draft text is
+    // restored by the per-session draft effect.
     setAttachments([])
     setAttachError(null)
     setShowJump(false)
