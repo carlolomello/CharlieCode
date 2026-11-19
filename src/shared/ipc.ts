@@ -164,6 +164,8 @@ export interface CharlieCodeApi {
   onChatEvent(callback: (envelope: ChatEventEnvelope) => void): () => void
   onChatSession(callback: (envelope: ChatSessionEnvelope) => void): () => void
   onPermission(callback: (envelope: PermissionEnvelope) => void): () => void
+  /** A provider or CLI profile changed: the picker should reload. */
+  onModelsChanged(callback: () => void): () => void
   respondPermission(permissionId: string, decision: PermissionDecision): Promise<void>
 
   openConfigDir(): Promise<void>

@@ -110,6 +110,14 @@ const api: CharlieCodeApi = {
     }
   },
 
+  onModelsChanged: (callback: () => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('charliecode:models:changed', listener)
+    return () => {
+      ipcRenderer.removeListener('charliecode:models:changed', listener)
+    }
+  },
+
   respondPermission: (permissionId: string, decision: PermissionDecision) =>
     ipcRenderer.invoke('charliecode:chat:permission-response', permissionId, decision) as Promise<void>,
 

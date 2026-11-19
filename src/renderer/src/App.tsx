@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { cliModelKey, parseCliModelKey } from '../../shared/cli-key'
 import type { IncomingAttachment } from '../../engine/types'
 import type { Session, SessionSummary, StoredMessage } from '../../engine/session-types'
 import type {
@@ -94,6 +95,8 @@ const EFFORT_LABEL: Record<EffortLevel, string> = {
 }
 
 function shortKey(key: string): string {
+  const cli = parseCliModelKey(key)
+  if (cli) return cli.model ? `${cli.profileId} · ${cli.model}` : cli.profileId
   return key.length > 46 ? `${key.slice(0, 45)}…` : key
 }
 
@@ -126,6 +129,10 @@ export default function App() {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [items, setItems] = useState<ChatItem[]>([])
   const [modelKey, setModelKey] = useState<string>('')
+  /** Model passed to the selected CLI, when the backend is a CLI profile. */
+  const [cliModel, setCliModel] = useState<string>('')
+  const [cliModels, setCliModels] = useState<string[]>([])
+  const [cliModelsBusy, setCliModelsBusy] = useState(false)
   const [preferredModel, setPreferredModel] = useState<string>('')
   const [effort, setEffort] = useState<EffortLevel>('none')
   const [mode, setMode] = useState<'plan' | 'build'>('build')
@@ -446,6 +453,12 @@ export default function App() {
     }
   }, [refreshSessions])
 
+  // Saving or deleting a CLI profile changes the picker without a reload.
+  useEffect(
+    () => window.charliecode.onModelsChanged(() => void refreshModels()),
+    [refreshModels]
+  )
+
   // Only follow the stream when the user is already at the bottom; otherwise
   // reading scrollback would be yanked away on every token.
   const stickToBottom = useRef(true)
@@ -561,6 +574,41 @@ export default function App() {
       models[0]
     if (fallback) setModelKey(fallback.key)
   }, [models, modelKey, preferredModel])
+
+  // A CLI profile has its own model list: load it only when that backend is
+  // selected, so startup never spawns a CLI just to fill a menu.
+  useEffect(() => {
+    const profileId = selectedModel?.providerId === 'cli' ? selectedModel.id : undefined
+    if (!profileId) {
+      setCliModels([])
+      setCliModelsBusy(false)
+      return
+    }
+
+    let cancelled = false
+    setCliModelsBusy(true)
+    void window.charliecode
+      .cliProfileModels(profileId)
+      .then((list) => {
+        if (!cancelled) setCliModels(list)
+      })
+      .catch(() => {
+        if (!cancelled) setCliModels([])
+      })
+      .finally(() => {
+        if (!cancelled) setCliModelsBusy(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [selectedModel?.providerId, selectedModel?.id])
+
+  /** The key actually sent: a CLI can carry a model chosen for this turn. */
+  const backendKey =
+    selectedModel?.providerId === 'cli' && cliModel
+      ? cliModelKey(selectedModel.id, cliModel)
+      : modelKey
 
   // The picker only offers levels the model actually accepts.
   const effortOptions = useMemo<EffortLevel[]>(
@@ -695,7 +743,17 @@ export default function App() {
       if (!session) return
       setSessionId(session.id)
       setItems(session.messages.map((message) => ({ ...message, pending: false })))
-      if (session.modelKey) setModelKey(session.modelKey)
+      if (session.modelKey) {
+        const cli = parseCliModelKey(session.modelKey)
+        if (cli) {
+          // The picker holds the profile; the model is the secondary choice.
+          setModelKey(cliModelKey(cli.profileId))
+          setCliModel(cli.model ?? '')
+        } else {
+          setModelKey(session.modelKey)
+          setCliModel('')
+        }
+      }
       setEffort(session.effort)
       if (session.workspacePath) setWorkspace(session.workspacePath)
     } finally {
@@ -829,7 +887,7 @@ export default function App() {
         sessionId: sessionId ?? undefined,
         userMessageId,
         assistantMessageId,
-        modelKey,
+        modelKey: backendKey,
         text,
         effort,
         mode: activeMode,
@@ -870,7 +928,18 @@ export default function App() {
       )
       setStreamingId(null)
     }
-  }, [attachments, effort, input, mode, modelKey, sessionId, streamingId, teamMode, workspace])
+  }, [
+    attachments,
+    backendKey,
+    effort,
+    input,
+    mode,
+    modelKey,
+    sessionId,
+    streamingId,
+    teamMode,
+    workspace
+  ])
 
   const stop = useCallback(async (): Promise<void> => {
     if (!streamingId) return
@@ -1062,7 +1131,10 @@ export default function App() {
             <select
               className="select model-select"
               value={modelKey}
-              onChange={(event) => setModelKey(event.target.value)}
+              onChange={(event) => {
+                setModelKey(event.target.value)
+                setCliModel('')
+              }}
               disabled={models.length === 0}
               title={selectedModel?.key ?? ''}
             >
@@ -1077,6 +1149,25 @@ export default function App() {
                 </optgroup>
               ))}
             </select>
+
+            {selectedModel?.providerId === 'cli' && (cliModelsBusy || cliModels.length > 0) && (
+              <select
+                className="select cli-model-select"
+                value={cliModel}
+                onChange={(event) => setCliModel(event.target.value)}
+                disabled={cliModelsBusy}
+                title="Modello passato alla CLI scelta"
+              >
+                <option value="">
+                  {cliModelsBusy ? 'carico modelli…' : 'modello predefinito'}
+                </option>
+                {cliModels.map((model) => (
+                  <option key={model} value={model}>
+                    {model}
+                  </option>
+                ))}
+              </select>
+            )}
 
             <select
               className="select effort-select"
@@ -1099,7 +1190,12 @@ export default function App() {
             <button
               className={`ghost small team-toggle ${teamMode ? 'active' : ''}`}
               onClick={() => setTeamMode((value) => !value)}
-              title="Divide il turno tra subagenti in parallelo: Charlie supervisiona, loro lavorano"
+              disabled={selectedModel?.providerId === 'cli'}
+              title={
+                selectedModel?.providerId === 'cli'
+                  ? 'La CLI gestisce il turno con il proprio loop di agenti'
+                  : 'Divide il turno tra subagenti in parallelo: Charlie supervisiona, loro lavorano'
+              }
               aria-pressed={teamMode}
             >
               Squadra

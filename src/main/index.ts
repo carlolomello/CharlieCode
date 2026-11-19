@@ -74,8 +74,11 @@ import {
   type SessionSummary
 } from '../engine/sessions'
 import { toolLogFromEvent } from '../engine/tools'
+import { cliModelEntries, runCliTurn } from '../engine/backends'
+import { parseCliModelKey } from '../shared/cli-key'
 import type {
   CharlieCodeConfig,
+  EngineEvent,
   ExternalWorkerConfig,
   PermissionDecision,
   PermissionRequest,
@@ -350,9 +353,16 @@ function registerIpc(): void {
   ipcMain.handle('charliecode:models', async (): Promise<ModelsResponse> => {
     const { config } = await loadConfig(platform)
     const { models, errors } = await loadCatalog(platform, config)
+    // CLI profiles are backends too: they appear in the same picker as native
+    // models, so the user chooses one without leaving the conversation.
+    const cli = await cliStatus()
     // The resolved default, not the raw config value: the renderer uses it to
     // repair a stale selection (a model whose provider is gone).
-    return { models, errors, defaultModel: pickDefaultModel(models, config)?.key ?? config.defaultModel }
+    return {
+      models: [...models, ...cliModelEntries(cli.profiles)],
+      errors,
+      defaultModel: pickDefaultModel(models, config)?.key ?? config.defaultModel
+    }
   })
 
   ipcMain.handle('charliecode:workspace:pick', async (event): Promise<{ path?: string }> => {
@@ -473,6 +483,12 @@ function registerIpc(): void {
 
   /* ----------------------------- agent CLIs ----------------------------- */
 
+  const notifyModelsChanged = (): void => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) window.webContents.send('charliecode:models:changed')
+    }
+  }
+
   const cliStatus = async (): Promise<CliProfilesStatus> => {
     const { config } = await loadConfig(platform)
     const { profiles, errors } = await listCliProfiles(platform)
@@ -518,6 +534,7 @@ function registerIpc(): void {
 
   ipcMain.handle('charliecode:clis:save', async (_event, input: unknown): Promise<CliProfilesStatus> => {
     await saveCliProfile(platform, input)
+    notifyModelsChanged()
     return cliStatus()
   })
 
@@ -530,6 +547,7 @@ function registerIpc(): void {
       delete next.external
       await saveConfig(platform, next)
     }
+    notifyModelsChanged()
     return cliStatus()
   })
 
@@ -630,6 +648,7 @@ function registerIpc(): void {
       if (worker?.id) next.external = worker
       else delete next.external
       await saveConfig(platform, next)
+      notifyModelsChanged()
       return cliStatus()
     }
   )
@@ -856,94 +875,152 @@ hanno priorità su queste.
             .catch(() => undefined)
         }
 
-        try {
-          const { models } = await loadCatalog(platform, config)
-          // The requested model may be gone (provider removed, model retired,
-          // session restored from an older install). Falling back here keeps a
-          // stale key from dead-ending the chat.
-          const requested = findModel(models, payload.modelKey)
-          const activeModel = requested ?? pickDefaultModel(models, config)
-          const modelKey = activeModel?.key ?? payload.modelKey
-          if (modelKey !== payload.modelKey) {
-            usedModel = modelKey
-            await updateSession(platform, session.id, { modelKey })
+        const emit = (engineEvent: EngineEvent): void => {
+          if (engineEvent.type === 'tool-call' || engineEvent.type === 'tool-result') {
+            logs = toolLogFromEvent(engineEvent, logs)
           }
+          if (engineEvent.type === 'delta' && !engineEvent.agentId) {
+            streamed += engineEvent.text
+            flushDraft()
+          }
+          if (engineEvent.type === 'start') usedModel = engineEvent.modelKey
+          if (engineEvent.type === 'done') {
+            aborted = Boolean(engineEvent.aborted)
+            meta = [
+              meta,
+              engineEvent.steps ? `${engineEvent.steps} step` : undefined,
+              engineEvent.toolCalls ? `${engineEvent.toolCalls} tool` : undefined,
+              `ttft ${engineEvent.ttftMs}ms`,
+              `totale ${engineEvent.ms}ms`,
+              engineEvent.usage?.outputTokens
+                ? `${engineEvent.usage.outputTokens} token`
+                : undefined,
+              aborted ? 'interrotto' : undefined
+            ]
+              .filter(Boolean)
+              .join(' · ')
+          }
+          if (engineEvent.type === 'error') failure = engineEvent.message
+          if (!sender.isDestroyed()) {
+            sender.send('charliecode:chat:event', {
+              requestId: payload.requestId,
+              event: engineEvent
+            })
+          }
+        }
+
+        try {
           const stored = (await readSession(platform, session.id)) ?? session
           const savedContext = await readAgentContext(platform, session.id)
           fullHistory =
             savedContext.length > 0
               ? savedContext
               : await materializeHistory(platform, toChatHistory(stored))
-          // The model gets a fitted context; the sidecar keeps the full one.
-          const budget = contextBudget(activeModel?.caps)
-          const history = compactMessages(fullHistory, { budget }).messages
           const projectContext = await loadProjectContext(platform, workspace)
-          const system =
-            payload.system ?? buildSystemPrompt(projectContext.system, workspace)
+          const cliTarget = parseCliModelKey(payload.modelKey)
 
-          const result = await runAgent(
-            {
-              modelKey,
-              messages: [],
-              system,
-              effort: payload.effort,
-              maxOutputTokens: payload.maxOutputTokens,
-              signal: controller.signal,
-              mode: payload.mode ?? 'build',
-              ...(payload.team ? { team: true } : {})
-            },
-            {
-              platform,
-              config,
-              models,
-              cliProfiles: (await listCliProfiles(platform)).profiles,
-              workspace,
-              modelMessages: history,
-              maxSteps: config.agents.maxSteps,
-              subagentMaxSteps: config.agents.subagentMaxSteps,
-              askPermission: (request) =>
-                askUser(sender, payload.requestId, request, config),
-              emit: (engineEvent) => {
-                if (engineEvent.type === 'tool-call' || engineEvent.type === 'tool-result') {
-                  logs = toolLogFromEvent(engineEvent, logs)
-                }
-                if (engineEvent.type === 'delta' && !engineEvent.agentId) {
-                  streamed += engineEvent.text
-                  flushDraft()
-                }
-                if (engineEvent.type === 'start') usedModel = engineEvent.modelKey
-                if (engineEvent.type === 'done') {
-                  aborted = Boolean(engineEvent.aborted)
-                  meta = [
-                    meta,
-                    engineEvent.steps ? `${engineEvent.steps} step` : undefined,
-                    engineEvent.toolCalls ? `${engineEvent.toolCalls} tool` : undefined,
-                    `ttft ${engineEvent.ttftMs}ms`,
-                    `totale ${engineEvent.ms}ms`,
-                    engineEvent.usage?.outputTokens
-                      ? `${engineEvent.usage.outputTokens} token`
-                      : undefined,
-                    aborted ? 'interrotto' : undefined
-                  ]
-                    .filter(Boolean)
-                    .join(' · ')
-                }
-                if (engineEvent.type === 'error') failure = engineEvent.message
-                if (!sender.isDestroyed()) {
-                  sender.send('charliecode:chat:event', {
-                    requestId: payload.requestId,
-                    event: engineEvent
-                  })
-                }
+          if (cliTarget) {
+            const profile = (await listCliProfiles(platform)).profiles.find(
+              (entry) => entry.id === cliTarget.profileId
+            )
+            if (!profile) {
+              const message = `Il profilo CLI "${cliTarget.profileId}" non esiste più. Scegli un altro backend nel selettore.`
+              failure = message
+              emit({ type: 'error', message })
+            } else {
+              // Documents are inlined into the history; images cannot be read
+              // by most CLIs, so their path is listed in the briefing instead.
+              const history = await materializeHistory(platform, toChatHistory(stored))
+              const cliAttachments = attachmentRefs.flatMap((ref) =>
+                ref.path ? [{ name: ref.name, path: platform.configPath(ref.path) }] : []
+              )
+
+              const result = await runCliTurn({
+                profile,
+                ...(cliTarget.model ? { model: cliTarget.model } : {}),
+                ...(payload.effort ? { effort: payload.effort } : {}),
+                mode: payload.mode ?? 'build',
+                prompt: payload.text,
+                history,
+                ...(projectContext.system ? { system: projectContext.system } : {}),
+                ...(cliAttachments.length > 0 ? { attachments: cliAttachments } : {}),
+                workspace: workspace ?? platform.homeDir,
+                home: platform.homeDir,
+                signal: controller.signal,
+                emit
+              })
+
+              text = result.text
+              aborted = result.aborted
+              if (result.error) {
+                const message = result.error
+                failure = message
+                emit({ type: 'error', message })
               }
-            }
-          )
 
-          text = result.text
-          usedModel = result.modelKey || usedModel
-          aborted = result.aborted
-          if (result.error) failure = result.error
-          if (result.newMessages.length > 0) newMessages = result.newMessages
+              // Import the CLI turn into the canonical context: the next
+              // native model must read it like any other turn.
+              const last = fullHistory[fullHistory.length - 1]
+              const alreadyUser =
+                last?.role === 'user' &&
+                typeof last.content === 'string' &&
+                last.content === payload.text
+              newMessages = [
+                ...(alreadyUser ? [] : [{ role: 'user' as const, content: payload.text }]),
+                { role: 'assistant' as const, content: text || '(nessuna risposta)' }
+              ]
+            }
+          } else {
+            const { models } = await loadCatalog(platform, config)
+            // The requested model may be gone (provider removed, model
+            // retired, session restored from an older install). Falling back
+            // here keeps a stale key from dead-ending the chat.
+            const requested = findModel(models, payload.modelKey)
+            const activeModel = requested ?? pickDefaultModel(models, config)
+            const modelKey = activeModel?.key ?? payload.modelKey
+            if (modelKey !== payload.modelKey) {
+              usedModel = modelKey
+              await updateSession(platform, session.id, { modelKey })
+            }
+
+            // The model gets a fitted context; the sidecar keeps the full one.
+            const budget = contextBudget(activeModel?.caps)
+            const history = compactMessages(fullHistory, { budget }).messages
+            const system =
+              payload.system ?? buildSystemPrompt(projectContext.system, workspace)
+
+            const result = await runAgent(
+              {
+                modelKey,
+                messages: [],
+                system,
+                effort: payload.effort,
+                maxOutputTokens: payload.maxOutputTokens,
+                signal: controller.signal,
+                mode: payload.mode ?? 'build',
+                ...(payload.team ? { team: true } : {})
+              },
+              {
+                platform,
+                config,
+                models,
+                cliProfiles: (await listCliProfiles(platform)).profiles,
+                workspace,
+                modelMessages: history,
+                maxSteps: config.agents.maxSteps,
+                subagentMaxSteps: config.agents.subagentMaxSteps,
+                askPermission: (request) =>
+                  askUser(sender, payload.requestId, request, config),
+                emit
+              }
+            )
+
+            text = result.text
+            usedModel = result.modelKey || usedModel
+            aborted = result.aborted
+            if (result.error) failure = result.error
+            if (result.newMessages.length > 0) newMessages = result.newMessages
+          }
         } catch (error) {
           failure = error instanceof Error ? error.message : String(error)
           if (!sender.isDestroyed()) {
