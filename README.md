@@ -48,7 +48,7 @@ pnpm dev           # app with HMR
 - **Remembers the project.** Every chat is a saved session tied to a folder; the full model context (tool calls included) is persisted, so resuming actually continues instead of replaying a transcript.
 - **Knows your rules.** `AGENTS.md` — plus `CHARLIECODE.md` and `CLAUDE.md` — in the project root and globally in `~/.charliecode/` are injected into the system prompt.
 - **Knows itself.** The agent carries a map of CharlieCode's own architecture and can reconfigure the app on request — default model, effort, fallback, plugins, agent limits, routing — through a validated `charliecode_config` tool that shows a diff and asks permission. API keys stay out of reach.
-- **Uses the CLI you already have, as a real backend.** If your team approved an agent CLI with its own login, define a profile in **✦ Collega un modello → CLI esterna**. It appears in the model picker next to native models: the main conversation can run through it, with its own auth, quota and logs. The thread, the project context and the files stay the same when you switch back to a native model. The same profile can also power `task` subagents.
+- **Uses the CLI you already have, as a real backend.** If your team approved an agent CLI with its own login, open **⚙ Impostazioni → Modelli → Collega una CLI** and type the command that starts it (`opencode`, a corporate wrapper, your own script): CharlieCode reads its help, finds the models it can use and puts them in the picker. The main conversation can run through that CLI with its own auth, quota and logs, and the thread, project context and files stay the same when you switch back to a native model. The same profile can also power `task` subagents.
 - **Free-first, zero lock-in.** One provider entry (FreeLLMAPI) routes across ~87 free tiers and picks the model itself. Add OpenAI, OpenRouter, Ollama, LM Studio, vLLM or a corporate gateway whenever you want.
 - **Speaks Markdown properly.** Headings, lists, tables, quotes and syntax-highlighted code blocks with a copy button — rendered by a small built-in renderer, not by injecting HTML into the app.
 
@@ -152,11 +152,14 @@ FreeLLMAPI is a separate project: <https://github.com/tashfeenahmed/freellmapi>.
 
 ### A CLI you already have
 
-Some teams do not hand out API keys: the approved tool is a CLI with its own login. **✦ Collega un modello → CLI esterna** lets you define that CLI as a profile — command, arguments, output format — test it with one sentence, and pick it as the worker for `task` subagents. Write the command name and the panel searches PATH and the usual tool-manager directories, showing the resolved path before you save. Then press **Analizza --help**: CharlieCode reads the CLI's own help and proposes the flags it recognizes — model, effort levels, read-only mode, automatic writes, JSON output, the command that lists models — all editable. No product is hardcoded: the profile is just JSON in `~/.charliecode/clis/`.
+Some teams do not hand out API keys: the approved tool is a CLI with its own login. **⚙ Impostazioni → Modelli → Collega una CLI** (also reachable from **✦ Collega un modello → CLI esterna**) asks for one thing: the command you would type in a terminal — `opencode`, a corporate wrapper, your own script.
+
+One command is enough. CharlieCode resolves it through PATH and the usual tool-manager directories, reads its own `--help` for the model, effort, read-only, automatic-write and JSON flags, then tries the usual spellings (`--list-models`, `models`, `model list`, …) until one prints the models it can use. The profile is saved and those models are ready in the picker; nothing is installed, no key is copied and no product is hardcoded. The panel keeps every field editable — command, arguments, output format, placeholders — and the profile is just JSON in `~/.charliecode/clis/`. Reconnecting the same command keeps your edits and only fills what is missing.
 
 What that means in practice:
 
 - choose the CLI in the model picker for the main conversation, or leave it as the worker for `task` subagents;
+- the models it printed in the connect step are the ones the second selector offers — no manual list to maintain;
 - its own models appear in a second selector when the CLI is selected, and the effort levels come from the profile;
 - the model calls happen inside that CLI — its auth, its quota, its audit log;
 - before each turn CharlieCode writes the recent conversation into a briefing, and after it imports the answer, the tool activity and the diff of the files it changed;

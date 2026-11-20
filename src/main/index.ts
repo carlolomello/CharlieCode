@@ -45,6 +45,7 @@ import {
   searchBinaries
 } from '../engine/external-agents'
 import { introspectCli } from '../engine/cli-introspect'
+import { connectCli } from '../engine/cli-connect'
 import {
   deleteCliProfile,
   listCliProfiles,
@@ -97,6 +98,7 @@ import type {
   AddProviderPayload,
   AppInfo,
   ChatStartPayload,
+  CliConnectReport,
   CliPreview,
   CliPreviewPayload,
   CliProfilesStatus,
@@ -677,6 +679,29 @@ function registerIpc(): void {
         ...(config.workspace ? { workspace: config.workspace } : {}),
         args
       })
+    }
+  )
+
+  // One step, one command: the panel sends what the user types in a terminal.
+  ipcMain.handle(
+    'charliecode:clis:connect',
+    async (
+      _event,
+      payload: { command?: unknown; label?: unknown }
+    ): Promise<CliConnectReport> => {
+      if (typeof payload?.command !== 'string' || !payload.command.trim()) {
+        throw new Error('Scrivi il comando con cui avvii la CLI.')
+      }
+      const { config } = await loadConfig(platform)
+      const report = await connectCli(platform, {
+        command: payload.command,
+        ...(typeof payload.label === 'string' && payload.label.trim()
+          ? { label: payload.label }
+          : {}),
+        ...(config.workspace ? { workspace: config.workspace } : {})
+      })
+      notifyModelsChanged()
+      return { ...report, status: await cliStatus() }
     }
   )
 

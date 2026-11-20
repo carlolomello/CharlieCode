@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import type { ProviderStatus, RoutersStatus } from '../../../shared/ipc'
 import { ExternalCliPanel } from './ExternalCliPanel'
 
-type Path = 'openrouter' | 'freellmapi' | 'local' | 'custom' | 'cli'
+export type SetupPath = 'openrouter' | 'freellmapi' | 'local' | 'custom' | 'cli'
+type Path = SetupPath
 
 interface SetupWizardProps {
   providers: ProviderStatus[]
@@ -15,6 +16,8 @@ interface SetupWizardProps {
     kind: 'direct' | 'router'
   }) => Promise<void>
   onClose: () => void
+  /** Section to open first; the drawer's "Collega una CLI" lands on `cli`. */
+  initialPath?: SetupPath
 }
 
 const PATHS: { id: Path; label: string; tag: string; blurb: string }[] = [
@@ -74,9 +77,10 @@ export function SetupWizard({
   onSetKey,
   onToggleProvider,
   onAddProvider,
-  onClose
+  onClose,
+  initialPath
 }: SetupWizardProps): React.JSX.Element {
-  const [path, setPath] = useState<Path>('openrouter')
+  const [path, setPath] = useState<Path>(initialPath ?? 'openrouter')
   const [routers, setRouters] = useState<RoutersStatus | null>(null)
   const [scanning, setScanning] = useState(false)
   const [keyDraft, setKeyDraft] = useState('')

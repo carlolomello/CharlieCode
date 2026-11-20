@@ -27,7 +27,7 @@ import { Sidebar } from './components/Sidebar'
 import { baseName } from './format'
 import { Markdown } from './components/Markdown'
 import { PermissionModal } from './components/PermissionModal'
-import { SetupWizard } from './components/SetupWizard'
+import { SetupWizard, type SetupPath } from './components/SetupWizard'
 import { ProjectWizard } from './components/ProjectWizard'
 import { ChangesPanel } from './components/ChangesPanel'
 import { ToolActivity, type SubagentRun } from './components/ToolActivity'
@@ -190,6 +190,8 @@ export default function App() {
   const [contextNotice, setContextNotice] = useState<string | null>(null)
   const [permission, setPermission] = useState<PermissionEnvelope | null>(null)
   const [wizardOpen, setWizardOpen] = useState(false)
+  /** Section the setup wizard opens on; the drawer's CLI entry asks for `cli`. */
+  const [wizardPath, setWizardPath] = useState<SetupPath | undefined>(undefined)
   /** Workspace whose onboarding wizard is open, if any. */
   const [projectWizard, setProjectWizard] = useState<string | null>(null)
   /** Right-hand "what changed" panel, and the count for its badge. */
@@ -1476,7 +1478,13 @@ export default function App() {
                 guidata: ti collega a un modello gratuito in meno di un minuto.
               </p>
               <div className="setup-actions">
-                <button className="primary" onClick={() => setWizardOpen(true)}>
+                <button
+                  className="primary"
+                  onClick={() => {
+                    setWizardPath(undefined)
+                    setWizardOpen(true)
+                  }}
+                >
                   ✦ Collega un modello
                 </button>
                 <button className="ghost" onClick={() => setSettingsOpen(true)}>
@@ -1812,8 +1820,10 @@ export default function App() {
           onSetKey={wizardSetKey}
           onToggleProvider={wizardToggle}
           onAddProvider={wizardAddProvider}
+          {...(wizardPath ? { initialPath: wizardPath } : {})}
           onClose={() => {
             setWizardOpen(false)
+            setWizardPath(undefined)
             void refreshRouters()
           }}
         />
@@ -2027,6 +2037,26 @@ export default function App() {
                 disabled={!newProvider.id.trim() || !newProvider.baseUrl.trim()}
               >
                 Aggiungi
+              </button>
+            </div>
+
+            <h3 id="set-cli">CLI esterne</h3>
+            <p className="muted small">
+              Una CLI già installata è un backend come gli altri. Scrivi il comando con cui la
+              avvii — <code>opencode</code>, <code>axet-code</code>, il tuo script — e CharlieCode
+              legge il suo aiuto, trova i modelli e la mette nel selettore: nessuna chiave da
+              incollare.
+            </p>
+            <div className="setup-actions">
+              <button
+                className="ghost"
+                onClick={() => {
+                  setWizardPath('cli')
+                  setSettingsOpen(false)
+                  setWizardOpen(true)
+                }}
+              >
+                Collega una CLI
               </button>
             </div>
               </>

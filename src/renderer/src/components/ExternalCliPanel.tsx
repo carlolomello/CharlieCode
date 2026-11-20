@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CliProfile, CliOutputFormat } from '../../../engine/types'
 import type {
   CliCommandMatch,
+  CliConnectReport,
   CliIntrospection,
   CliProfilesStatus,
   CliTestResult
@@ -166,6 +167,10 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
   const [analyzing, setAnalyzing] = useState(false)
   const [analysis, setAnalysis] = useState<CliIntrospection | null>(null)
   const [analysisError, setAnalysisError] = useState<string | null>(null)
+  const [connectCommand, setConnectCommand] = useState('')
+  const [connecting, setConnecting] = useState(false)
+  const [connectReport, setConnectReport] = useState<CliConnectReport | null>(null)
+  const [connectError, setConnectError] = useState<string | null>(null)
   const fileInput = useRef<HTMLInputElement | null>(null)
 
   const load = useCallback(async (): Promise<void> => {
@@ -349,6 +354,33 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
     }
   }
 
+  /**
+   * The one-step path: a command in, a working profile out. The engine reads
+   * `--help`, finds the model list and saves the profile, so the user never
+   * has to know a flag to get their CLI's models into the picker.
+   */
+  const connect = async (): Promise<void> => {
+    const command = connectCommand.trim()
+    if (!command) return
+
+    setConnecting(true)
+    setConnectError(null)
+    setConnectReport(null)
+    try {
+      const report = await window.charliecode.connectCli({ command })
+      setStatus(report.status)
+      setModels((previous) => ({ ...previous, [report.profile.id]: report.models }))
+      setConnectReport(report)
+      setConnectCommand('')
+      setAnalysis(null)
+      setAnalysisError(null)
+    } catch (cause) {
+      setConnectError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setConnecting(false)
+    }
+  }
+
   const test = async (id: string, model?: string): Promise<void> => {
     setTesting(id)
     setError(null)
@@ -472,10 +504,109 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
     <div className="cli-panel">
       <h3>CLI esterne</h3>
       <p className="muted small">
-        CharlieCode non conosce marche: una CLI è un comando con i suoi argomenti. Definisci un
-        profilo, provalo e, se vuoi, usalo per i subagenti <code>task</code>. Le chiamate al modello
-        restano dentro la CLI, con la sua autenticazione e la sua quota; qui non si copiano chiavi.
+        CharlieCode non conosce marche: una CLI è un comando con i suoi argomenti. Scrivi il comando
+        con cui la avvii e il profilo si compila da solo; i suoi modelli entrano nel selettore. Le
+        chiamate restano dentro la CLI, con la sua autenticazione e la sua quota: qui non si copiano
+        chiavi.
       </p>
+
+      <div className="cli-connect">
+        <h4>Collega una CLI</h4>
+        <p className="muted small">
+          Il comando che digiti nel terminale, non una marca: <code>opencode</code>,{' '}
+          <code>axet-code</code>, il tuo script. Leggo <code>--help</code>, trovo il comando che
+          elenca i modelli e salvo il profilo.
+        </p>
+        <form
+          className="cli-connect-row"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void connect()
+          }}
+        >
+          <input
+            value={connectCommand}
+            placeholder="comando, es. opencode"
+            spellCheck={false}
+            disabled={connecting}
+            onChange={(event) => setConnectCommand(event.target.value)}
+          />
+          <button
+            className="primary"
+            type="submit"
+            disabled={connecting || !connectCommand.trim()}
+          >
+            {connecting ? 'collego…' : 'Collega'}
+          </button>
+        </form>
+
+        {connecting && (
+          <p className="muted small">Risolvo il comando, leggo l’aiuto e cerco i modelli…</p>
+        )}
+        {connectError && <div className="message-error">{connectError}</div>}
+
+        {connectReport && (
+          <div className="cli-connect-result">
+            <p className="small">
+              <strong>
+                {connectReport.existing ? 'Ricollegata' : 'Collegata'}:{' '}
+                {connectReport.profile.label}
+              </strong>
+              {connectReport.version ? ` · ${connectReport.version}` : ''}
+              {connectReport.models.length > 0
+                ? ` · ${connectReport.models.length} modelli`
+                : ' · nessun elenco modelli'}
+            </p>
+            <code className="cli-connect-path">{connectReport.path}</code>
+            {connectReport.modelsCommand && (
+              <p className="muted small">
+                Modelli: <code>{connectReport.modelsCommand}</code>
+              </p>
+            )}
+            {connectReport.models.length > 0 && (
+              <div className="cli-model-chips">
+                {connectReport.models.slice(0, 24).map((model) => (
+                  <span key={model} className="cli-model-chip">
+                    {model}
+                  </span>
+                ))}
+                {connectReport.models.length > 24 && (
+                  <span className="muted small">+{connectReport.models.length - 24}</span>
+                )}
+              </div>
+            )}
+            <p className="muted small">
+              È nel selettore della barra in alto, sotto «CLI esterne»: scegli il profilo e poi il
+              modello. I subagenti <code>task</code> possono usarlo con un click.
+            </p>
+            {connectReport.warnings.length > 0 && (
+              <ul className="cli-warnings muted small">
+                {connectReport.warnings.slice(0, 4).map((warning) => (
+                  <li key={warning}>{warning}</li>
+                ))}
+              </ul>
+            )}
+            <div className="cli-connect-actions">
+              <button
+                className="ghost small"
+                onClick={() => void useAsWorker(connectReport.profile, '')}
+                disabled={workerBusy}
+              >
+                usa per i subagenti
+              </button>
+              <button
+                className="ghost small"
+                onClick={() => openDraft(draftFromProfile(connectReport.profile))}
+              >
+                modifica profilo
+              </button>
+              <button className="ghost small" onClick={() => setConnectReport(null)}>
+                chiudi
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
 
       {worker && (
         <div className="banner ok small cli-worker">

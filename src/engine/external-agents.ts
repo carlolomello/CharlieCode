@@ -270,7 +270,38 @@ export function findBinary(
       if (isExecutable(candidate)) return candidate
     }
   }
+
+  // Last resort: many installers keep the binary in `<home>/<tool>/bin` and add
+  // that directory to the user's shell profile only. The app is usually started
+  // from Finder/Explorer, so it never sees that PATH. The pattern is generic:
+  // no product name is involved, and the scan happens only when the command was
+  // not found anywhere else.
+  for (const directory of nestedBinDirectories(home)) {
+    for (const candidate of candidatePaths(join(directory, cleaned))) {
+      if (isExecutable(candidate)) return candidate
+    }
+  }
+
   return undefined
+}
+
+/** `<home>/<name>/bin` for every folder directly under the home directory. */
+function nestedBinDirectories(home: string): string[] {
+  const directories: string[] = []
+  try {
+    for (const entry of readdirSync(home, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue
+      const bin = join(home, entry.name, 'bin')
+      try {
+        if (statSync(bin).isDirectory()) directories.push(bin)
+      } catch {
+        // No bin folder: the usual case.
+      }
+    }
+  } catch {
+    // An unreadable home directory is not worth failing a lookup over.
+  }
+  return directories
 }
 
 /* ------------------------------- search --------------------------------- */

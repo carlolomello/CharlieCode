@@ -1,4 +1,4 @@
-import type { CliIntrospection, IncomingAttachment } from '../engine/types'
+import type { CliFinding, CliIntrospection, IncomingAttachment } from '../engine/types'
 import type { Session, SessionSummary } from '../engine/session-types'
 
 export type { CliIntrospection }
@@ -227,6 +227,11 @@ export interface CharlieCodeApi {
   /** Runs a tiny prompt through the CLI, to prove it works before relying on it. */
   testCliProfile(payload: { id: string; model?: string }): Promise<CliTestResult>
   cliProfileModels(id: string): Promise<string[]>
+  /**
+   * Connects a CLI from the command that starts it: reads its help, discovers
+   * the model list and saves the profile. Reconnecting keeps the user's edits.
+   */
+  connectCli(payload: { command: string; label?: string }): Promise<CliConnectReport>
   setCliWorker(worker: ExternalWorkerConfig | null): Promise<CliProfilesStatus>
 }
 
@@ -245,6 +250,24 @@ export interface CliCommandMatch {
   path: string
   /** `--version` first line, when the binary answered quickly. */
   version?: string
+}
+
+export interface CliConnectReport {
+  /** The saved profile; also present in `status.profiles`. */
+  profile: CliProfile
+  /** Resolved executable. */
+  path: string
+  version?: string
+  helpRead: boolean
+  findings: CliFinding[]
+  warnings: string[]
+  /** Models the CLI printed, ready for the picker. */
+  models: string[]
+  /** The command that produced the list, for troubleshooting. */
+  modelsCommand?: string
+  /** An existing profile was reused instead of created. */
+  existing: boolean
+  status: CliProfilesStatus
 }
 
 export interface CliProfilesStatus {

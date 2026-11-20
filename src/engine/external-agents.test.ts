@@ -169,6 +169,19 @@ describe('findBinary', () => {
     await chmod(script, 0o755)
     expect(findBinary('scripts/agent', dir, dir)).toBe(script)
   })
+
+  // Installers often put the binary in `<home>/<tool>/bin` and only add that
+  // directory to the user's shell profile; the app started from Finder does not
+  // see it. The fallback is generic, so any such tool is found by name.
+  it.runIf(process.platform !== 'win32')('trova un comando in <home>/<tool>/bin', async () => {
+    const bin = join(dir, '.tool', 'bin')
+    await mkdir(bin, { recursive: true })
+    const script = join(bin, 'nested-agent-xyz')
+    await writeFile(script, '#!/bin/sh\necho ok\n')
+    await chmod(script, 0o755)
+
+    expect(findBinary('nested-agent-xyz', dir)).toBe(script)
+  })
 })
 
 describe('searchBinaries', () => {

@@ -8,6 +8,7 @@ import type {
   ChatStartPayload,
   ChatStartResult,
   CliCommandMatch,
+  CliConnectReport,
   CliIntrospection,
   CliPreview,
   CliPreviewPayload,
@@ -193,6 +194,8 @@ const api: CharlieCodeApi = {
     ipcRenderer.invoke('charliecode:clis:test', payload) as Promise<CliTestResult>,
   cliProfileModels: (id: string) =>
     ipcRenderer.invoke('charliecode:clis:models', id) as Promise<string[]>,
+  connectCli: (payload: { command: string; label?: string }) =>
+    ipcRenderer.invoke('charliecode:clis:connect', payload) as Promise<CliConnectReport>,
   setCliWorker: (worker: ExternalWorkerConfig | null) =>
     ipcRenderer.invoke('charliecode:clis:set-worker', worker) as Promise<CliProfilesStatus>,
 
