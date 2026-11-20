@@ -318,9 +318,9 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
       }
     )
 
-    // The turn ran on the CLI's own default because the chosen model was
-    // rejected: saying it in the transcript is the difference between a silent
-    // downgrade and a visible one.
+    // The turn ran without the model, or without a flag the CLI refused: saying
+    // it in the transcript is the difference between a silent downgrade and a
+    // visible one.
     if (result.warning) {
       const id = `cli-warning-${++activityId}`
       const attribution = options.agent
@@ -330,7 +330,7 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
         type: 'tool-call',
         id,
         name: 'cli-warning',
-        title: 'Modello della CLI non applicato',
+        title: 'Nota della CLI',
         ...attribution
       })
       input.emit({

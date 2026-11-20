@@ -9,6 +9,7 @@ import {
   findBinary,
   formatCommand,
   profileModels,
+  rejectedFlags,
   resolveBinaryViaShell,
   runExternalAgent,
   searchBinaries
@@ -100,6 +101,29 @@ describe('buildCliArgs', () => {
     expect(run('max')).toEqual(['run', '--effort', 'high', 'x'])
     expect(run('none')).toEqual(['run', 'x'])
     expect(run()).toEqual(['run', 'x'])
+  })
+
+  it('sposta un flag rifiutato prima del sottocomando, oppure lo toglie', () => {
+    const base = profile({ args: ['run'], autoArgs: ['--yolo'] })
+    const options = { prompt: 'x', workspace: '/p', auto: true }
+
+    expect(buildCliArgs(base, options)).toEqual(['run', '--yolo', 'x'])
+    expect(buildCliArgs(base, options, { placements: { auto: 'before' } })).toEqual([
+      '--yolo',
+      'run',
+      'x'
+    ])
+    expect(buildCliArgs(base, options, { placements: { auto: 'off' } })).toEqual(['run', 'x'])
+  })
+
+  it('toglie dagli argomenti del profilo il flag rifiutato e il suo valore', () => {
+    const base = profile({ args: ['run', '--yolo', '--print-models', 'json'] })
+    const argv = buildCliArgs(
+      base,
+      { prompt: 'x', workspace: '/p' },
+      { refusedArgs: ['--yolo', '--print-models'] }
+    )
+    expect(argv).toEqual(['run', 'x'])
   })
 
   it('con prompt su stdin non lo aggiunge agli argomenti', () => {
@@ -404,6 +428,55 @@ describe('runExternalAgent', () => {
     expect(result.code).toBe(0)
     expect(result.error).toBeUndefined()
     expect(result.warning).toMatch(/acme\/uno/)
+  })
+
+  it('riconosce il flag che la CLI dichiara sconosciuto', () => {
+    expect(rejectedFlags('ERROR | Unknown flag: --yolo. | Try --help for usage.')).toEqual([
+      '--yolo'
+    ])
+    expect(rejectedFlags("error: unexpected argument '--full-auto' found")).toEqual(['--full-auto'])
+    expect(rejectedFlags('--effort is not a valid option')).toEqual(['--effort'])
+    expect(rejectedFlags('ERROR: nessun flag qui')).toEqual([])
+  })
+
+  it('ripete il turno senza un flag che sta negli argomenti del profilo', async () => {
+    const cli = node(
+      'if (process.argv.includes("--yolo")) { console.error("ERROR | Unknown flag: --yolo. | Try --help for usage."); process.exit(1) } process.stdout.write("ok\\n")'
+    )
+    const result = await runExternalAgent(
+      profile({
+        ...cli,
+        args: [...cli.args, '--', 'run', '--yolo'],
+        output: 'text'
+      }),
+      { prompt: 'ignorato', workspace: process.cwd() }
+    )
+
+    expect(result.text).toBe('ok')
+    expect(result.code).toBe(0)
+    expect(result.warning).toMatch(/--yolo/)
+  })
+
+  it('ripete il turno senza il flag che la CLI rifiuta', async () => {
+    // A CLI that documents `--yolo` but refuses it where the prompt runs: the
+    // turn must not die on a flag the user never typed.
+    const cli = node(
+      'if (process.argv.includes("--yolo")) { console.error("ERROR | Unknown flag: --yolo. | Try --help for usage."); process.exit(1) } process.stdout.write("ok\\n")'
+    )
+    const result = await runExternalAgent(
+      profile({
+        ...cli,
+        args: [...cli.args, '--'],
+        autoArgs: ['--yolo'],
+        output: 'text'
+      }),
+      { prompt: 'ignorato', auto: true, workspace: process.cwd() }
+    )
+
+    expect(result.text).toBe('ok')
+    expect(result.code).toBe(0)
+    expect(result.error).toBeUndefined()
+    expect(result.warning).toMatch(/--yolo/)
   })
 
   it('non ripete un turno che ha già prodotto testo', async () => {

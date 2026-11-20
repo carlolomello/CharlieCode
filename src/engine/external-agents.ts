@@ -83,7 +83,7 @@ function delay(ms: number): Promise<void> {
  * that does not accept the model flag dies before doing anything; a turn that
  * ran for a minute did real work and must not be repeated.
  */
-const MODEL_RETRY_WINDOW_MS = 20_000
+const FAST_FAILURE_WINDOW_MS = 20_000
 const PLACEHOLDER = /\{(prompt|workspace|model|effort)\}/g
 
 /* ------------------------------- argv ---------------------------------- */
@@ -142,38 +142,77 @@ export function effortValue(profile: CliProfile, effort: EffortLevel): string {
   return high ?? values[Math.max(0, values.length - 2)] ?? effort
 }
 
+/** The optional argv groups a profile adds to a turn. */
+export type FlagGroup = 'model' | 'effort' | 'plan' | 'auto'
+
+/**
+ * Where a group sits in the argv. `after` is the default, after the profile's
+ * own arguments (`cli run --yolo`). `before` puts it in front of them, which is
+ * where a CLI that only knows the flag globally expects it (`cli --yolo run`).
+ * `off` leaves the group out of this turn.
+ */
+export type FlagPlacement = 'after' | 'before' | 'off'
+
+export type FlagPlacements = Partial<Record<FlagGroup, FlagPlacement>>
+
+/** Everything a turn knows about the flags the CLI already refused. */
+export interface ArgvAdjustments {
+  placements?: FlagPlacements
+  /** Flags the CLI refused that sat in the profile's own `args`. */
+  refusedArgs?: string[]
+}
+
 /**
  * Builds the argv for one task. Exported because the settings panel shows the
  * exact command before the user saves it: no surprises at spawn time.
+ *
+ * `placements` exists because a CLI can document a flag at the top level and
+ * reject it after the subcommand that runs the prompt: the same flag has to
+ * move in front of `args`, or disappear.
  */
-export function buildCliArgs(profile: CliProfile, options: AgentRunOptions): string[] {
-  const argv = expandAll(profile.args, options)
+export function buildCliArgs(
+  profile: CliProfile,
+  options: AgentRunOptions,
+  adjustments: ArgvAdjustments = {}
+): string[] {
+  const placements = adjustments.placements ?? {}
+  const base = withoutRefusedArgs(expandAll(profile.args, options), adjustments.refusedArgs ?? [])
   const hasPrompt = profile.args.some((arg) => arg.includes('{prompt}'))
+  const before: string[] = []
+  const after: string[] = []
+
+  const place = (group: FlagGroup, args: string[]): void => {
+    const where = placements[group] ?? 'after'
+    if (where === 'off' || args.length === 0) return
+    if (where === 'before') before.push(...args)
+    else after.push(...args)
+  }
 
   if (options.model) {
     const alreadyPlaced = profile.args.some((arg) => arg.includes('{model}'))
     if (profile.modelArgs?.length) {
-      argv.push(...expandAll(profile.modelArgs, options))
+      place('model', expandAll(profile.modelArgs, options))
     } else if (!alreadyPlaced) {
       // Almost every coding CLI spells this flag the same way. The profile
       // editor overrides it when a CLI disagrees, so a missing `modelArgs`
       // never turns the model picker into a dead control.
-      argv.push('--model', options.model)
+      place('model', ['--model', options.model])
     }
   }
 
   const effort = options.effort ? effortValue(profile, options.effort) : ''
   if (effort && profile.effortArgs?.length) {
-    argv.push(...expandAll(profile.effortArgs, { ...options, effortValue: effort }))
+    place('effort', expandAll(profile.effortArgs, { ...options, effortValue: effort }))
   }
 
   if (options.plan && profile.planArgs?.length) {
-    argv.push(...expandAll(profile.planArgs, options))
+    place('plan', expandAll(profile.planArgs, options))
   }
   if (options.auto && profile.autoArgs?.length) {
-    argv.push(...expandAll(profile.autoArgs, options))
+    place('auto', expandAll(profile.autoArgs, options))
   }
 
+  const argv = [...before, ...base, ...after]
   if (profile.promptMode !== 'stdin' && !hasPrompt) argv.push(options.prompt)
   return argv
 }
@@ -188,6 +227,147 @@ export function formatCommand(command: string, args: string[]): string {
   const quote = (value: string): string =>
     /[\s"'$`\\]/.test(value) ? `"${value.replace(/(["\\$`])/g, '\\$1')}"` : value
   return [command, ...args.map(quote)].join(' ')
+}
+
+/* ------------------------ flags the CLI rejected ------------------------ */
+
+/**
+ * Every CLI spells "I do not know this flag" a little differently. These are
+ * the shapes seen in the wild (`Unknown flag: --yolo`, `unexpected argument
+ * '--x'`, `--x is not a valid option`), never a product name.
+ */
+const UNKNOWN_FLAG_PATTERNS: RegExp[] = [
+  /unknown\s+(?:flag|option|argument)s?\s*[:=]?\s*["'`]?(-{1,2}[A-Za-z0-9][\w-]*)/gi,
+  /unrecogni[sz]ed\s+(?:flag|option|argument)\s*[:=]?\s*["'`]?(-{1,2}[A-Za-z0-9][\w-]*)/gi,
+  /(?:invalid|illegal|bad)\s+(?:flag|option)\s*[:=]?\s*["'`]?(-{1,2}[A-Za-z0-9][\w-]*)/gi,
+  /(?:unexpected|unsupported)\s+(?:argument|flag|option)\s*["'`]?(-{1,2}[A-Za-z0-9][\w-]*)/gi,
+  /(-{1,2}[A-Za-z0-9][\w-]*)\s+(?:is\s+)?not\s+(?:a\s+)?(?:valid|recogni[sz]ed|known|supported)\s+(?:flag|option)/gi,
+  /(?:flag|option)\s+["'`]?(-{1,2}[A-Za-z0-9][\w-]*)["'`]?\s+(?:is\s+)?not\s+(?:recogni[sz]ed|known|supported|defined)/gi
+]
+
+function normalizeFlag(raw: string): string | undefined {
+  const value =
+    raw
+      .replace(/["'`.,;:!?)\]}]+$/g, '')
+      .split('=')[0]
+      ?.trim() ?? ''
+  return /^-{1,2}[A-Za-z][\w-]*$/.test(value) ? value.toLowerCase() : undefined
+}
+
+/** The flags a CLI's own error message names as unknown. */
+export function rejectedFlags(output: string): string[] {
+  const found = new Set<string>()
+  for (const pattern of UNKNOWN_FLAG_PATTERNS) {
+    for (const match of output.matchAll(pattern)) {
+      const flag = normalizeFlag(match[1] ?? '')
+      if (flag) found.add(flag)
+    }
+  }
+  return [...found]
+}
+
+/**
+ * Only a fast failure that produced no answer reads as "the arguments were
+ * rejected": a turn that ran for a minute did real work and is never repeated.
+ */
+function fastFailure(result: ExternalRunResult): boolean {
+  if (result.aborted || result.timedOut) return false
+  if (result.code === 0 || !result.error) return false
+  if (result.text.trim()) return false
+  return result.ms < FAST_FAILURE_WINDOW_MS
+}
+
+function groupFlags(profile: CliProfile, options: AgentRunOptions): [FlagGroup, string[]][] {
+  return [
+    ['model', profile.modelArgs?.length ? profile.modelArgs : options.model ? ['--model'] : []],
+    ['effort', profile.effortArgs ?? []],
+    ['plan', profile.planArgs ?? []],
+    ['auto', profile.autoArgs ?? []]
+  ]
+}
+
+/**
+ * Takes a refused flag out of the profile's own argv, with the value that
+ * follows it: leaving `--yolo` out of `run --yolo` is the fix, leaving its
+ * value behind would be a new error. A plain word is never touched.
+ */
+function withoutRefusedArgs(args: string[], refused: string[]): string[] {
+  if (refused.length === 0) return args
+  const output: string[] = []
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index] ?? ''
+    const flag = normalizeFlag(arg)
+    if (!flag || !refused.includes(flag)) {
+      output.push(arg)
+      continue
+    }
+    const next = args[index + 1]
+    if (!arg.includes('=') && next !== undefined && !next.startsWith('-')) index++
+  }
+  return output
+}
+
+/** One flag the CLI said it does not know, and where it came from. */
+export interface RefusedFlag {
+  /** The group we added it with, or `args` when the profile's argv has it. */
+  group: FlagGroup | 'args'
+  flag: string
+}
+
+/**
+ * The flags we added that the CLI says it does not know, with the group they
+ * belong to. A flag written by the user inside `args` is not ours to remove:
+ * it never matches a group, so it never triggers a repeat.
+ */
+export function rejectedGroups(
+  profile: CliProfile,
+  options: AgentRunOptions,
+  result: ExternalRunResult,
+  adjustments: ArgvAdjustments = {}
+): RefusedFlag[] {
+  if (!fastFailure(result)) return []
+  const output = `${result.stderr}\n${result.raw}`.slice(-4_000)
+  const flags = rejectedFlags(output)
+  if (flags.length === 0) return []
+
+  const placements = adjustments.placements ?? {}
+  const refusedArgs = adjustments.refusedArgs ?? []
+  const matches: RefusedFlag[] = []
+  for (const [group, args] of groupFlags(profile, options)) {
+    if ((placements[group] ?? 'after') === 'off') continue
+    for (const arg of args) {
+      const flag = normalizeFlag(arg)
+      if (flag && flags.includes(flag)) matches.push({ group, flag })
+    }
+  }
+
+  // The same flag can sit in the profile's own argv instead: the user copied
+  // it from the CLI's help, or an older connect step put it there.
+  for (const arg of profile.args) {
+    const flag = normalizeFlag(arg)
+    if (!flag || !flags.includes(flag) || refusedArgs.includes(flag)) continue
+    matches.push({ group: 'args', flag })
+  }
+  return matches
+}
+
+/**
+ * Flags a CLI already refused, remembered per profile signature: the next turn
+ * does not pay the failed process again. Editing the profile changes the
+ * signature, so a corrected profile is never stuck with an old decision.
+ */
+const refusedFlagsByProfile = new Map<string, ArgvAdjustments>()
+
+function profileSignature(profile: CliProfile): string {
+  return JSON.stringify([
+    profile.id,
+    profile.command,
+    profile.args,
+    profile.modelArgs ?? [],
+    profile.effortArgs ?? [],
+    profile.planArgs ?? [],
+    profile.autoArgs ?? []
+  ])
 }
 
 /* ------------------------------ binaries -------------------------------- */
@@ -831,7 +1011,7 @@ function shouldRetryWithoutModel(
   if (result.aborted || result.timedOut) return false
   if (result.code === 0 || !result.error) return false
   if (result.text.trim()) return false
-  return result.ms < MODEL_RETRY_WINDOW_MS
+  return result.ms < FAST_FAILURE_WINDOW_MS
 }
 
 /**
@@ -867,19 +1047,77 @@ export async function runExternalAgent(
     )
   }
 
-  const first = await attempt(profile, options, hooks, binary)
-  if (!shouldRetryWithoutModel(options, first)) return first
-
-  // The CLI rejected the model instead of doing the work. Retrying without it
-  // costs one process and keeps the turn usable; the note says the model was
-  // not applied, so nothing is hidden from the user.
-  const retry = await attempt(profile, { ...options, model: undefined }, hooks, binary)
-  if (retry.error || retry.aborted) return first
-
-  return {
-    ...retry,
-    warning: `${profile.label} non ha accettato il modello "${options.model}" (uscita ${first.code}): ho ripetuto il turno con il modello predefinito della CLI.`
+  const signature = profileSignature(profile)
+  const remembered = refusedFlagsByProfile.get(signature) ?? {}
+  const adjustments: ArgvAdjustments = {
+    placements: { ...(remembered.placements ?? {}) },
+    refusedArgs: [...(remembered.refusedArgs ?? [])]
   }
+  const placements = adjustments.placements ?? {}
+  const refusedArgs = adjustments.refusedArgs ?? []
+  let result = await attempt(profile, options, hooks, binary, adjustments)
+
+  // A CLI can document a flag at the top level and refuse it in the subcommand
+  // that runs the prompt (`cli run --yolo` answers "Unknown flag: --yolo"):
+  // the flag is global and belongs before the subcommand, or the CLI never had
+  // it. Its own error names the flag, so the turn is repeated with the flag
+  // moved and then without it, instead of dying on something the user never
+  // typed. Only a flag the CLI itself named is ever touched.
+  let refused: RefusedFlag[] = []
+  let refusedCode = 0
+  for (let round = 0; round < 4; round++) {
+    const rejected = rejectedGroups(profile, options, result, adjustments)
+    if (rejected.length === 0) break
+    refused = rejected
+    refusedCode = result.code
+    for (const entry of rejected) {
+      if (entry.group === 'args') {
+        if (!refusedArgs.includes(entry.flag)) refusedArgs.push(entry.flag)
+      } else {
+        placements[entry.group] = placements[entry.group] === undefined ? 'before' : 'off'
+      }
+    }
+    result = await attempt(profile, options, hooks, binary, adjustments)
+    if (result.aborted || result.timedOut) return result
+  }
+  if (refused.length > 0) refusedFlagsByProfile.set(signature, adjustments)
+
+  const notes: string[] = []
+  if (refused.length > 0) {
+    const flags = [...new Set(refused.map((entry) => `"${entry.flag}"`))].join(', ')
+    const removed = refused.some((entry) =>
+      entry.group === 'args' ? true : placements[entry.group] === 'off'
+    )
+    const how = removed ? 'senza quel flag' : 'con il flag prima del sottocomando'
+    const outcome =
+      result.code === 0 && !result.error
+        ? 'e il turno è andato a buon fine'
+        : `ma la CLI è ancora uscita con codice ${result.code}`
+    notes.push(
+      `${profile.label} ha rifiutato ${flags} (uscita ${refusedCode}): ho ripetuto il turno ${how}, ${outcome}.${removed ? ' Togli il flag dal profilo per non ripetere la prova.' : ''}`
+    )
+  }
+
+  if (shouldRetryWithoutModel(options, result) && (placements.model ?? 'after') !== 'off') {
+    // The CLI rejected the model instead of doing the work. Retrying without it
+    // costs one process and keeps the turn usable; the note says the model was
+    // not applied, so nothing is hidden from the user.
+    const retry = await attempt(
+      profile,
+      { ...options, model: undefined },
+      hooks,
+      binary,
+      adjustments
+    )
+    if (!retry.error && !retry.aborted) {
+      notes.push(
+        `${profile.label} non ha accettato il modello "${options.model}" (uscita ${result.code}): ho ripetuto il turno con il modello predefinito della CLI.`
+      )
+      return { ...retry, warning: notes.join(' ') }
+    }
+  }
+
+  return notes.length > 0 ? { ...result, warning: notes.join(' ') } : result
 }
 
 /** One CLI process: the argv, the spawn, the streams and the timeout. */
@@ -887,9 +1125,10 @@ function attempt(
   profile: CliProfile,
   options: AgentRunOptions,
   hooks: RunHooks,
-  binary: string
+  binary: string,
+  adjustments: ArgvAdjustments = {}
 ): Promise<ExternalRunResult> {
-  const argv = buildCliArgs(profile, options)
+  const argv = buildCliArgs(profile, options, adjustments)
   const started = Date.now()
   const timeoutMs =
     hooks.timeoutMs ?? (profile.timeoutSeconds ? profile.timeoutSeconds * 1_000 : DEFAULT_TIMEOUT_MS)
