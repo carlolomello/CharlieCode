@@ -75,6 +75,7 @@ import {
 } from '../engine/sessions'
 import { toolLogFromEvent } from '../engine/tools'
 import { cliModelEntries, runCliTurn } from '../engine/backends'
+import { readRouting, ensureRoutingFile } from '../engine/routing'
 import { parseCliModelKey } from '../shared/cli-key'
 import type {
   CharlieCodeConfig,
@@ -101,7 +102,8 @@ import type {
   ProviderStatus,
   WorkspaceChange,
   WorkspaceChanges,
-  RoutersStatus
+  RoutersStatus,
+  RoutingStatus
 } from '../shared/ipc'
 
 const platform = createPlatform()
@@ -508,6 +510,37 @@ function registerIpc(): void {
   }
 
   ipcMain.handle('charliecode:clis:list', () => cliStatus())
+
+  const routingStatus = async (): Promise<RoutingStatus> => {
+    const { config } = await loadConfig(platform)
+    const routing = await readRouting(config.workspace, platform.homeDir)
+    return {
+      enabled: routing.enabled,
+      roles: Object.entries(routing.roles).flatMap(([role, route]) =>
+        route
+          ? [
+              {
+                role,
+                modelKey: route.modelKey,
+                ...(route.effort ? { effort: route.effort } : {})
+              }
+            ]
+          : []
+      ),
+      ...(routing.source ? { source: routing.source } : {}),
+      ...(routing.error ? { error: routing.error } : {})
+    }
+  }
+
+  ipcMain.handle('charliecode:routing:status', () => routingStatus())
+
+  ipcMain.handle('charliecode:routing:open', async (): Promise<RoutingStatus> => {
+    const { config } = await loadConfig(platform)
+    const path = await ensureRoutingFile(config.workspace, platform.homeDir)
+    const error = await shell.openPath(path)
+    if (error) throw new Error(error)
+    return routingStatus()
+  })
 
   ipcMain.handle('charliecode:clis:search', async (_event, query: string) => {
     const { config } = await loadConfig(platform)
@@ -993,6 +1026,7 @@ hanno priorità su queste.
             const history = compactMessages(fullHistory, { budget }).messages
             const system =
               payload.system ?? buildSystemPrompt(projectContext.system, workspace)
+            const routing = await readRouting(workspace, platform.homeDir)
 
             const result = await runAgent(
               {
@@ -1014,6 +1048,7 @@ hanno priorità su queste.
                 modelMessages: history,
                 maxSteps: config.agents.maxSteps,
                 subagentMaxSteps: config.agents.subagentMaxSteps,
+                routing,
                 askPermission: (request) =>
                   askUser(sender, payload.requestId, request, config),
                 emit

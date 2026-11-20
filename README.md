@@ -157,6 +157,26 @@ What that means in practice:
 - writing is opt-in per CLI, and only for **implementer** subagents;
 - a CLI that fails the test is reported as failed, not retried silently.
 
+### Routing per ruolo (opzionale)
+
+By default every `task` subagent uses the main model, or the configured CLI worker. A project can override that per role in `.charliecode/routing.yaml` — the drawer shows the current routes and creates the template:
+
+```yaml
+enabled: true
+
+roles:
+  explorer:
+    model: cheap::fast-model
+    effort: low
+  reviewer:
+    model: provider::strong-model
+  implementer:
+    model: cli:agent-one
+    effort: high
+```
+
+`model` accepts a native key (`provider::model`) or a CLI key (`cli:<profile>` / `cli:<profile>::<model>`). A route whose model no longer exists is ignored, never fatal; invalid YAML is reported in the drawer and routing stays off. Explicit models chosen by the orchestrator still win, and plan mode still forces read-only subagents.
+
 ### Any other OpenAI-compatible API
 
 Providers are plain entries in `~/.charliecode/config.json`; add them from the drawer (**⚙ Provider e chiavi** → *Aggiungi*) or by hand:
@@ -258,6 +278,7 @@ Everything lives in `~/.charliecode/` (override with `CHARLIECODE_CONFIG_DIR`):
 | `sessions/` | one JSONL per chat + its context sidecar |
 | `probe-report.json` | last capability probe |
 | `AGENTS.md` | global instructions injected into every project |
+| `.charliecode/routing.yaml` (project) | optional per-role models/effort for `task` subagents |
 
 | Variable | Effect |
 | --- | --- |
@@ -282,6 +303,8 @@ src/
     probe      real tool-calling detection
     local      Ollama / LM Studio / vLLM presets and probing
     agent      agent loop, plan/build modes, system prompt, subagents
+    backends   CLI as a conversation backend: briefing out, text/tools/diff back in
+    routing    optional per-role models/effort for subagents
     tools      read/ls/glob/grep/write/edit/bash/task + permission helpers
     diff       unified diff generation
     context-store  model context sidecar per session
@@ -330,7 +353,7 @@ The goal is a GUI equivalent of a terminal coding agent, with multi-agent work m
 - [x] `CHARLIECODE.md` and `CLAUDE.md` compatibility
 - [x] Plan mode: read-only exploration, explicit approve-to-execute
 - [ ] Nested-directory `AGENTS.md` discovery
-- [ ] Context compaction with token accounting
+- [x] Context compaction with token accounting
 
 **Phase 3 — multi-agent (done, first pass)**
 
@@ -338,8 +361,16 @@ The goal is a GUI equivalent of a terminal coding agent, with multi-agent work m
 - [x] Isolated subagents with a role (`explorer`, `reviewer`, `implementer`), depth limit 2
 - [x] Parallel subagents with their own activity cards
 - [x] Plan mode propagates: subagents cannot write either
-- [ ] Orchestrator with per-agent model and effort (cheap model for search, strong for planning)
+- [x] Per-role model and effort for subagents, opt-in via `.charliecode/routing.yaml`
 - [ ] Git worktree isolation for parallel writers
+
+**CLI backends (done)**
+
+- [x] User-defined CLI profiles, with the command searched as you type — no product presets
+- [x] `--help` introspection proposes model, effort, plan, auto-approve and output flags
+- [x] Several CLIs in the picker at once, each with its own model and effort selector
+- [x] One conversation across backends: briefing out, text/tools/diff back in, canonical context in the session
+- [x] Profile-driven `task` subagents, read-only by default
 
 **Phase 4 — extensibility**
 
@@ -356,6 +387,8 @@ The goal is a GUI equivalent of a terminal coding agent, with multi-agent work m
 - [x] Pixel-art mascot: walks, thinks, sits at a desk while the agent works
 - [x] App icon (Charlie at his PC)
 - [x] Markdown rendering with code blocks and copy
+- [x] Chat search, per-chat drafts, and a `git init` proposal when the folder is not a repository
+- [x] Streaming Markdown that does not block the composer
 - [ ] `safeStorage` for credentials instead of a `600` JSON file
 - [ ] Code signing / notarization, auto-update
 - [ ] Theming

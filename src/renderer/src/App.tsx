@@ -19,7 +19,8 @@ import type {
   PluginStatus,
   ProviderStatus,
   SkillInfo,
-  RoutersStatus
+  RoutersStatus,
+  RoutingStatus
 } from '../../shared/ipc'
 import { Mascot, MascotDesk, MascotTeam, type MascotMood } from './components/Mascot'
 import { Sidebar } from './components/Sidebar'
@@ -170,6 +171,7 @@ export default function App() {
   const [teamPreview, setTeamPreview] = useState(false)
   const [changesCount, setChangesCount] = useState(0)
   const [routers, setRouters] = useState<RoutersStatus | null>(null)
+  const [routing, setRouting] = useState<RoutingStatus | null>(null)
   const [newToolDraft, setNewToolDraft] = useState('')
   const [newCommandDraft, setNewCommandDraft] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -191,6 +193,14 @@ export default function App() {
       setRouters(await window.charliecode.routers())
     } catch {
       setRouters(null)
+    }
+  }, [])
+
+  const refreshRouting = useCallback(async (): Promise<void> => {
+    try {
+      setRouting(await window.charliecode.routing())
+    } catch {
+      setRouting(null)
     }
   }, [])
 
@@ -286,6 +296,7 @@ export default function App() {
     void refreshProviders()
     void refreshSessions()
     void refreshRouters()
+    void refreshRouting()
     void refreshAutoApprove()
     void refreshPlugins()
     void refreshSkills()
@@ -293,6 +304,7 @@ export default function App() {
     refreshModels,
     refreshProviders,
     refreshRouters,
+    refreshRouting,
     refreshSessions,
     refreshAutoApprove,
     refreshPlugins,
@@ -538,6 +550,11 @@ export default function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [permission, teamPreview, projectWizard, wizardOpen, settingsOpen, changesOpen])
+
+  // The routing file is edited outside the app: re-read it when the drawer opens.
+  useEffect(() => {
+    if (settingsOpen) void refreshRouting()
+  }, [settingsOpen, refreshRouting])
 
   // Give the keyboard back as soon as a turn ends.
   useEffect(() => {
@@ -1939,6 +1956,45 @@ export default function App() {
                 <Markdown text={setupReport} />
               </div>
             )}
+
+            <h3>Routing dei subagenti</h3>
+            <p className="muted small">
+              Opzionale: <code>explorer</code>, <code>reviewer</code> e <code>implementer</code>{' '}
+              possono usare modelli diversi, nativi o CLI. Si configura in{' '}
+              <code>.charliecode/routing.yaml</code>; senza file vale il modello principale o la CLI
+              worker.
+            </p>
+            {routing?.error && <div className="banner warn">{routing.error}</div>}
+            {routing?.enabled ? (
+              <div className="routing-roles">
+                {routing.roles.map((route) => (
+                  <div key={route.role} className="routing-role">
+                    <code>{route.role}</code>
+                    <span>
+                      {route.modelKey}
+                      {route.effort ? ` · effort ${route.effort}` : ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="muted small">Non attivo.</p>
+            )}
+            <div className="setup-actions">
+              <button
+                className="ghost"
+                onClick={() =>
+                  void window.charliecode
+                    .openRouting()
+                    .then(setRouting)
+                    .catch((cause) =>
+                      setFatal(cause instanceof Error ? cause.message : String(cause))
+                    )
+                }
+              >
+                {routing?.source ? 'Apri routing.yaml' : 'Crea routing.yaml'}
+              </button>
+            </div>
 
             <h3>Skill</h3>
             <p className="muted small">

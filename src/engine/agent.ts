@@ -4,9 +4,11 @@ import { providerFor, resolveCandidates } from './client'
 import { buildTools, toolTitle, type ToolRuntime } from './tools'
 import { sanitizeMessages } from './context-store'
 import { runExternalAgent } from './external-agents'
+import { parseCliModelKey } from '../shared/cli-key'
 import { enabledPluginIds, pluginSystemPrompt, recordTurn, PLUGIN_READ_TOOLS } from './plugins'
 import { skillsSystemPrompt } from './skills'
 import type { Platform } from './platform'
+import type { RoutingConfig, SubagentRole } from './routing'
 import type {
   CharlieCodeConfig,
   CliProfile,
@@ -31,6 +33,8 @@ export interface AgentDeps {
   emit: (event: EngineEvent) => void
   maxSteps?: number
   subagentMaxSteps?: number
+  /** Optional per-role routing read from `.charliecode/routing.yaml`. */
+  routing?: RoutingConfig
 }
 
 export interface AgentResult {
@@ -246,24 +250,81 @@ export async function runAgent(
       runSubagent: async (sub) => {
         const agentId = `agent-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
         const name = sub.description.slice(0, 60)
-        const role = sub.agent ?? 'explorer'
+        const role = (sub.agent ?? 'explorer') as SubagentRole
+        const profiles = deps.cliProfiles ?? []
         const worker = deps.config.external
         const workerProfile = worker?.id
-          ? deps.cliProfiles?.find((profile) => profile.id === worker.id)
+          ? profiles.find((profile) => profile.id === worker.id)
           : undefined
-        const subModel =
-          sub.model ??
-          deps.config.agents.subagentModel ??
-          modelKey
+
+        // Backend precedence: an explicit model on the task, then the role
+        // route, then the configured CLI worker, then the default subagent
+        // model. A route that points at a missing model is ignored.
+        const route = deps.routing?.enabled ? deps.routing.roles[role] : undefined
+        const explicit = sub.model?.trim()
+        const explicitCli = explicit ? parseCliModelKey(explicit) : undefined
+        const explicitProfile = explicitCli
+          ? profiles.find((profile) => profile.id === explicitCli.profileId)
+          : undefined
+        const explicitNative =
+          explicit && !explicitCli && deps.models.some((model) => model.key === explicit)
+            ? explicit
+            : undefined
+
+        const routeCli = route ? parseCliModelKey(route.modelKey) : undefined
+        const routeProfile = routeCli
+          ? profiles.find((profile) => profile.id === routeCli.profileId)
+          : undefined
+        const routeNative =
+          route && !routeCli && deps.models.some((model) => model.key === route.modelKey)
+            ? route.modelKey
+            : undefined
+
+        const target:
+          | { kind: 'cli'; profile: CliProfile; model?: string; auto: boolean }
+          | { kind: 'native'; modelKey: string } =
+          explicitCli && explicitProfile
+            ? {
+                kind: 'cli',
+                profile: explicitProfile,
+                ...(explicitCli.model ? { model: explicitCli.model } : {}),
+                auto: false
+              }
+            : explicitNative
+              ? { kind: 'native', modelKey: explicitNative }
+              : routeProfile
+                ? {
+                    kind: 'cli',
+                    profile: routeProfile,
+                    ...(routeCli?.model ? { model: routeCli.model } : {}),
+                    auto: worker?.id === routeProfile.id && worker.auto === true
+                  }
+                : routeNative
+                  ? { kind: 'native', modelKey: routeNative }
+                  : workerProfile
+                    ? {
+                        kind: 'cli',
+                        profile: workerProfile,
+                        ...(worker?.model ? { model: worker.model } : {}),
+                        auto: worker?.auto === true
+                      }
+                    : {
+                        kind: 'native',
+                        modelKey: deps.config.agents.subagentModel ?? modelKey
+                      }
+
+        // A route can pin the effort; otherwise the turn's effort carries.
+        const subEffort = route?.effort ?? request.effort
 
         deps.emit({
           type: 'subagent-start',
           agentId,
           name,
           description: sub.prompt.slice(0, 200),
-          modelKey: worker?.id
-            ? `${workerProfile?.label ?? worker.id}${worker.model ? ` · ${worker.model}` : ''}`
-            : subModel
+          modelKey:
+            target.kind === 'cli'
+              ? `${target.profile.label}${target.model ? ` · ${target.model}` : ''}`
+              : target.modelKey
         })
 
         const allow =
@@ -273,32 +334,19 @@ export async function runAgent(
 
         const started = Date.now()
 
-        if (worker?.id) {
-          if (!workerProfile) {
-            const message = `Il profilo CLI "${worker.id}" non esiste più. Scegline un altro nelle impostazioni.`
-            deps.emit({
-              type: 'subagent-end',
-              agentId,
-              name,
-              ok: false,
-              summary: message,
-              ms: Date.now() - started
-            })
-            return { ok: false, text: `Subagente fallito: ${message}`, summary: message }
-          }
-
-          // The user chose an existing CLI as the worker: the model calls happen
-          // inside it, with its auth, quota and logs. We only orchestrate.
+        if (target.kind === 'cli') {
+          // The model calls happen inside the CLI, with its auth, quota and
+          // logs. We only orchestrate.
           try {
             const result = await runExternalAgent(
-              workerProfile,
+              target.profile,
               {
                 prompt: sub.prompt,
-                ...(worker.model ? { model: worker.model } : {}),
-                ...(request.effort ? { effort: request.effort } : {}),
+                ...(target.model ? { model: target.model } : {}),
+                ...(subEffort ? { effort: subEffort } : {}),
                 // Reading is always allowed; writing only for an implementer.
                 ...(planMode || role !== 'implementer' ? { plan: true } : {}),
-                auto: worker.auto === true && !planMode && role === 'implementer',
+                auto: target.auto && !planMode && role === 'implementer',
                 workspace: deps.workspace ?? deps.platform.homeDir
               },
               {
@@ -307,10 +355,7 @@ export async function runAgent(
                 onText: (chunk) => deps.emit({ type: 'delta', text: chunk, agentId })
               }
             )
-            const text =
-              result.text ||
-              result.error ||
-              'La CLI non ha prodotto output.'
+            const text = result.text || result.error || 'La CLI non ha prodotto output.'
             const ok = result.code === 0 && !result.aborted && !result.timedOut
             deps.emit({
               type: 'subagent-end',
@@ -338,9 +383,9 @@ export async function runAgent(
         try {
           const result = await runAgent(
             {
-              modelKey: subModel,
+              modelKey: target.modelKey,
               messages: [{ role: 'user', content: sub.prompt }],
-              effort: request.effort,
+              ...(subEffort ? { effort: subEffort } : {}),
               signal: request.signal,
               // Plan mode propagates: a subagent can never write either.
               ...(planMode ? { mode: 'plan' as const } : {})

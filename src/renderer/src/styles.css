@@ -779,6 +779,36 @@ button.ghost.small {
   gap: 8px;
 }
 
+/* ---------- routing ---------- */
+
+.routing-roles {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.routing-role {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  font-size: 12px;
+}
+
+.routing-role code {
+  color: var(--accent);
+  min-width: 86px;
+}
+
+.routing-role span {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 /* ---------- plugins ---------- */
 
 .plugins {

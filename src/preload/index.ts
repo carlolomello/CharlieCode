@@ -23,6 +23,7 @@ import type {
   PluginStatus,
   ProviderStatus,
   RoutersStatus,
+  RoutingStatus,
   SkillInfo,
   WorkspaceChange,
   WorkspaceChanges
@@ -185,7 +186,10 @@ const api: CharlieCodeApi = {
   cliProfileModels: (id: string) =>
     ipcRenderer.invoke('charliecode:clis:models', id) as Promise<string[]>,
   setCliWorker: (worker: ExternalWorkerConfig | null) =>
-    ipcRenderer.invoke('charliecode:clis:set-worker', worker) as Promise<CliProfilesStatus>
+    ipcRenderer.invoke('charliecode:clis:set-worker', worker) as Promise<CliProfilesStatus>,
+
+  routing: () => ipcRenderer.invoke('charliecode:routing:status') as Promise<RoutingStatus>,
+  openRouting: () => ipcRenderer.invoke('charliecode:routing:open') as Promise<RoutingStatus>
 }
 
 contextBridge.exposeInMainWorld('charliecode', api)

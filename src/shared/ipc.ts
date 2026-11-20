@@ -208,6 +208,10 @@ export interface CharlieCodeApi {
 
   /** CLI profiles the user defined, plus the configured worker. */
   cliProfiles(): Promise<CliProfilesStatus>
+  /** Optional per-role routing for `task` subagents. */
+  routing(): Promise<RoutingStatus>
+  /** Creates the routing template if missing and opens it in the editor. */
+  openRouting(): Promise<RoutingStatus>
   /** Finds commands on this machine while the user types a name. */
   searchCliCommands(query: string): Promise<CliCommandMatch[]>
   /** Reads the CLI's own `--help` and proposes a profile for it. */
@@ -246,6 +250,15 @@ export interface CliProfilesStatus {
   errors: { file: string; message: string }[]
   /** The CLI currently used for `task` subagents, if the user chose one. */
   worker?: ExternalWorkerConfig
+}
+
+export interface RoutingStatus {
+  enabled: boolean
+  roles: { role: string; modelKey: string; effort?: EffortLevel }[]
+  /** File that was read, when it exists. */
+  source?: string
+  /** Parse or validation problem; routing stays off. */
+  error?: string
 }
 
 export interface CliPreviewPayload {
