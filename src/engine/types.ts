@@ -170,6 +170,12 @@ export interface CliProfile {
   activityPath?: string
   /** Advanced: dot path of the model array inside JSON output. */
   modelsPath?: string
+  /**
+   * The models the CLI printed last time, with the argv that produced them.
+   * A models command can take half a minute; the picker reuses the answer for
+   * a few minutes instead of spawning the CLI on every selection.
+   */
+  modelsCache?: { args: string[]; at: string; models: string[] }
   /** Shown in the panel. */
   notes?: string
   /** One run timeout, in seconds. */

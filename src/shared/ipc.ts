@@ -229,7 +229,7 @@ export interface CharlieCodeApi {
   previewCliProfile(payload: CliPreviewPayload): Promise<CliPreview>
   /** Runs a tiny prompt through the CLI, to prove it works before relying on it. */
   testCliProfile(payload: { id: string; model?: string }): Promise<CliTestResult>
-  cliProfileModels(id: string): Promise<string[]>
+  cliProfileModels(id: string, force?: boolean): Promise<string[]>
   /**
    * Connects a CLI from the command that starts it: reads its help, discovers
    * the model list and saves the profile. Reconnecting keeps the user's edits.

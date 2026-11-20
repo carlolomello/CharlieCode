@@ -389,6 +389,35 @@ describe('runExternalAgent', () => {
     expect(result.error).toMatch(/interrotta/)
   })
 
+  it('ripete senza modello quando la CLI lo rifiuta subito', async () => {
+    // `--` hands the flags to the script instead of node itself.
+    const cli = node(
+      'if (process.argv.includes("--model")) process.exit(1); process.stdout.write("ok\\n")'
+    )
+    const result = await runExternalAgent(
+      profile({ ...cli, args: [...cli.args, '--'], output: 'text' }),
+      { prompt: 'ignorato', model: 'acme/uno', workspace: process.cwd() }
+    )
+
+    // The turn is usable on the CLI default, and the note says why.
+    expect(result.text).toBe('ok')
+    expect(result.code).toBe(0)
+    expect(result.error).toBeUndefined()
+    expect(result.warning).toMatch(/acme\/uno/)
+  })
+
+  it('non ripete un turno che ha già prodotto testo', async () => {
+    const cli = node('process.stdout.write("parziale\\n"); process.exit(2)')
+    const result = await runExternalAgent(
+      profile({ ...cli, args: [...cli.args, '--'], output: 'text' }),
+      { prompt: 'ignorato', model: 'acme/uno', workspace: process.cwd() }
+    )
+
+    expect(result.code).toBe(2)
+    expect(result.error).toMatch(/codice 2/)
+    expect(result.warning).toBeUndefined()
+  })
+
   it('un comando mancante rifiuta con un messaggio utile', async () => {
     await expect(
       runExternalAgent(

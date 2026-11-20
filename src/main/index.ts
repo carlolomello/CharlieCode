@@ -853,42 +853,72 @@ function registerIpc(): void {
     }
   )
 
-  ipcMain.handle('charliecode:clis:models', async (_event, id: string): Promise<string[]> => {
-    const { config } = await loadConfig(platform)
-    const profile = await readCliProfile(platform, id)
-    if (!profile) return []
+  // A models command loads the whole CLI runtime: the answer is reused for a
+  // few minutes so opening the picker does not spawn the CLI again, and ↻
+  // (force) asks for a fresh list.
+  const MODEL_CACHE_MS = 10 * 60_000
 
-    const models = await profileModels(profile, platform.homeDir, config.workspace)
-    if (models.length > 0) return models
+  ipcMain.handle(
+    'charliecode:clis:models',
+    async (_event, id: string, force?: boolean): Promise<string[]> => {
+      const { config } = await loadConfig(platform)
+      const profile = await readCliProfile(platform, id)
+      if (!profile) return []
 
-    // A profile saved without a models command (an older connect, a profile
-    // written by hand) gets one now: the picker must not stay empty for a CLI
-    // that knows how to list its own models.
-    const binary =
-      findBinary(profile.command, platform.homeDir, config.workspace) ??
-      (await resolveBinaryViaShell(profile.command, { home: platform.homeDir }))
-    if (!binary) return []
+      const cache = profile.modelsCache
+      const sameArgs =
+        (cache?.args ?? []).join('\u0000') === (profile.modelsArgs ?? []).join('\u0000')
+      if (!force && cache && sameArgs && Date.now() - Date.parse(cache.at) < MODEL_CACHE_MS) {
+        return cache.models
+      }
 
-    // The usual spellings first. If none prints a list, the app's own model
-    // reads the CLI's help and proposes the command; the proposal is verified
-    // by running it, so a wrong guess changes nothing.
-    const discovered =
-      (await discoverModelCommand(binary, {
-        ...(config.workspace ? { workspace: config.workspace } : {})
-      })) ??
-      (await askModelCommand(binary, askModel, {
-        ...(config.workspace ? { workspace: config.workspace } : {})
-      }).catch(() => undefined))
-    if (!discovered) return []
+      const models = await profileModels(profile, platform.homeDir, config.workspace)
+      if (models.length > 0) {
+        await saveCliProfile(platform, {
+          ...profile,
+          modelsCache: {
+            args: [...(profile.modelsArgs ?? [])],
+            at: new Date().toISOString(),
+            models: models.slice(0, 400)
+          }
+        }).catch(() => undefined)
+        return models
+      }
 
-    await saveCliProfile(platform, {
-      ...profile,
-      modelsArgs: discovered.args,
-      ...(discovered.format ? { modelsFormat: discovered.format } : {}),
-      ...(discovered.path ? { modelsPath: discovered.path } : {})
-    })
-    return discovered.models
-  })
+      // A profile saved without a models command (an older connect, a profile
+      // written by hand) gets one now: the picker must not stay empty for a CLI
+      // that knows how to list its own models.
+      const binary =
+        findBinary(profile.command, platform.homeDir, config.workspace) ??
+        (await resolveBinaryViaShell(profile.command, { home: platform.homeDir }))
+      if (!binary) return []
+
+      // The usual spellings first. If none prints a list, the app's own model
+      // reads the CLI's help and proposes the command; the proposal is verified
+      // by running it, so a wrong guess changes nothing.
+      const discovered =
+        (await discoverModelCommand(binary, {
+          ...(config.workspace ? { workspace: config.workspace } : {})
+        })) ??
+        (await askModelCommand(binary, askModel, {
+          ...(config.workspace ? { workspace: config.workspace } : {})
+        }).catch(() => undefined))
+      if (!discovered) return []
+
+      await saveCliProfile(platform, {
+        ...profile,
+        modelsArgs: discovered.args,
+        ...(discovered.format ? { modelsFormat: discovered.format } : {}),
+        ...(discovered.path ? { modelsPath: discovered.path } : {}),
+        modelsCache: {
+          args: [...discovered.args],
+          at: new Date().toISOString(),
+          models: discovered.models.slice(0, 400)
+        }
+      })
+      return discovered.models
+    }
+  )
 
   ipcMain.handle(
     'charliecode:clis:set-worker',

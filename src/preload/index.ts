@@ -198,8 +198,8 @@ const api: CharlieCodeApi = {
     ipcRenderer.invoke('charliecode:clis:preview', payload) as Promise<CliPreview>,
   testCliProfile: (payload: { id: string; model?: string }) =>
     ipcRenderer.invoke('charliecode:clis:test', payload) as Promise<CliTestResult>,
-  cliProfileModels: (id: string) =>
-    ipcRenderer.invoke('charliecode:clis:models', id) as Promise<string[]>,
+  cliProfileModels: (id: string, force?: boolean) =>
+    ipcRenderer.invoke('charliecode:clis:models', id, force) as Promise<string[]>,
   connectCli: (payload: { command: string; label?: string }) =>
     ipcRenderer.invoke('charliecode:clis:connect', payload) as Promise<CliConnectReport>,
   setCliWorker: (worker: ExternalWorkerConfig | null) =>

@@ -30,6 +30,23 @@ describe('modelNamesFromOutput', () => {
     ])
   })
 
+  it('pulisce tabelle e note accanto al nome', () => {
+    const output = [
+      'gpt-6.1-terra    (default)',
+      'sonnet-5.5        Anthropic’s model',
+      'acme/one   [free]',
+      '  gpt-5-mini\tOpenAI'
+    ].join('\n')
+
+    // The note and the description are not part of the id passed to --model.
+    expect(modelNamesFromOutput(output)).toEqual([
+      'gpt-6.1-terra',
+      'sonnet-5.5',
+      'acme/one',
+      'gpt-5-mini'
+    ])
+  })
+
   it('accetta i nomi di modello fatti di qualche parola', () => {
     expect(modelNamesFromOutput('Claude Sonnet 5.5')).toEqual(['Claude Sonnet 5.5'])
   })

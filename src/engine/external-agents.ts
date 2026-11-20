@@ -56,10 +56,18 @@ export interface ExternalRunResult {
   aborted: boolean
   /** Human-readable failure, when there is one. */
   error?: string
+  /** A note for the user when the turn succeeded after a fallback. */
+  warning?: string
 }
 
 const MAX_OUTPUT = 2 * 1024 * 1024
 const DEFAULT_TIMEOUT_MS = 10 * 60_000
+/**
+ * How fast a failure must be to read as "the arguments were rejected". A CLI
+ * that does not accept the model flag dies before doing anything; a turn that
+ * ran for a minute did real work and must not be repeated.
+ */
+const MODEL_RETRY_WINDOW_MS = 20_000
 const PLACEHOLDER = /\{(prompt|workspace|model|effort)\}/g
 
 /* ------------------------------- argv ---------------------------------- */
@@ -701,7 +709,10 @@ export async function profileModels(
 
   try {
     const { stdout } = await run(target.file, target.args, {
-      timeout: 20_000,
+      // A models command loads the whole CLI runtime before printing the first
+      // id: twenty seconds was not enough on Windows and the list came back
+      // empty.
+      timeout: 60_000,
       windowsHide: true,
       maxBuffer: 4 * 1024 * 1024,
       env: { ...process.env, ...target.env },
@@ -752,6 +763,31 @@ function killTree(child: ChildProcess, signal: NodeJS.Signals): void {
   }
 }
 
+export interface RunHooks {
+  onText?: (text: string) => void
+  onActivity?: (activity: string) => void
+  onStderr?: (line: string) => void
+  signal?: AbortSignal
+  timeoutMs?: number
+  home?: string
+}
+
+/**
+ * Only a fast failure with no answer looks like a rejected argument. Repeating
+ * the turn is what turns "axet-code è uscita con codice 1" into a working turn
+ * on the CLI's default model, with a note saying why.
+ */
+function shouldRetryWithoutModel(
+  options: AgentRunOptions,
+  result: ExternalRunResult
+): boolean {
+  if (!options.model) return false
+  if (result.aborted || result.timedOut) return false
+  if (result.code === 0 || !result.error) return false
+  if (result.text.trim()) return false
+  return result.ms < MODEL_RETRY_WINDOW_MS
+}
+
 /**
  * Runs one task through a CLI profile.
  *
@@ -760,20 +796,13 @@ function killTree(child: ChildProcess, signal: NodeJS.Signals): void {
  * generic rejection. Only a spawn failure (binary missing, permissions)
  * rejects.
  */
-export function runExternalAgent(
+export async function runExternalAgent(
   profile: CliProfile,
   options: AgentRunOptions,
-  hooks: {
-    onText?: (text: string) => void
-    onActivity?: (activity: string) => void
-    onStderr?: (line: string) => void
-    signal?: AbortSignal
-    timeoutMs?: number
-    home?: string
-  } = {}
+  hooks: RunHooks = {}
 ): Promise<ExternalRunResult> {
   if (hooks.signal?.aborted) {
-    return Promise.resolve({
+    return {
       text: '',
       raw: '',
       code: -1,
@@ -782,18 +811,38 @@ export function runExternalAgent(
       timedOut: false,
       aborted: true,
       error: `${profile.label} interrotta`
-    })
+    }
   }
 
   const binary = findBinary(profile.command, hooks.home ?? homedir(), options.workspace)
   if (!binary) {
-    return Promise.reject(
-      new Error(
-        `${profile.label}: comando "${profile.command}" non trovato. Controlla il percorso nel profilo.`
-      )
+    throw new Error(
+      `${profile.label}: comando "${profile.command}" non trovato. Controlla il percorso nel profilo.`
     )
   }
 
+  const first = await attempt(profile, options, hooks, binary)
+  if (!shouldRetryWithoutModel(options, first)) return first
+
+  // The CLI rejected the model instead of doing the work. Retrying without it
+  // costs one process and keeps the turn usable; the note says the model was
+  // not applied, so nothing is hidden from the user.
+  const retry = await attempt(profile, { ...options, model: undefined }, hooks, binary)
+  if (retry.error || retry.aborted) return first
+
+  return {
+    ...retry,
+    warning: `${profile.label} non ha accettato il modello "${options.model}" (uscita ${first.code}): ho ripetuto il turno con il modello predefinito della CLI.`
+  }
+}
+
+/** One CLI process: the argv, the spawn, the streams and the timeout. */
+function attempt(
+  profile: CliProfile,
+  options: AgentRunOptions,
+  hooks: RunHooks,
+  binary: string
+): Promise<ExternalRunResult> {
   const argv = buildCliArgs(profile, options)
   const started = Date.now()
   const timeoutMs =
@@ -902,14 +951,25 @@ export function runExternalAgent(
       if (buffer.trim()) consume(buffer)
 
       const exitCode = code ?? -1
+      // The CLI's own words are the only useful diagnosis: without them the
+      // user reads "codice 1" and has nothing to act on.
+      const detail =
+        stderr
+          .split('\n')
+          .map((line) => line.trim())
+          .find(Boolean) ??
+        raw
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .slice(-1)[0] ??
+        ''
       const failure = timedOut
         ? `${profile.label} non ha risposto entro ${Math.round(timeoutMs / 1000)}s`
         : aborted
           ? `${profile.label} interrotta`
           : exitCode !== 0
-            ? `${profile.label} è uscita con codice ${exitCode}${
-                stderr ? `: ${stderr.split('\n')[0]}` : ''
-              }`
+            ? `${profile.label} è uscita con codice ${exitCode}${detail ? `: ${detail.slice(0, 300)}` : ''}`
             : undefined
 
       resolve({

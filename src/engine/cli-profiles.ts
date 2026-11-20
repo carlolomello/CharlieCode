@@ -75,6 +75,40 @@ function readOptionalString(
 }
 
 /**
+ * The model list the CLI printed last time. It is a cache, so anything odd in
+ * it is dropped instead of failing the profile: a corrupt cache must never make
+ * a working CLI unusable.
+ */
+function readModelsCache(
+  record: Record<string, unknown>
+): CliProfile['modelsCache'] | undefined {
+  const value = record.modelsCache
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'object') return undefined
+  const cache = value as Record<string, unknown>
+
+  const models = Array.isArray(cache.models)
+    ? cache.models
+        .filter(
+          (entry): entry is string =>
+            typeof entry === 'string' && entry.length > 0 && entry.length <= 200
+        )
+        .slice(0, 400)
+    : []
+  if (models.length === 0) return undefined
+
+  const args = Array.isArray(cache.args)
+    ? cache.args.filter((entry): entry is string => typeof entry === 'string').slice(0, 64)
+    : []
+  const at =
+    typeof cache.at === 'string' && !Number.isNaN(Date.parse(cache.at))
+      ? cache.at
+      : new Date(0).toISOString()
+
+  return { args, at, models }
+}
+
+/**
  * Validates and normalizes a profile. Throws a message meant for the user:
  * this is the only gate between a hand-edited JSON file and `spawn`.
  */
@@ -133,6 +167,8 @@ export function validateCliProfile(value: unknown, fallbackId?: string): CliProf
     maxWorkers = Math.min(6, Math.max(2, Math.round(workersRaw)))
   }
 
+  const modelsCache = readModelsCache(record)
+
   const timeoutRaw = record.timeoutSeconds
   let timeoutSeconds: number | undefined
   if (timeoutRaw !== undefined && timeoutRaw !== null) {
@@ -168,6 +204,7 @@ export function validateCliProfile(value: unknown, fallbackId?: string): CliProf
       ? { modelsArgs: readStringArray(record, 'modelsArgs', 'Il comando modelli') }
       : {}),
     ...(modelsFormat ? { modelsFormat } : {}),
+    ...(modelsCache ? { modelsCache } : {}),
     ...(() => {
       const textPath = readOptionalString(record, 'textPath', 200)
       return textPath ? { textPath } : {}

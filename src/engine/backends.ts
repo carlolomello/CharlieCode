@@ -288,15 +288,15 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
   }
 
   /** One CLI process. `quiet` keeps the output out of the transcript. */
-  const runOnce = (
+  const runOnce = async (
     prompt: string,
     options: {
       mode: AgentMode
       quiet?: boolean
       agent?: { id: string; name: string }
     }
-  ): Promise<ExternalRunResult> =>
-    runExternalAgent(
+  ): Promise<ExternalRunResult> => {
+    const result = await runExternalAgent(
       input.profile,
       {
         prompt,
@@ -317,6 +317,35 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
         onActivity: (activity) => emitActivity(activity, options.agent)
       }
     )
+
+    // The turn ran on the CLI's own default because the chosen model was
+    // rejected: saying it in the transcript is the difference between a silent
+    // downgrade and a visible one.
+    if (result.warning) {
+      const id = `cli-warning-${++activityId}`
+      const attribution = options.agent
+        ? { agentId: options.agent.id, agentName: options.agent.name }
+        : {}
+      input.emit({
+        type: 'tool-call',
+        id,
+        name: 'cli-warning',
+        title: 'Modello della CLI non applicato',
+        ...attribution
+      })
+      input.emit({
+        type: 'tool-result',
+        id,
+        name: 'cli-warning',
+        ok: true,
+        summary: result.warning,
+        ms: 0,
+        ...attribution
+      })
+    }
+
+    return result
+  }
 
   interface Outcome {
     text: string

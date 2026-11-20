@@ -167,6 +167,8 @@ export default function App() {
   const [cliModelsBusy, setCliModelsBusy] = useState(false)
   /** Bumped by the ↻ next to the CLI model control to re-read the list. */
   const [cliModelsNonce, setCliModelsNonce] = useState(0)
+  /** Set by ↻: the next read ignores the list cached in the profile. */
+  const cliModelsForce = useRef(false)
   const [preferredModel, setPreferredModel] = useState<string>('')
   const [effort, setEffort] = useState<EffortLevel>('none')
   const [mode, setMode] = useState<'plan' | 'build'>('build')
@@ -746,9 +748,11 @@ export default function App() {
     }
 
     let cancelled = false
+    const force = cliModelsForce.current
+    cliModelsForce.current = false
     setCliModelsBusy(true)
     void window.charliecode
-      .cliProfileModels(profileId)
+      .cliProfileModels(profileId, force)
       .then((list) => {
         if (!cancelled) setCliModels(list)
       })
@@ -1383,7 +1387,10 @@ export default function App() {
                 )}
                 <button
                   className="ghost"
-                  onClick={() => setCliModelsNonce((value) => value + 1)}
+                  onClick={() => {
+                    cliModelsForce.current = true
+                    setCliModelsNonce((value) => value + 1)
+                  }}
                   disabled={cliModelsBusy}
                   title="Rileggi i modelli dalla CLI"
                   aria-label="Rileggi i modelli dalla CLI"

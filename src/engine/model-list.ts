@@ -1,12 +1,23 @@
 const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g
 
 /**
+ * Notes a CLI writes beside a name: `(default)`, `[free]`, `(recommended)`.
+ * They describe the model, they are not part of the id to pass to `--model`.
+ */
+const TRAILING_NOTE =
+  /\s*[([][^)\]]{0,60}\b(default|predefinit\w*|free|gratis|inclus\w*|recommended|consigliat\w*|primary|new|nuovo)\b[^)\]]{0,60}[)\]]\s*$/i
+
+/** A model id: no spaces, so the first column of a table is the id. */
+const ID_LIKE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$/
+
+/**
  * Turns a models listing into model names.
  *
- * CLIs print either one id per line, or a decorated table. Help text, usage
- * errors, headers and prose are dropped: a CLI asked for its models and not
- * knowing the flag answers with `Try --help for usage`, and that used to become
- * a picker entry. Bullets are stripped; duplicates are collapsed in the order
+ * CLIs print either one id per line, a decorated table, or a list with a note
+ * beside each name. Help text, usage errors, headers and prose are dropped: a
+ * CLI asked for its models and not knowing the flag answers with
+ * `Try --help for usage`, and that used to become a picker entry. Bullets,
+ * notes and table columns are stripped; duplicates are collapsed in the order
  * the CLI printed them.
  */
 export function modelNamesFromOutput(output: string): string[] {
@@ -14,10 +25,20 @@ export function modelNamesFromOutput(output: string): string[] {
   const seen = new Set<string>()
 
   for (const raw of output.replace(ANSI, '').split('\n')) {
-    const line = raw
+    let line = raw
       .trim()
-      .replace(/^[-*•]\s+/, '')
+      .replace(/^[-*•✔]\s+/, '')
       .trim()
+    if (!line) continue
+
+    // `gpt-6.1-terra   (default)` and `acme/one  [free]`: the note is not part
+    // of the name the CLI accepts.
+    line = line.replace(TRAILING_NOTE, '').replace(/[\s*·•]+$/, '').trim()
+
+    // A table row keeps the id in its first column; the rest is description.
+    const column = line.split(/\t+|\s{2,}/)[0]?.trim() ?? ''
+    if (column && ID_LIKE.test(column)) line = column
+
     if (!line || line.length > 120) continue
     if (/^[[{]/.test(line)) continue
     if (line.endsWith(':')) continue

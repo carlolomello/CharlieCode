@@ -49,7 +49,11 @@ const MODEL_CANDIDATES: string[][] = [
   ['--models']
 ]
 
-const PROBE_TIMEOUT_MS = 8_000
+// A models command is not a fast query: opencode and the CLIs that wrap a
+// provider load their whole runtime before printing the first id, and on a cold
+// Windows start that easily passes ten seconds. Eight seconds used to turn a
+// working command into "this CLI cannot list its models".
+const PROBE_TIMEOUT_MS = 30_000
 
 interface Capture {
   stdout: string
@@ -109,11 +113,21 @@ export async function discoverModelCommand(
   binary: string,
   options: { workspace?: string; timeoutMs?: number } = {}
 ): Promise<ModelCommand | undefined> {
-  for (const args of MODEL_CANDIDATES) {
-    const result = await capture(binary, args, {
-      ...(options.workspace ? { cwd: options.workspace } : {}),
-      timeoutMs: options.timeoutMs ?? PROBE_TIMEOUT_MS
-    })
+  // All spellings at once: a CLI that does not know a flag answers in
+  // milliseconds, while the one that lists its models may take half a minute.
+  // Run in parallel the wait is the slowest probe, not the sum of six.
+  const results = await Promise.all(
+    MODEL_CANDIDATES.map((args) =>
+      capture(binary, args, {
+        ...(options.workspace ? { cwd: options.workspace } : {}),
+        timeoutMs: options.timeoutMs ?? PROBE_TIMEOUT_MS
+      })
+    )
+  )
+
+  for (const [index, result] of results.entries()) {
+    const args = MODEL_CANDIDATES[index]
+    if (!args) continue
     const models = modelNamesFromOutput(result.stdout || result.stderr)
     if (models.length > 0) return { args, models }
   }
@@ -219,13 +233,24 @@ export async function askModelCommand(
   options: { workspace?: string; timeoutMs?: number } = {}
 ): Promise<ModelCommand | undefined> {
   const cwd = options.workspace ? { cwd: options.workspace } : {}
-  const help =
-    (await capture(binary, ['--help'], { ...cwd, timeoutMs: 6_000 })).stdout ||
-    (await capture(binary, ['-h'], { ...cwd, timeoutMs: 6_000 })).stdout
+  // The help and the failed probes are what the model reads: collect them in
+  // one round trip instead of one process after the other.
+  const [helpResult, ...probes] = await Promise.all([
+    capture(binary, ['--help'], { ...cwd, timeoutMs: 15_000 }),
+    ...MODEL_CANDIDATES.slice(0, 4).map((args) =>
+      capture(binary, args, { ...cwd, timeoutMs: 15_000 })
+    )
+  ])
+
+  let help = helpResult.stdout || helpResult.stderr
+  if (!help.trim()) {
+    help = (await capture(binary, ['-h'], { ...cwd, timeoutMs: 8_000 })).stdout
+  }
 
   const attempts: { args: string[]; output: string }[] = []
-  for (const args of MODEL_CANDIDATES.slice(0, 4)) {
-    const result = await capture(binary, args, { ...cwd, timeoutMs: 6_000 })
+  for (const [index, result] of probes.entries()) {
+    const args = MODEL_CANDIDATES[index]
+    if (!args) continue
     attempts.push({ args, output: `${result.stdout}\n${result.stderr}`.trim().slice(0, 800) })
   }
 
@@ -241,7 +266,7 @@ export async function askModelCommand(
 
   const result = await capture(binary, hint.args, {
     ...cwd,
-    timeoutMs: options.timeoutMs ?? 20_000
+    timeoutMs: options.timeoutMs ?? 60_000
   })
   const output = result.stdout || result.stderr
   const models =
@@ -332,6 +357,9 @@ export async function connectCli(
   const findings = [...introspection.findings]
 
   let modelsArgs = saved?.modelsArgs ?? proposal.modelsArgs
+  // The CLI's own answer is kept even if it prints nothing in time: a models
+  // command that needs half a minute is still the right command.
+  const declaredModelsArgs = modelsArgs ? [...modelsArgs] : undefined
   let modelsCommand: string | undefined
   let models: string[] = []
   let modelsFormat: 'lines' | 'json' | undefined = saved?.modelsFormat
@@ -396,6 +424,13 @@ export async function connectCli(
     }
   }
 
+  if (!modelsArgs && declaredModelsArgs) {
+    modelsArgs = declaredModelsArgs
+    warnings.push(
+      'Il comando modelli non ha stampato nulla in tempo: l’ho lasciato nel profilo. Premi ↻ accanto al selettore per riprovare.'
+    )
+  }
+
   if (!modelsArgs) {
     warnings.push(
       'Nessun comando per elencare i modelli: la CLI userà il suo predefinito. Puoi scrivere il nome del modello accanto al selettore del modello.'
@@ -408,12 +443,20 @@ export async function connectCli(
     modelsArgs &&
     saved.modelsArgs.join('\u0000') === modelsArgs.join('\u0000')
 
+  // The list is reused by the picker for a few minutes: re-reading a slow CLI
+  // on every selection is what made the selector look empty.
+  const modelsCache =
+    models.length > 0 && modelsArgs
+      ? { args: [...modelsArgs], at: new Date().toISOString(), models: models.slice(0, 400) }
+      : undefined
+
   const profile: CliProfile = saved
     ? {
         ...saved,
         ...(modelsArgs && !sameModelsArgs ? { modelsArgs } : {}),
         ...(modelsFormat ? { modelsFormat } : {}),
-        ...(modelsPath ? { modelsPath } : {})
+        ...(modelsPath ? { modelsPath } : {}),
+        ...(modelsCache ? { modelsCache } : {})
       }
     : {
         id,
@@ -434,7 +477,8 @@ export async function connectCli(
         ...(proposal.autoArgs ? { autoArgs: proposal.autoArgs } : {}),
         ...(modelsArgs ? { modelsArgs } : {}),
         ...(modelsFormat ? { modelsFormat } : {}),
-        ...(modelsPath ? { modelsPath } : {})
+        ...(modelsPath ? { modelsPath } : {}),
+        ...(modelsCache ? { modelsCache } : {})
       }
 
   const persisted = await saveCliProfile(platform, profile)

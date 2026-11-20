@@ -40,6 +40,19 @@ describe('validateCliProfile', () => {
     expect(() => validateCliProfile(null)).toThrow(/oggetto JSON/i)
   })
 
+  it('conserva la cache dei modelli e scarta quella illeggibile', () => {
+    const cached = validateCliProfile({
+      label: 'x',
+      command: 'y',
+      modelsCache: { args: ['models'], at: '2026-01-01T00:00:00.000Z', models: ['a/b'] }
+    })
+    expect(cached.modelsCache?.models).toEqual(['a/b'])
+    expect(cached.modelsCache?.args).toEqual(['models'])
+
+    const broken = validateCliProfile({ label: 'x', command: 'y', modelsCache: { models: [] } })
+    expect(broken.modelsCache).toBeUndefined()
+  })
+
   it('rifiuta formati sconosciuti', () => {
     expect(() =>
       validateCliProfile({ label: 'x', command: 'y', output: 'xml' })
