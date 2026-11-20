@@ -217,7 +217,9 @@ export async function connectCli(
   const probeProfile: CliProfile = {
     id,
     label,
-    command: saved?.command ?? command,
+    // The resolved path, so the model probe works even when the bare name is
+    // only visible to the user's shell.
+    command: binary,
     args: saved?.args ?? proposal.args ?? [],
     ...(modelsArgs ? { modelsArgs } : {})
   }
@@ -250,7 +252,7 @@ export async function connectCli(
 
   if (!modelsArgs) {
     warnings.push(
-      'Nessun comando per elencare i modelli: la CLI userà il suo modello predefinito. Puoi indicarlo a mano nelle opzioni avanzate.'
+      'Nessun comando per elencare i modelli: la CLI userà il suo predefinito. Puoi scrivere il nome del modello accanto al selettore del modello.'
     )
   }
 

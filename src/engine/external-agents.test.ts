@@ -8,6 +8,7 @@ import {
   extractText,
   findBinary,
   formatCommand,
+  profileModels,
   resolveBinaryViaShell,
   runExternalAgent,
   searchBinaries
@@ -211,6 +212,56 @@ describe('resolveBinaryViaShell', () => {
     expect(await resolveBinaryViaShell('agent; rm -rf /')).toBeUndefined()
     expect(await resolveBinaryViaShell('agent $(whoami)')).toBeUndefined()
   })
+})
+
+describe('profileModels', () => {
+  // The picker's second selector only has something to show if this works for a
+  // command that is not on the app's PATH.
+  it.runIf(process.platform !== 'win32')(
+    'legge i modelli di un comando che conosce solo la shell',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'charliecode-models-'))
+      const oldShell = process.env.SHELL
+      try {
+        const bin = join(root, 'bin')
+        await mkdir(bin, { recursive: true })
+        const script = join(bin, 'shell-models-xyz')
+        await writeFile(
+          script,
+          '#!/bin/sh\nif [ "$1" = "models" ]; then printf "sonnet-5.5\\ngpt-6.1-terra\\n"; fi\n'
+        )
+        await chmod(script, 0o755)
+
+        const wrapper = join(root, 'shell')
+        await writeFile(
+          wrapper,
+          `#!/bin/sh\nPATH="${bin}:$PATH"\nexport PATH\nexec /bin/sh "$@"\n`
+        )
+        await chmod(wrapper, 0o755)
+        process.env.SHELL = wrapper
+
+        const home = join(root, 'home')
+        await mkdir(home, { recursive: true })
+
+        expect(
+          await profileModels(
+            {
+              id: 'x',
+              label: 'X',
+              command: 'shell-models-xyz',
+              args: [],
+              modelsArgs: ['models']
+            },
+            home
+          )
+        ).toEqual(['sonnet-5.5', 'gpt-6.1-terra'])
+      } finally {
+        if (oldShell === undefined) delete process.env.SHELL
+        else process.env.SHELL = oldShell
+        await rm(root, { recursive: true, force: true })
+      }
+    }
+  )
 })
 
 describe('searchBinaries', () => {

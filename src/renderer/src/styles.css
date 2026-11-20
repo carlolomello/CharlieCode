@@ -3893,3 +3893,18 @@ button.ghost:hover,
   max-width: 46ch;
   line-height: 1.45;
 }
+
+.cli-model-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cli-model-field .cli-model-select,
+.cli-model-field .cli-model-input {
+  max-width: 220px;
+}
+
+.cli-model-input {
+  font: inherit;
+}

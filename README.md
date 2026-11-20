@@ -160,7 +160,7 @@ What that means in practice:
 
 - choose the CLI in the model picker for the main conversation, or leave it as the worker for `task` subagents;
 - the models it printed in the connect step are the ones the second selector offers — no manual list to maintain;
-- its own models appear in a second selector when the CLI is selected, and the effort levels come from the profile;
+- its own models appear in a second selector when the CLI is selected, and the effort levels come from the profile; when a CLI cannot list its models, that same spot is a text field where you type the model name — the control is never hidden;
 - the model calls happen inside that CLI — its auth, its quota, its audit log;
 - before each turn CharlieCode writes the recent conversation into a briefing, and after it imports the answer, the tool activity and the diff of the files it changed;
 - switching between a CLI and a native model keeps the same thread: the canonical context lives in the session, not in the backend;

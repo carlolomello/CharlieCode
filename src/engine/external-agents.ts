@@ -672,7 +672,12 @@ export async function profileModels(
   workspace?: string
 ): Promise<string[]> {
   if (!profile.modelsArgs?.length) return []
-  const binary = findBinary(profile.command, home, workspace)
+  // A profile saved with a bare command (or an older profile) may only be
+  // resolvable through the user's shell; without this the list comes back
+  // empty and the model selector has nothing to show.
+  const binary =
+    findBinary(profile.command, home, workspace) ??
+    (await resolveBinaryViaShell(profile.command, { home, timeoutMs: 4_000 }))
   if (!binary) return []
 
   const args = profile.modelsArgs.map((arg) =>

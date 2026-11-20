@@ -164,6 +164,8 @@ export default function App() {
   const [cliModel, setCliModel] = useState<string>('')
   const [cliModels, setCliModels] = useState<string[]>([])
   const [cliModelsBusy, setCliModelsBusy] = useState(false)
+  /** Bumped by the ↻ next to the CLI model control to re-read the list. */
+  const [cliModelsNonce, setCliModelsNonce] = useState(0)
   const [preferredModel, setPreferredModel] = useState<string>('')
   const [effort, setEffort] = useState<EffortLevel>('none')
   const [mode, setMode] = useState<'plan' | 'build'>('build')
@@ -731,7 +733,7 @@ export default function App() {
     return () => {
       cancelled = true
     }
-  }, [selectedModel?.providerId, selectedModel?.id])
+  }, [selectedModel?.providerId, selectedModel?.id, cliModelsNonce])
 
   /** The key actually sent: a CLI can carry a model chosen for this turn. */
   const backendKey =
@@ -1322,23 +1324,45 @@ export default function App() {
               title={selectedModel?.key ?? ''}
             />
 
-            {selectedModel?.providerId === 'cli' && (cliModelsBusy || cliModels.length > 0) && (
-              <select
-                className="select cli-model-select"
-                value={cliModel}
-                onChange={(event) => setCliModel(event.target.value)}
-                disabled={cliModelsBusy}
-                title="Modello passato alla CLI scelta"
-              >
-                <option value="">
-                  {cliModelsBusy ? 'carico modelli…' : 'modello predefinito'}
-                </option>
-                {cliModels.map((model) => (
-                  <option key={model} value={model}>
-                    {model}
-                  </option>
-                ))}
-              </select>
+            {selectedModel?.providerId === 'cli' && (
+              <div className="cli-model-field">
+                {cliModels.length > 0 ? (
+                  <select
+                    className="select cli-model-select"
+                    value={cliModel}
+                    onChange={(event) => setCliModel(event.target.value)}
+                    disabled={cliModelsBusy}
+                    title="Modello passato alla CLI scelta"
+                  >
+                    <option value="">modello predefinito</option>
+                    {cliModels.map((model) => (
+                      <option key={model} value={model}>
+                        {model}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  // A CLI that cannot list its models still accepts a name: never
+                  // leave the user without a way to choose one.
+                  <input
+                    className="select cli-model-input"
+                    value={cliModel}
+                    onChange={(event) => setCliModel(event.target.value)}
+                    placeholder={cliModelsBusy ? 'carico modelli…' : 'modello (vuoto = predefinito)'}
+                    title="Modello passato alla CLI: scrivilo se la CLI non elenca i suoi modelli"
+                    aria-label="Modello della CLI"
+                  />
+                )}
+                <button
+                  className="ghost"
+                  onClick={() => setCliModelsNonce((value) => value + 1)}
+                  disabled={cliModelsBusy}
+                  title="Rileggi i modelli dalla CLI"
+                  aria-label="Rileggi i modelli dalla CLI"
+                >
+                  {cliModelsBusy ? '…' : '↻'}
+                </button>
+              </div>
             )}
 
             <select

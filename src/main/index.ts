@@ -41,6 +41,7 @@ import {
   formatCommand,
   profileModels,
   promptOnStdin,
+  resolveBinaryViaShell,
   runExternalAgent,
   searchBinaries
 } from '../engine/external-agents'
@@ -612,15 +613,24 @@ function registerIpc(): void {
     const { config } = await loadConfig(platform)
     const { profiles, errors } = await listCliProfiles(platform)
 
+    const resolved = await Promise.all(
+      profiles.map(async (profile) => ({
+        profile,
+        path:
+          findBinary(profile.command, platform.homeDir, config.workspace) ??
+          (await resolveBinaryViaShell(profile.command, {
+            home: platform.homeDir,
+            timeoutMs: 2_000
+          }))
+      }))
+    )
+
     return {
-      profiles: profiles.map((profile) => {
-        const path = findBinary(profile.command, platform.homeDir, config.workspace)
-        return {
-          profile,
-          available: Boolean(path),
-          ...(path ? { path } : {})
-        }
-      }),
+      profiles: resolved.map(({ profile, path }) => ({
+        profile,
+        available: Boolean(path),
+        ...(path ? { path } : {})
+      })),
       errors,
       ...(config.external ? { worker: config.external } : {})
     }
