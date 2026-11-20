@@ -5,10 +5,13 @@ import { buildTools, toolTitle, type ToolRuntime } from './tools'
 import { sanitizeMessages } from './context-store'
 import { runExternalAgent } from './external-agents'
 import { parseCliModelKey } from '../shared/cli-key'
+import { selfKnowledgePrompt } from './self-knowledge'
+import type { AppConfigPatch } from './app-config'
 import { enabledPluginIds, pluginSystemPrompt, recordTurn, PLUGIN_READ_TOOLS } from './plugins'
 import { skillsSystemPrompt } from './skills'
 import type { Platform } from './platform'
 import type { RoutingConfig, SubagentRole } from './routing'
+import type { CliProfileInfo } from '../shared/ipc'
 import type {
   CharlieCodeConfig,
   CliProfile,
@@ -24,8 +27,8 @@ export interface AgentDeps {
   platform: Platform
   config: CharlieCodeConfig
   models: ModelEntry[]
-  /** CLI profiles the user defined, used by the subagent worker. */
-  cliProfiles?: CliProfile[]
+  /** CLI profiles the user defined, with availability, used by the worker and the self tool. */
+  cliProfiles?: CliProfileInfo[]
   workspace?: string
   /** Full model context from a previous turn, when available. */
   modelMessages?: ModelMessage[]
@@ -35,6 +38,14 @@ export interface AgentDeps {
   subagentMaxSteps?: number
   /** Optional per-role routing read from `.charliecode/routing.yaml`. */
   routing?: RoutingConfig
+  /** Version shown by the self-knowledge tool. */
+  appVersion?: string
+  /** Saves a validated app-config patch; absent for CLI backends. */
+  applyConfig?: (patch: AppConfigPatch) => Promise<{
+    config: CharlieCodeConfig
+    path: string
+    summary: string
+  }>
 }
 
 export interface AgentResult {
@@ -125,7 +136,7 @@ function lastUserText(messages: ModelMessage[]): string {
 
 const PLAN_PROMPT = [
   'MODALITÀ PIANO (sola lettura).',
-  'Hai a disposizione solo read, ls, glob, grep e i tool di sola lettura dei plugin: non puoi scrivere file né eseguire comandi.',
+  'Hai a disposizione solo read, ls, glob, grep, `charliecode_config` in sola lettura e i tool di sola lettura dei plugin: non puoi scrivere file né eseguire comandi.',
   'Rispondi alla domanda dell’utente, non descrivere il progetto.',
   '- Se chiede bug, problemi o migliorie: elenca i problemi concreti che hai visto, ognuno con file:riga, perché è un problema e la correzione proposta. Ordina per impatto.',
   '- Se chiede un piano di implementazione: passi in ordine, file toccati, rischi.',
@@ -156,12 +167,27 @@ export async function runAgent(
   const plugins = enabledPluginIds(deps.config)
   // Plan mode never gets a writing tool, even if a caller passes one.
   const allow = planMode
-    ? ['read', 'ls', 'glob', 'grep', 'task', 'skill', ...PLUGIN_READ_TOOLS]
+    ? ['read', 'ls', 'glob', 'grep', 'task', 'skill', 'charliecode_config', ...PLUGIN_READ_TOOLS]
     : options.allow
   const pluginPrompt = await pluginSystemPrompt(deps.config, deps.workspace)
   const skillsPrompt = await skillsSystemPrompt(deps.platform, deps.workspace)
+  // The main agent always knows what app it is running in. Subagents are scoped
+  // to a piece of work and do not pay for this section.
+  const selfPrompt =
+    depth === 0
+      ? selfKnowledgePrompt(deps.config, {
+          platform: deps.platform,
+          ...(modelKey ? { modelKey } : {}),
+          ...(deps.workspace ? { workspace: deps.workspace } : {}),
+          ...(deps.cliProfiles ? { cliProfiles: deps.cliProfiles } : {}),
+          ...(deps.routing ? { routing: deps.routing } : {}),
+          ...(deps.appVersion ? { appVersion: deps.appVersion } : {}),
+          canApply: Boolean(deps.applyConfig)
+        })
+      : ''
   const systemPrompt = [
     options.system ?? request.system,
+    selfPrompt,
     pluginPrompt,
     skillsPrompt,
     planMode ? PLAN_PROMPT : '',
@@ -244,6 +270,13 @@ export async function runAgent(
       autoApprove: deps.config.agents.autoApprove,
       autoApproveCommands: deps.config.agents.autoApproveCommands,
       plugins,
+      config: deps.config,
+      models: deps.models,
+      modelKey,
+      ...(deps.cliProfiles ? { cliProfiles: deps.cliProfiles } : {}),
+      ...(deps.routing ? { routing: deps.routing } : {}),
+      ...(deps.appVersion ? { appVersion: deps.appVersion } : {}),
+      ...(deps.applyConfig ? { applyConfig: deps.applyConfig } : {}),
       ...(planMode ? { readOnly: true } : {}),
       askPermission: deps.askPermission,
       emit,
@@ -252,10 +285,10 @@ export async function runAgent(
         const name = sub.description.slice(0, 60)
         const role = (sub.agent ?? 'explorer') as SubagentRole
         const profiles = deps.cliProfiles ?? []
+        const profileOf = (id: string): CliProfile | undefined =>
+          profiles.find((entry) => entry.profile.id === id)?.profile
         const worker = deps.config.external
-        const workerProfile = worker?.id
-          ? profiles.find((profile) => profile.id === worker.id)
-          : undefined
+        const workerProfile = worker?.id ? profileOf(worker.id) : undefined
 
         // Backend precedence: an explicit model on the task, then the role
         // route, then the configured CLI worker, then the default subagent
@@ -263,18 +296,14 @@ export async function runAgent(
         const route = deps.routing?.enabled ? deps.routing.roles[role] : undefined
         const explicit = sub.model?.trim()
         const explicitCli = explicit ? parseCliModelKey(explicit) : undefined
-        const explicitProfile = explicitCli
-          ? profiles.find((profile) => profile.id === explicitCli.profileId)
-          : undefined
+        const explicitProfile = explicitCli ? profileOf(explicitCli.profileId) : undefined
         const explicitNative =
           explicit && !explicitCli && deps.models.some((model) => model.key === explicit)
             ? explicit
             : undefined
 
         const routeCli = route ? parseCliModelKey(route.modelKey) : undefined
-        const routeProfile = routeCli
-          ? profiles.find((profile) => profile.id === routeCli.profileId)
-          : undefined
+        const routeProfile = routeCli ? profileOf(routeCli.profileId) : undefined
         const routeNative =
           route && !routeCli && deps.models.some((model) => model.key === route.modelKey)
             ? route.modelKey
@@ -606,7 +635,7 @@ export function buildSystemPrompt(projectContext: string, workspace?: string): s
     '- Puoi lanciare più `task` nello stesso turno: girano in parallelo.',
     '- Non delegare lavori che richiedono il contesto di questa conversazione: il subagente non lo vede.',
     '',
-    'Tool disponibili: read, ls, glob, grep, write, edit, bash, task (più quelli aggiunti dai plugin attivi).',
+    'Tool disponibili: read, ls, glob, grep, write, edit, bash, task, skill, charliecode_config (configura l’app, non il progetto), più quelli aggiunti dai plugin attivi.',
     projectContext ? `\n${projectContext}` : ''
   ]
     .filter(Boolean)

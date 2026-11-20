@@ -471,6 +471,21 @@ export default function App() {
     [refreshModels]
   )
 
+  // The agent can change CharlieCode's own configuration from chat. Reflect it
+  // in the drawer without a restart; the running turn keeps its snapshot.
+  useEffect(
+    () =>
+      window.charliecode.onConfigChanged(() => {
+        void refreshProviders()
+        void refreshModels()
+        void refreshPlugins()
+        void refreshRouting()
+        void refreshAutoApprove()
+        void window.charliecode.info().then(setInfo)
+      }),
+    [refreshProviders, refreshModels, refreshPlugins, refreshRouting, refreshAutoApprove]
+  )
+
   /**
    * One composer draft per conversation. Switching chats used to throw away
    * half-written prompts; now the text follows the chat, and the unsent text of
@@ -1764,6 +1779,12 @@ export default function App() {
             <p className="muted small">
               Le chiavi finiscono in <code>{info?.credentialsPath ?? '~/.charliecode/credentials.json'}</code>{' '}
               con permessi 600. Vengono usate solo verso il provider a cui appartengono.
+            </p>
+
+            <p className="muted small">
+              CharlieCode conosce la propria architettura: in chat puoi chiedere «configura CharlieCode
+              per …» e l’agente legge la configurazione, propone la modifica e mostra il diff prima di
+              applicarla. Le chiavi API restano fuori: le imposti solo tu, qui.
             </p>
 
             <div className="provider-list">

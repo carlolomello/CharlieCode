@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
 import { buildSystemPrompt, runAgent } from '../engine/agent'
+import { applyConfigPatch, type AppConfigPatch } from '../engine/app-config'
+import { selfKnowledgePrompt } from '../engine/self-knowledge'
 import { globalAgentsPath, loadProjectContext } from '../engine/agents'
 import { attachmentsDir, materializeHistory, saveAttachments } from '../engine/attachments'
 import { findModel, loadCatalog, pickDefaultModel } from '../engine/catalog'
@@ -491,6 +493,33 @@ function registerIpc(): void {
     }
   }
 
+  const notifyConfigChanged = (): void => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) window.webContents.send('charliecode:config:changed')
+    }
+  }
+
+  /**
+   * Persists a patch the agent validated against the catalog of its turn. The
+   * config is re-read first, so a change the user made in the drawer during the
+   * turn is not overwritten by a stale snapshot.
+   */
+  const applyAgentConfig = async (
+    patch: AppConfigPatch
+  ): Promise<{ config: CharlieCodeConfig; path: string; summary: string }> => {
+    const { config: current } = await loadConfig(platform)
+    const result = applyConfigPatch(current, patch)
+    const path = await saveConfig(platform, result.config)
+    resetProviderCache()
+    notifyModelsChanged()
+    notifyConfigChanged()
+    return {
+      config: result.config,
+      path,
+      summary: result.changes.join('\n')
+    }
+  }
+
   const cliStatus = async (): Promise<CliProfilesStatus> => {
     const { config } = await loadConfig(platform)
     const { profiles, errors } = await listCliProfiles(platform)
@@ -951,11 +980,12 @@ hanno priorità su queste.
               : await materializeHistory(platform, toChatHistory(stored))
           const projectContext = await loadProjectContext(platform, workspace)
           const cliTarget = parseCliModelKey(payload.modelKey)
+          const cliInfo = await cliStatus()
 
           if (cliTarget) {
-            const profile = (await listCliProfiles(platform)).profiles.find(
-              (entry) => entry.id === cliTarget.profileId
-            )
+            const profile = cliInfo.profiles.find(
+              (entry) => entry.profile.id === cliTarget.profileId
+            )?.profile
             if (!profile) {
               const message = `Il profilo CLI "${cliTarget.profileId}" non esiste più. Scegli un altro backend nel selettore.`
               failure = message
@@ -973,6 +1003,21 @@ hanno priorità su queste.
                 ref.path ? [{ name: ref.name, path: platform.configPath(ref.path) }] : []
               )
 
+              // A CLI backend has no `charliecode_config` tool, but it still
+              // needs the architecture to guide the user instead of inventing.
+              const cliSystem = [
+                projectContext.system,
+                selfKnowledgePrompt(config, {
+                  platform,
+                  modelKey: payload.modelKey,
+                  ...(workspace ? { workspace } : {}),
+                  cliProfiles: cliInfo.profiles,
+                  canApply: false
+                })
+              ]
+                .filter(Boolean)
+                .join('\n\n')
+
               const result = await runCliTurn({
                 profile,
                 ...(cliTarget.model ? { model: cliTarget.model } : {}),
@@ -980,7 +1025,7 @@ hanno priorità su queste.
                 mode: payload.mode ?? 'build',
                 prompt: payload.text,
                 history,
-                ...(projectContext.system ? { system: projectContext.system } : {}),
+                system: cliSystem,
                 ...(cliAttachments.length > 0 ? { attachments: cliAttachments } : {}),
                 workspace: workspace ?? platform.homeDir,
                 home: platform.homeDir,
@@ -1043,12 +1088,14 @@ hanno priorità su queste.
                 platform,
                 config,
                 models,
-                cliProfiles: (await listCliProfiles(platform)).profiles,
+                cliProfiles: cliInfo.profiles,
                 workspace,
                 modelMessages: history,
                 maxSteps: config.agents.maxSteps,
                 subagentMaxSteps: config.agents.subagentMaxSteps,
                 routing,
+                appVersion: app.getVersion(),
+                applyConfig: applyAgentConfig,
                 askPermission: (request) =>
                   askUser(sender, payload.requestId, request, config),
                 emit

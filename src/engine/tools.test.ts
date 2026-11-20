@@ -4,7 +4,9 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createPlatform } from './platform'
 import { buildTools, DeniedError, matchesApprovedCommand, resolveWorkspacePath, toolLogFromEvent, type ToolRuntime } from './tools'
-import type { EngineEvent, PermissionDecision, PermissionRequest } from './types'
+import { defaultConfig } from './config'
+import type { AppConfigPatch } from './app-config'
+import type { EngineEvent, ModelEntry, PermissionDecision, PermissionRequest } from './types'
 
 type AnyTool = { execute?: (input: unknown, options?: unknown) => Promise<unknown> }
 
@@ -144,6 +146,109 @@ describe('permissions', () => {
 
   it('DeniedError è un errore riconoscibile', () => {
     expect(new DeniedError()).toBeInstanceOf(Error)
+  })
+})
+
+describe('charliecode_config', () => {
+  const model: ModelEntry = {
+    key: 'openai::gpt-4.1',
+    providerId: 'openai',
+    providerLabel: 'OpenAI',
+    id: 'gpt-4.1',
+    label: 'GPT-4.1',
+    caps: { tools: true, vision: false, contextWindow: 128_000 },
+    capsConfidence: 'manual',
+    effort: 'none',
+    efforts: ['none', 'low', 'high', 'max']
+  }
+
+  function selfRuntime(overrides: Partial<ToolRuntime> = {}): ToolRuntime {
+    const config = defaultConfig()
+    config.defaultModel = 'openai::gpt-4.1'
+    return runtime({ config, models: [model], appVersion: '0.0.1', ...overrides })
+  }
+
+  it('legge lo stato dell’app con le chiavi modello valide', async () => {
+    const output = await run('charliecode_config', { action: 'read' }, selfRuntime())
+    expect(output).toContain('CONFIGURAZIONE DI CHARLIECODE')
+    expect(output).toContain('openai::gpt-4.1')
+    expect(output).toContain('modello predefinito: openai::gpt-4.1')
+  })
+
+  it('applica un patch dopo il permesso e restituisce il diff', async () => {
+    let applied: AppConfigPatch | undefined
+    const output = await run(
+      'charliecode_config',
+      { action: 'apply', patch: { effort: 'high' } },
+      selfRuntime({
+        applyConfig: async (patch) => {
+          applied = patch
+          return {
+            config: defaultConfig(),
+            path: '/tmp/config.json',
+            summary: 'effort predefinito: none → high'
+          }
+        }
+      })
+    )
+
+    expect(applied).toEqual({ effort: 'high' })
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.tool).toBe('config')
+    expect(requests[0]?.diff?.unified).toContain('high')
+    expect(output).toContain('Configurazione salvata')
+  })
+
+  it('se l’utente nega, non salva nulla', async () => {
+    decision = 'deny'
+    let applied = false
+    const output = await run(
+      'charliecode_config',
+      { action: 'apply', patch: { effort: 'high' } },
+      selfRuntime({
+        applyConfig: async () => {
+          applied = true
+          return { config: defaultConfig(), path: '/tmp/config.json', summary: '' }
+        }
+      })
+    )
+
+    expect(output).toContain('negat')
+    expect(applied).toBe(false)
+  })
+
+  it('in modalità piano legge ma non scrive', async () => {
+    const read = await run('charliecode_config', { action: 'read' }, selfRuntime({ readOnly: true }))
+    expect(read).toContain('CONFIGURAZIONE DI CHARLIECODE')
+
+    const write = await run(
+      'charliecode_config',
+      { action: 'apply', patch: { effort: 'high' } },
+      selfRuntime({ readOnly: true })
+    )
+    expect(write).toContain('modalità piano')
+    expect(requests).toHaveLength(0)
+  })
+
+  it('rifiuta un modello che non è nel catalogo del turno', async () => {
+    const output = await run(
+      'charliecode_config',
+      { action: 'apply', patch: { defaultModel: 'ghost::model' } },
+      selfRuntime({
+        applyConfig: async () => ({
+          config: defaultConfig(),
+          path: '/tmp/config.json',
+          summary: ''
+        })
+      })
+    )
+    expect(output).toContain('sconosciuto')
+    expect(requests).toHaveLength(0)
+  })
+
+  it('non compare nei subagenti', () => {
+    const tools = buildTools(selfRuntime({ depth: 1 })) as unknown as Record<string, unknown>
+    expect(tools.charliecode_config).toBeUndefined()
   })
 })
 

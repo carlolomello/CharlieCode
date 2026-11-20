@@ -10,9 +10,15 @@ import { suggestSetup } from './advisor'
 import { rememberNote } from './plugins'
 import { listSkills, readSkill } from './skills'
 import { detectEol, type Platform } from './platform'
+import { resolveApiKey } from './config'
+import { applyConfigPatch, type AppConfigPatch } from './app-config'
+import { formatAppState, type SelfKnowledgeCliProfile } from './self-knowledge'
+import type { RoutingConfig } from './routing'
 import type {
+  CharlieCodeConfig,
   EngineEvent,
   FileDiff,
+  ModelEntry,
   PermissionDecision,
   PermissionRequest,
   ToolLog
@@ -79,6 +85,24 @@ export interface ToolRuntime {
   askPermission: (request: PermissionRequest) => Promise<PermissionDecision>
   emit: (event: EngineEvent) => void
   runSubagent: (request: SubagentRequest) => Promise<SubagentResult>
+  /** Snapshot of the app configuration, for the self-configuration tool. */
+  config?: CharlieCodeConfig
+  /** Native models available in this turn: the valid keys for a config patch. */
+  models?: ModelEntry[]
+  cliProfiles?: SelfKnowledgeCliProfile[]
+  routing?: RoutingConfig
+  /** Model answering this turn, shown in the self snapshot. */
+  modelKey?: string
+  appVersion?: string
+  /**
+   * Persists an already-validated patch. Provided by main, which reloads the
+   * config, saves it and notifies the renderer. Absent for CLI backends.
+   */
+  applyConfig?: (patch: AppConfigPatch) => Promise<{
+    config: CharlieCodeConfig
+    path: string
+    summary: string
+  }>
 }
 
 export interface ToolOutcome {
@@ -762,6 +786,158 @@ export function buildTools(runtime: ToolRuntime) {
       })
     : undefined
 
+  /**
+   * The agent's window on the app itself. Only the main agent gets it: a
+   * subagent is scoped to a piece of work, not to reconfiguring the product.
+   *
+   * `read` is free; `apply` goes through the same permission + diff gate as a
+   * file write. The patch is validated against the models of this turn, so the
+   * model cannot save a key that does not resolve.
+   */
+  const selfConfig =
+    runtime.depth === 0 && runtime.config
+      ? defineTool(runtime, {
+          name: 'charliecode_config',
+          description:
+            'Legge o modifica la configurazione dell’app CharlieCode stessa (non del progetto): ' +
+            'modello predefinito, effort, fallback, override per modello, passi e permessi degli ' +
+            'agenti, plugin, provider e routing. Usa action "read" prima di proporre una modifica; ' +
+            'usa "apply" solo dopo l’ok dell’utente: mostra il diff e chiede permesso. ' +
+            'Non gestisce chiavi API: quelle le imposta l’utente in Impostazioni.',
+          schema: z.object({
+            action: z
+              .enum(['read', 'apply'])
+              .describe('read = stato esatto; apply = salva un patch validato'),
+            patch: z
+              .object({
+                defaultModel: z
+                  .string()
+                  .nullable()
+                  .optional()
+                  .describe('Chiave nativa provider::model; null per nessun default'),
+                effort: z.enum(['none', 'low', 'high', 'max']).optional(),
+                fallbackModels: z.array(z.string()).optional(),
+                modelOverrides: z
+                  .record(
+                    z.string(),
+                    z.object({
+                      effort: z.enum(['none', 'low', 'high', 'max']).optional(),
+                      efforts: z
+                        .array(z.enum(['none', 'low', 'high', 'max']))
+                        .optional()
+                    })
+                  )
+                  .optional(),
+                agents: z
+                  .object({
+                    maxSteps: z.number().int().min(1).max(200).optional(),
+                    subagentMaxSteps: z.number().int().min(1).max(200).optional(),
+                    subagentModel: z.string().nullable().optional(),
+                    autoApprove: z.array(z.string()).optional(),
+                    autoApproveCommands: z.array(z.string()).optional()
+                  })
+                  .optional(),
+                plugins: z
+                  .record(z.string(), z.object({ enabled: z.boolean() }))
+                  .optional(),
+                providers: z
+                  .array(
+                    z.object({
+                      id: z.string(),
+                      enabled: z.boolean().optional(),
+                      baseUrl: z.string().optional(),
+                      showAllModels: z.boolean().optional()
+                    })
+                  )
+                  .optional()
+              })
+              .optional()
+              .describe('Solo per action "apply": le modifiche da validare e salvare')
+          }),
+          run: async ({ action, patch }) => {
+            const config = runtime.config
+            if (!config) throw new Error('Configurazione non disponibile in questo contesto.')
+
+            if (action === 'read') {
+              const providerKeys: Record<string, boolean> = {}
+              for (const provider of config.providers) {
+                providerKeys[provider.id] = Boolean(
+                  (await resolveApiKey(runtime.platform, provider)).apiKey
+                )
+              }
+              const skills = await listSkills(runtime.platform, runtime.workspace)
+              const output = formatAppState({
+                config,
+                configPath: runtime.platform.configPath('config.json'),
+                ...(runtime.appVersion ? { appVersion: runtime.appVersion } : {}),
+                workspace: runtime.workspace,
+                ...(runtime.modelKey ? { modelKey: runtime.modelKey } : {}),
+                models: runtime.models ?? [],
+                providerKeys,
+                ...(runtime.cliProfiles ? { cliProfiles: runtime.cliProfiles } : {}),
+                ...(runtime.routing ? { routing: runtime.routing } : {}),
+                skills: skills.map((skill) => ({ id: skill.id, source: skill.source }))
+              })
+              return { output, summary: 'configurazione di CharlieCode' }
+            }
+
+            if (runtime.readOnly) {
+              throw new Error(
+                'In modalità piano posso leggere la configurazione, ma non modificarla. ' +
+                  'Approva il piano e chiedilo in modalità build.'
+              )
+            }
+            if (!runtime.applyConfig) {
+              throw new Error(
+                'Questo backend non può modificare la configurazione di CharlieCode. ' +
+                  'Guida l’utente con passi e valori esatti.'
+              )
+            }
+            if (!patch || Object.keys(patch).length === 0) {
+              throw new Error('Manca il patch da applicare.')
+            }
+
+            const validKeys = runtime.models?.map((model) => model.key)
+            const preview = applyConfigPatch(config, patch, validKeys)
+            if (preview.changes.length === 0) {
+              return {
+                output: 'Nessuna modifica: la configurazione è già così.',
+                summary: 'nessuna modifica'
+              }
+            }
+
+            const before = `${JSON.stringify(config, null, 2)}\n`
+            const after = `${JSON.stringify(preview.config, null, 2)}\n`
+            const diff = createDiff(
+              runtime.platform.configPath('config.json'),
+              before,
+              after,
+              'config.json'
+            )
+
+            await permission(runtime, {
+              tool: 'config',
+              title: 'Configurare CharlieCode',
+              detail: preview.changes.join('\n'),
+              risk: 'medium',
+              diff
+            })
+
+            const saved = await runtime.applyConfig(patch)
+            const summary = saved.summary.trim() || preview.changes.join('\n')
+            return {
+              output: [
+                `Configurazione salvata in ${saved.path}.`,
+                summary,
+                'Le modifiche valgono dal prossimo turno; le nuove chat usano i nuovi default.'
+              ].join('\n'),
+              summary: `config.json · +${diff.added} / -${diff.removed}`,
+              diff
+            }
+          }
+        })
+      : undefined
+
   return {
     read,
     ls,
@@ -793,6 +969,7 @@ export function buildTools(runtime: ToolRuntime) {
       }
     }),
     ...(task ? { task } : {}),
+    ...(selfConfig ? { charliecode_config: selfConfig } : {}),
     ...pluginTools(runtime)
   }
 }

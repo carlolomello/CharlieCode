@@ -47,6 +47,7 @@ pnpm dev           # app with HMR
 - **Ask before it acts.** Destructive tools hit a permission gate: *allow once*, *allow always* (per tool, or per command prefix for `bash`), *deny*. Revocable from the settings drawer.
 - **Remembers the project.** Every chat is a saved session tied to a folder; the full model context (tool calls included) is persisted, so resuming actually continues instead of replaying a transcript.
 - **Knows your rules.** `AGENTS.md` — plus `CHARLIECODE.md` and `CLAUDE.md` — in the project root and globally in `~/.charliecode/` are injected into the system prompt.
+- **Knows itself.** The agent carries a map of CharlieCode's own architecture and can reconfigure the app on request — default model, effort, fallback, plugins, agent limits, routing — through a validated `charliecode_config` tool that shows a diff and asks permission. API keys stay out of reach.
 - **Uses the CLI you already have, as a real backend.** If your team approved an agent CLI with its own login, define a profile in **✦ Collega un modello → CLI esterna**. It appears in the model picker next to native models: the main conversation can run through it, with its own auth, quota and logs. The thread, the project context and the files stay the same when you switch back to a native model. The same profile can also power `task` subagents.
 - **Free-first, zero lock-in.** One provider entry (FreeLLMAPI) routes across ~87 free tiers and picks the model itself. Add OpenAI, OpenRouter, Ollama, LM Studio, vLLM or a corporate gateway whenever you want.
 - **Speaks Markdown properly.** Headings, lists, tables, quotes and syntax-highlighted code blocks with a copy button — rendered by a small built-in renderer, not by injecting HTML into the app.
@@ -249,6 +250,29 @@ Rules worth knowing:
 
 ---
 
+## CharlieCode knows itself
+
+The agent is not blind to the app it runs in. Its system prompt carries a compact map of CharlieCode — config paths, backends, tools, plugins, routing, current state — and the main agent has one extra tool, `charliecode_config`.
+
+Ask in chat:
+
+- “Configure CharlieCode for this model: make it the default, effort high, with a cheap fallback.”
+- “Make the reviewer use the local CLI and keep the implementer on the main model.”
+- “Turn off the web plugin for this project and raise the agent step limit.”
+
+What happens:
+
+1. `read` returns the exact state: enabled providers, key presence (never the key), valid native model keys, CLI profiles, plugins, agent limits, routing and skills.
+2. The model proposes a concrete change. It cannot invent a model key: patches are validated against the catalog of the turn.
+3. `apply` shows the `config.json` diff and asks permission, exactly like a file write.
+4. The change is saved and the drawer refreshes. It applies from the next turn; new chats use the new defaults.
+
+What it can change: default model, effort, fallback chain, per-model effort overrides, agent step limits, subagent model, auto-approved tools and command prefixes, plugin switches, provider enable/base URL/show-all-models, and routing (by editing `.charliecode/routing.yaml` with the normal `write` tool).
+
+What it never does: read or print API keys, write `credentials.json`, or silently widen its own permissions. Adding a key or a CLI profile stays a user action in the drawer; the agent gives exact steps. CLI backends (a CLI running the conversation) do not have the config tool: they know the architecture and guide you, but only native backends can apply.
+
+---
+
 ## CLI
 
 The same engine runs headless — useful on a server, in CI, or when a GUI is overkill.
@@ -275,6 +299,8 @@ Everything lives in `~/.charliecode/` (override with `CHARLIECODE_CONFIG_DIR`):
 | --- | --- |
 | `config.json` | providers, capability overrides, default model, fallback chain, auto-approve |
 | `credentials.json` | API keys per provider (mode `600`) |
+| `clis/` | user-defined CLI profiles: command, argv, models, effort, output (no product presets) |
+| `skills/` | global skills, loaded on demand by the `skill` tool |
 | `sessions/` | one JSONL per chat + its context sidecar |
 | `probe-report.json` | last capability probe |
 | `AGENTS.md` | global instructions injected into every project |
@@ -303,6 +329,8 @@ src/
     probe      real tool-calling detection
     local      Ollama / LM Studio / vLLM presets and probing
     agent      agent loop, plan/build modes, system prompt, subagents
+    app-config validated patches to the app's own configuration
+    self-knowledge architecture map + exact state for the agent
     backends   CLI as a conversation backend: briefing out, text/tools/diff back in
     routing    optional per-role models/effort for subagents
     tools      read/ls/glob/grep/write/edit/bash/task + permission helpers
@@ -378,6 +406,7 @@ The goal is a GUI equivalent of a terminal coding agent, with multi-agent work m
 - [x] Project memory: `.charliecode/memory.md`, injected per session, `remember` tool
 - [x] Setup advisor: commands, missing `AGENTS.md`, auto-approve and skill suggestions
 - [x] Skills: `SKILL.md` packages from `~/.charliecode/skills` and `.charliecode/skills`, installable from a git URL, loaded on demand by the `skill` tool
+- [x] Self-configuration: the agent knows the app's architecture and applies validated config changes behind a diff
 - [ ] Third-party plugins: install from a git URL, sandboxed tool packs
 - [ ] MCP client with per-server permission policy
 
@@ -456,6 +485,7 @@ Or, without touching the tag: **Actions → release → Run workflow**, leaving 
 ## Security
 
 - Keys live in `~/.charliecode/credentials.json` (mode `600`) or environment variables and are sent only to the endpoint you configured.
+- The self-configuration tool can change `config.json` but never reads or writes `credentials.json`: key presence is reported as a boolean, and every change goes through the permission gate with a diff.
 - There is no CharlieCode backend; nothing is proxied.
 - The renderer runs with `contextIsolation`, `sandbox`, no `nodeIntegration` and a restrictive CSP; all filesystem and network access goes through typed IPC. Markdown is rendered as React elements, never as injected HTML.
 - Builds are unsigned/ad-hoc for now. `safeStorage` and real signing are on the roadmap — treat the installers as developer previews.

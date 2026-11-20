@@ -166,6 +166,8 @@ export interface CharlieCodeApi {
   onPermission(callback: (envelope: PermissionEnvelope) => void): () => void
   /** A provider or CLI profile changed: the picker should reload. */
   onModelsChanged(callback: () => void): () => void
+  /** The agent changed the app configuration: refresh providers, plugins and routing. */
+  onConfigChanged(callback: () => void): () => void
   respondPermission(permissionId: string, decision: PermissionDecision): Promise<void>
 
   openConfigDir(): Promise<void>

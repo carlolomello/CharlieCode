@@ -77,14 +77,14 @@ const diffs: Record<string, string> = {
         canListModels: false
       },
       {
-        id: 'gaia',
-        label: 'Gaia Axet (fork Cline)',
-        path: '/Applications/Gaia.app/Contents/MacOS/gaia',
-        notes: 'Presumo la stessa interfaccia di Cline (--json, run_result).',
+        id: 'local-agent',
+        label: 'Local Agent (esempio)',
+        path: '/usr/local/bin/local-agent',
+        notes: 'Profilo definito dall’utente: comando, argv e formato di output.',
         canListModels: false
       }
     ],
-    worker: { id: 'gaia', model: 'sonnet-5.5' }
+    worker: { id: 'local-agent', model: 'sonnet-5.5' }
   }),
   externalAgentModels: async () => ['freellmapi/auto', 'anthropic/sonnet-5.5'],
   testExternalAgent: async () => ({ ok: true, text: 'ok', ms: 2400 }),
