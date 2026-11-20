@@ -2,7 +2,12 @@ import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { connectCli, discoverModelCommand, modelNamesFromOutput } from './cli-connect'
+import {
+  connectCli,
+  discoverModelCommand,
+  modelNamesFromOutput,
+  parseModelHint
+} from './cli-connect'
 import { readCliProfile, saveCliProfile } from './cli-profiles'
 import { createPlatform, type Platform } from './platform'
 
@@ -27,6 +32,39 @@ describe('modelNamesFromOutput', () => {
 
   it('accetta i nomi di modello fatti di qualche parola', () => {
     expect(modelNamesFromOutput('Claude Sonnet 5.5')).toEqual(['Claude Sonnet 5.5'])
+  })
+
+  it('scarta help, usage ed errori invece di farne modelli', () => {
+    const output = [
+      'Unknown option: --list-models',
+      'Try --help for usage',
+      'Usage: axet-code [options]',
+      'Options:',
+      '  -m, --model <id>  Model to use',
+      'openai/gpt-6.1-terra'
+    ].join('\n')
+
+    expect(modelNamesFromOutput(output)).toEqual(['openai/gpt-6.1-terra'])
+  })
+})
+
+describe('parseModelHint', () => {
+  it('legge il JSON anche con prosa e fence attorno', () => {
+    expect(parseModelHint('Ecco:\n```json\n{"args":["models"],"format":"lines"}\n```')).toEqual({
+      args: ['models'],
+      format: 'lines'
+    })
+  })
+
+  it('accetta un documento JSON con percorso', () => {
+    expect(parseModelHint('{"args":["models","--json"],"format":"json","path":"data"}')).toEqual(
+      { args: ['models', '--json'], format: 'json', path: 'data' }
+    )
+  })
+
+  it('tratta args vuoto come “questa CLI non elenca i modelli”', () => {
+    expect(parseModelHint('{"args":[]}')).toBeUndefined()
+    expect(parseModelHint('nessun json qui')).toBeUndefined()
   })
 })
 
@@ -121,6 +159,61 @@ exit 0
       expect(result.profile.args).toEqual(['run', '--custom'])
       expect(result.profile.modelsArgs).toEqual(['models'])
       expect(result.models).toHaveLength(2)
+    }
+  )
+
+  it.runIf(process.platform !== 'win32')(
+    'chiede al modello quale comando stampa i modelli quando nessun probe funziona',
+    async () => {
+      await writeFile(
+        binary,
+        `#!/bin/sh
+case "$1" in
+  --version) echo "agent-four 1.0.0"; exit 0 ;;
+  --help) echo "Usage: agent-four [options]"; exit 0 ;;
+  --print-models) echo "acme/one"; echo "acme/two"; exit 0 ;;
+esac
+exit 1
+`
+      )
+      await chmod(binary, 0o755)
+
+      const prompts: string[] = []
+      const result = await connectCli(platform, {
+        command: binary,
+        workspace: dir,
+        ask: async (prompt) => {
+          prompts.push(prompt)
+          return '```json\n{"args":["--print-models"],"format":"lines"}\n```'
+        }
+      })
+
+      // The help text is what the model reads: the CLI is the one place that
+      // says how it lists its models.
+      expect(prompts).toHaveLength(1)
+      expect(prompts[0]).toContain('--help')
+      expect(result.models).toEqual(['acme/one', 'acme/two'])
+      expect(result.profile.modelsArgs).toEqual(['--print-models'])
+      expect(result.profile.modelsFormat).toBe('lines')
+
+      const saved = await readCliProfile(platform, 'agent-one')
+      expect(saved?.modelsArgs).toEqual(['--print-models'])
+    }
+  )
+
+  it.runIf(process.platform !== 'win32')(
+    'non salva un comando che non stampa modelli, anche se il modello lo propone',
+    async () => {
+      await writeFile(binary, '#!/bin/sh\nexit 1\n')
+      await chmod(binary, 0o755)
+
+      const result = await connectCli(platform, {
+        command: binary,
+        ask: async () => '{"args":["models"]}'
+      })
+
+      expect(result.models).toEqual([])
+      expect(result.profile.modelsArgs).toBeUndefined()
     }
   )
 

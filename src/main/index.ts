@@ -16,7 +16,7 @@ import {
   saveAttachments
 } from '../engine/attachments'
 import { findModel, loadCatalog, pickDefaultModel } from '../engine/catalog'
-import { resetProviderCache } from '../engine/client'
+import { complete, resetProviderCache } from '../engine/client'
 import {
   CONFIG_FILE,
   CREDENTIALS_FILE,
@@ -46,7 +46,7 @@ import {
   searchBinaries
 } from '../engine/external-agents'
 import { introspectCli } from '../engine/cli-introspect'
-import { connectCli, discoverModelCommand } from '../engine/cli-connect'
+import { askModelCommand, connectCli, discoverModelCommand } from '../engine/cli-connect'
 import { listWorkspaceDir, readWorkspaceFile } from '../engine/workspace-files'
 import {
   deleteCliProfile,
@@ -600,6 +600,28 @@ function registerIpc(): void {
     }
   }
 
+  /**
+   * One question to the model the app already uses. CLI setup needs it: an
+   * unknown CLI says in its own help which command prints its models, and a
+   * model reads that far more reliably than a list of spellings.
+   */
+  const askModel = async (prompt: string): Promise<string> => {
+    const { config } = await loadConfig(platform)
+    const { models } = await loadCatalog(platform, config)
+    const entry = pickDefaultModel(models, config)
+    if (!entry) throw new Error('Nessun modello configurato per leggere la CLI.')
+    const { text } = await complete(
+      {
+        modelKey: entry.key,
+        messages: [{ role: 'user', content: prompt }],
+        maxOutputTokens: 400,
+        temperature: 0
+      },
+      { platform, config, models }
+    )
+    return text
+  }
+
   const notifyConfigChanged = (): void => {
     for (const window of BrowserWindow.getAllWindows()) {
       if (!window.isDestroyed()) window.webContents.send('charliecode:config:changed')
@@ -727,7 +749,8 @@ function registerIpc(): void {
         ...(typeof payload.label === 'string' && payload.label.trim()
           ? { label: payload.label }
           : {}),
-        ...(config.workspace ? { workspace: config.workspace } : {})
+        ...(config.workspace ? { workspace: config.workspace } : {}),
+        ask: askModel
       })
       notifyModelsChanged()
       return { ...report, status: await cliStatus() }
@@ -846,12 +869,24 @@ function registerIpc(): void {
       (await resolveBinaryViaShell(profile.command, { home: platform.homeDir }))
     if (!binary) return []
 
-    const discovered = await discoverModelCommand(binary, {
-      ...(config.workspace ? { workspace: config.workspace } : {})
-    })
+    // The usual spellings first. If none prints a list, the app's own model
+    // reads the CLI's help and proposes the command; the proposal is verified
+    // by running it, so a wrong guess changes nothing.
+    const discovered =
+      (await discoverModelCommand(binary, {
+        ...(config.workspace ? { workspace: config.workspace } : {})
+      })) ??
+      (await askModelCommand(binary, askModel, {
+        ...(config.workspace ? { workspace: config.workspace } : {})
+      }).catch(() => undefined))
     if (!discovered) return []
 
-    await saveCliProfile(platform, { ...profile, modelsArgs: discovered.args })
+    await saveCliProfile(platform, {
+      ...profile,
+      modelsArgs: discovered.args,
+      ...(discovered.format ? { modelsFormat: discovered.format } : {}),
+      ...(discovered.path ? { modelsPath: discovered.path } : {})
+    })
     return discovered.models
   })
 
@@ -1016,7 +1051,9 @@ hanno priorità su queste.
       if (!payload.text.trim()) {
         return { ok: false, error: 'Il messaggio è vuoto.' }
       }
-      if (!Array.isArray(payload.attachments)) {
+      // A message without files simply has no `attachments` field: only a
+      // malformed value is refused, never a plain text turn.
+      if (payload.attachments !== undefined && !Array.isArray(payload.attachments)) {
         return { ok: false, error: 'Allegati non validi.' }
       }
       if (payload.effort && !['none', 'low', 'high', 'max'].includes(payload.effort)) {

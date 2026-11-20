@@ -1107,17 +1107,15 @@ export default function App() {
         mode: activeMode,
         team: teamActive,
         workspacePath: workspace,
-        ...(sentAttachments.length > 0
-          ? {
-              attachments: sentAttachments.map((item) => ({
-                name: item.name,
-                mime: item.mime,
-                kind: item.kind,
-                size: item.size,
-                data: item.data
-              }))
-            }
-          : {})
+        // Always an array: the main process rejects a missing list, and a
+        // message without files is the normal case.
+        attachments: sentAttachments.map((item) => ({
+          name: item.name,
+          mime: item.mime,
+          kind: item.kind,
+          size: item.size,
+          data: item.data
+        }))
       })
 
       if (epoch !== viewEpoch.current) return

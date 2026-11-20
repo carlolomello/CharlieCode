@@ -4,6 +4,8 @@ import { readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, delimiter, extname, isAbsolute, join } from 'node:path'
 import { promisify } from 'node:util'
+import { spawnTarget } from './cli-shim'
+import { modelNamesFromOutput } from './model-list'
 import type { CliProfile, EffortLevel } from './types'
 
 /**
@@ -651,7 +653,7 @@ function lineActivity(profile: CliProfile, line: string): string | undefined {
 
 /* ------------------------------- models --------------------------------- */
 
-function modelNames(value: unknown, path?: string): string[] {
+export function modelNames(value: unknown, path?: string): string[] {
   const target = path ? readPath(value, path) : value
   if (!Array.isArray(target)) return []
 
@@ -668,13 +670,7 @@ function modelNames(value: unknown, path?: string): string[] {
   return names
 }
 
-function modelsFromLines(stdout: string): string[] {
-  return stdout
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && line.length < 120 && !line.startsWith('{'))
-    .slice(0, 400)
-}
+
 
 /**
  * Models the CLI already has access to. No key ever reaches this process: the
@@ -698,11 +694,17 @@ export async function profileModels(
     arg.replace(/\{workspace\}/g, workspace ?? '').replace(/\{model\}/g, '')
   )
 
+  // A `.cmd` shim on Windows cannot be execFile'd directly; its JS entry can.
+  const node = findBinary('node', home)
+  const target = spawnTarget(binary, args, { ...(node ? { node } : {}), allowShell: true })
+  if (!target) return []
+
   try {
-    const { stdout } = await run(binary, args, {
+    const { stdout } = await run(target.file, target.args, {
       timeout: 20_000,
       windowsHide: true,
       maxBuffer: 4 * 1024 * 1024,
+      env: { ...process.env, ...target.env },
       ...(workspace ? { cwd: workspace } : {})
     })
 
@@ -711,7 +713,7 @@ export async function profileModels(
       const parsed: unknown = JSON.parse(stdout)
       return [...new Set(modelNames(parsed, profile.modelsPath))].slice(0, 400)
     }
-    return [...new Set(modelsFromLines(stdout))]
+    return [...new Set(modelNamesFromOutput(stdout))].slice(0, 400)
   } catch {
     return []
   }
@@ -798,14 +800,32 @@ export function runExternalAgent(
     hooks.timeoutMs ?? (profile.timeoutSeconds ? profile.timeoutSeconds * 1_000 : DEFAULT_TIMEOUT_MS)
   const useStdin = promptOnStdin(profile)
 
+  // On Windows an npm/pnpm CLI is a `.cmd` shim, which node cannot spawn
+  // without a shell — and a shell would re-parse the prompt. The JS entry the
+  // shim points at is run instead, so the prompt stays data.
+  const node = findBinary('node', hooks.home ?? homedir())
+  const target = spawnTarget(binary, argv, node ? { node } : {})
+  if (!target) {
+    return Promise.resolve({
+      text: '',
+      raw: '',
+      code: -1,
+      stderr: '',
+      ms: 0,
+      timedOut: false,
+      aborted: false,
+      error: `${profile.label}: "${basename(binary)}" è uno script .cmd senza entry JavaScript. Installa la versione nativa della CLI o indica il percorso del suo eseguibile nel profilo.`
+    })
+  }
+
   return new Promise<ExternalRunResult>((resolve, reject) => {
-    const child = spawn(binary, argv, {
+    const child = spawn(target.file, target.args, {
       cwd: options.workspace,
       shell: false,
       windowsHide: true,
       // A process group of its own, so the whole tree can be killed.
       detached: process.platform !== 'win32',
-      env: { ...process.env, CI: '1', NO_COLOR: '1', FORCE_COLOR: '0' }
+      env: { ...process.env, ...target.env, CI: '1', NO_COLOR: '1', FORCE_COLOR: '0' }
     })
 
     let text = ''
