@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import type { ModelMessage } from 'ai'
 import type { Platform } from './platform'
 import type { AttachmentRef, ChatMessage, IncomingAttachment } from './types'
 
@@ -69,6 +70,19 @@ export function attachmentsDir(platform: Platform, sessionId: string, messageId:
     safeSegment(sessionId, 'session'),
     safeSegment(messageId, 'message')
   )
+}
+
+/** Root of every attachment of one session, used when the chat is deleted. */
+export function sessionAttachmentsDir(platform: Platform, sessionId: string): string {
+  return platform.configPath(ATTACHMENTS_DIR, safeSegment(sessionId, 'session'))
+}
+
+/** Removes every attachment of a session. Deleting only `…/message` left the rest. */
+export async function deleteSessionAttachments(
+  platform: Platform,
+  sessionId: string
+): Promise<void> {
+  await rm(sessionAttachmentsDir(platform, sessionId), { recursive: true, force: true })
 }
 
 export async function saveAttachments(
@@ -178,4 +192,36 @@ export async function materializeHistory(
   }
 
   return result
+}
+
+/**
+ * Same as `materializeHistory`, but in the shape the model API expects: images
+ * become `file` parts instead of the internal `images` field. Main uses this
+ * for the canonical context, which is sent directly to `streamText`.
+ */
+export async function materializeModelHistory(
+  platform: Platform,
+  messages: ChatMessage[]
+): Promise<ModelMessage[]> {
+  const materialized = await materializeHistory(platform, messages)
+  return materialized.map((message): ModelMessage => {
+    if (message.role === 'assistant') {
+      return { role: 'assistant', content: message.content }
+    }
+    const images = message.images ?? []
+    if (images.length === 0) {
+      return { role: 'user', content: message.content }
+    }
+    return {
+      role: 'user',
+      content: [
+        ...(message.content ? [{ type: 'text' as const, text: message.content }] : []),
+        ...images.map((image) => ({
+          type: 'file' as const,
+          mediaType: image.mediaType,
+          data: { type: 'data' as const, data: image.data }
+        }))
+      ]
+    }
+  })
 }

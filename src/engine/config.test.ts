@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -50,5 +50,23 @@ describe('CHARLIECODE_BASE_URL', () => {
     const { config } = await loadConfig(platform())
 
     expect(config.providers.every((provider) => !provider.enabled)).toBe(true)
+  })
+
+  it('recupera una config corrotta e ne conserva un backup', async () => {
+    const p = platform()
+    await mkdir(p.configDir, { recursive: true })
+    await writeFile(p.configPath('config.json'), '{ non è json', 'utf8')
+
+    const result = await loadConfig(p)
+    expect(result.recovered).toContain('config.json.corrupt-')
+    expect(result.config.version).toBe(1)
+
+    const files = await readdir(p.configDir)
+    expect(files.some((name) => name.startsWith('config.json.corrupt-'))).toBe(true)
+
+    const repaired = JSON.parse(await readFile(p.configPath('config.json'), 'utf8')) as {
+      version: number
+    }
+    expect(repaired.version).toBe(1)
   })
 })

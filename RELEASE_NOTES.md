@@ -20,10 +20,19 @@ No Apple Developer ID and no code signing certificate, so both platforms warn on
 3. A router collapses to a single entry — **Automatico (il router sceglie il modello)** — and picks per request. Tick *mostra tutti i modelli del router* to choose by hand.
 4. Open a project, then ask. **Plan** explores and reports; **Build** writes, always with a diff and a permission prompt.
 
+## Changes in this build
+
+- **Context:** the turn's user message is always part of the saved context, so resuming a session continues instead of dropping the last request.
+- **Tool sandbox:** paths outside the project and symlinks that escape it always ask for permission; `credentials.json` is unreadable by tools; `fetch_url` refuses private/localhost targets and re-checks every redirect.
+- **Sessions:** opening a chat restores its workspace, deleting one removes its attachments, and a slow response can no longer overwrite a newer session.
+- **Config:** `config.json` and `credentials.json` are written atomically; a corrupted file is backed up and reported in the UI instead of crashing the app.
+- **Reliability:** cached model catalog, throttled draft saves, project context passed to subagents, and `remember` shows a diff before writing anything.
+
 ## What is in this build
 
 - Streaming with retry, mid-stream fallback, and a catalog that hides providers with no key
 - Tools: read, ls, glob, grep, write, edit, bash, task — each with per-tool permissions and command auto-approve
+- `fetch_url` for reading documentation and pages as clean text, with SSRF protection
 - Subagents, plan/build modes, per-model effort levels
 - Diff viewer, JSONL sessions with a context sidecar, `AGENTS.md` layering
 - Plugins on by default: project memory, setup advisor, web reach

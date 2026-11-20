@@ -741,6 +741,11 @@ export function runExternalAgent(
       // A CLI that exits before reading stdin must not crash the app with EPIPE.
       child.stdin.on('error', () => undefined)
       child.stdin.end(options.prompt)
+    } else {
+      // In argument mode the prompt is already in argv: close stdin, or a CLI
+      // that also watches it waits forever for an EOF that never comes.
+      child.stdin?.on('error', () => undefined)
+      child.stdin?.end()
     }
 
     const finish = (code: number | null): void => {

@@ -20,107 +20,117 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-
-if (process.platform !== 'darwin') {
-  run(process.env)
-  process.exit(0)
-}
-
 const require = createRequire(import.meta.url)
-const electronBinary = require('electron')
-// …/dist/Electron.app/Contents/MacOS/Electron → …/dist
-const distDir = resolve(dirname(electronBinary), '..', '..', '..')
-const sourceBundle = join(distDir, 'Electron.app')
-const devDir = join(root, '.dev')
-// The bundle name matters: the Dock, the menu bar and Activity Monitor all read
-// it, so it is not enough to change Info.plist values.
-const targetBundle = join(devDir, 'CharlieCode.app')
-const iconSource = join(root, 'build', 'icon.icns')
-const stampFile = join(devDir, '.version')
-
-const version = JSON.parse(
-  readFileSync(join(root, 'node_modules', 'electron', 'package.json'), 'utf8')
-).version
-
-function branded() {
-  if (!existsSync(targetBundle) || !existsSync(stampFile)) return false
-  if (!existsSync(join(targetBundle, 'Contents', 'MacOS', 'CharlieCode'))) return false
-  if (readFileSync(stampFile, 'utf8').trim() !== version) return false
-  try {
-    const plist = readFileSync(join(targetBundle, 'Contents', 'Info.plist'), 'utf8')
-    return plist.includes('<string>CharlieCode</string>')
-  } catch {
-    return false
-  }
-}
-
-function buildBundle() {
-  console.log('[dev] preparing a branded Electron bundle (one-time, ~250 MB)…')
-  rmSync(devDir, { recursive: true, force: true })
-  mkdirSync(devDir, { recursive: true })
-  cpSync(sourceBundle, targetBundle, { recursive: true, verbatimSymlinks: true })
-
-  const plist = join(targetBundle, 'Contents', 'Info.plist')
-  const set = (key, value) =>
-    execFileSync('/usr/libexec/PlistBuddy', ['-c', `Set :${key} ${value}`, plist], {
-      stdio: 'ignore'
-    })
-  try {
-    set('CFBundleName', 'CharlieCode')
-    set('CFBundleDisplayName', 'CharlieCode')
-    set('CFBundleIdentifier', 'co.charliecode.app')
-    // The process name (menu bar, Dock label, Activity Monitor) comes from the
-    // executable itself, so rename it too.
-    set('CFBundleExecutable', 'CharlieCode')
-  } catch {
-    // Older Electron builds may not have every key; the icon still applies.
-  }
-
-  const binary = join(targetBundle, 'Contents', 'MacOS', 'Electron')
-  if (existsSync(binary)) {
-    renameSync(binary, join(targetBundle, 'Contents', 'MacOS', 'CharlieCode'))
-  }
-
-  if (existsSync(iconSource)) {
-    cpSync(iconSource, join(targetBundle, 'Contents', 'Resources', 'icon.icns'))
-    try {
-      set('CFBundleIconFile', 'icon.icns')
-    } catch {
-      /* ignore */
-    }
-  }
-
-  // Copying the bundle invalidates its signature; macOS then refuses to launch
-  // it. An ad-hoc signature is enough for local development.
-  try {
-    execFileSync('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', targetBundle], {
-      stdio: 'ignore'
-    })
-  } catch {
-    console.warn('[dev] ad-hoc signing failed; the Dock icon may not update.')
-  }
-
-  writeFileSync(stampFile, `${version}\n`, 'utf8')
-}
 
 function run(extraEnv) {
-  const child = spawn('npx', ['electron-vite', 'dev'], {
+  // The local binary, not `npx`: on Windows `npx` is `npx.cmd` and spawning it
+  // without a shell fails; the JS entry works with the current Node everywhere.
+  const packageJson = require.resolve('electron-vite/package.json')
+  const electronVite = join(dirname(packageJson), 'bin', 'electron-vite.js')
+  const child = spawn(process.execPath, [electronVite, 'dev'], {
     cwd: root,
     stdio: 'inherit',
     env: extraEnv
   })
+  child.on('error', (error) => {
+    console.error('[dev] impossibile avviare electron-vite:', error)
+    process.exitCode = 1
+  })
+  // Do not exit here: the child is the dev server. Staying alive forwards its
+  // exit code and keeps the terminal attached.
   child.on('exit', (code, signal) => {
     if (signal) process.kill(process.pid, signal)
-    else process.exit(code ?? 0)
+    else process.exitCode = code ?? 0
   })
 }
 
-if (!branded()) buildBundle()
+function dev() {
+  const electronBinary = require('electron')
+  // …/dist/Electron.app/Contents/MacOS/Electron → …/dist
+  const distDir = resolve(dirname(electronBinary), '..', '..', '..')
+  const sourceBundle = join(distDir, 'Electron.app')
+  const devDir = join(root, '.dev')
+  // The bundle name matters: the Dock, the menu bar and Activity Monitor all
+  // read it, so it is not enough to change Info.plist values.
+  const targetBundle = join(devDir, 'CharlieCode.app')
+  const iconSource = join(root, 'build', 'icon.icns')
+  const stampFile = join(devDir, '.version')
 
-// electron-vite resolves the Electron binary from ELECTRON_EXEC_PATH (it reads
-// `node_modules/electron/path.txt` otherwise), so this — not
-// ELECTRON_OVERRIDE_DIST_PATH — is what actually launches the branded bundle.
-run({
-  ...process.env,
-  ELECTRON_EXEC_PATH: join(targetBundle, 'Contents', 'MacOS', 'CharlieCode')
-})
+  const version = JSON.parse(
+    readFileSync(join(root, 'node_modules', 'electron', 'package.json'), 'utf8')
+  ).version
+
+  function branded() {
+    if (!existsSync(targetBundle) || !existsSync(stampFile)) return false
+    if (!existsSync(join(targetBundle, 'Contents', 'MacOS', 'CharlieCode'))) return false
+    if (readFileSync(stampFile, 'utf8').trim() !== version) return false
+    try {
+      const plist = readFileSync(join(targetBundle, 'Contents', 'Info.plist'), 'utf8')
+      return plist.includes('<string>CharlieCode</string>')
+    } catch {
+      return false
+    }
+  }
+
+  function buildBundle() {
+    console.log('[dev] preparing a branded Electron bundle (one-time, ~250 MB)…')
+    rmSync(devDir, { recursive: true, force: true })
+    mkdirSync(devDir, { recursive: true })
+    cpSync(sourceBundle, targetBundle, { recursive: true, verbatimSymlinks: true })
+
+    const plist = join(targetBundle, 'Contents', 'Info.plist')
+    const set = (key, value) =>
+      execFileSync('/usr/libexec/PlistBuddy', ['-c', `Set :${key} ${value}`, plist], {
+        stdio: 'ignore'
+      })
+    try {
+      set('CFBundleName', 'CharlieCode')
+      set('CFBundleDisplayName', 'CharlieCode')
+      set('CFBundleIdentifier', 'co.charliecode.app')
+      // The process name (menu bar, Dock label, Activity Monitor) comes from
+      // the executable itself, so rename it too.
+      set('CFBundleExecutable', 'CharlieCode')
+    } catch {
+      // Older Electron builds may not have every key; the icon still applies.
+    }
+
+    const binary = join(targetBundle, 'Contents', 'MacOS', 'Electron')
+    if (existsSync(binary)) {
+      renameSync(binary, join(targetBundle, 'Contents', 'MacOS', 'CharlieCode'))
+    }
+
+    if (existsSync(iconSource)) {
+      cpSync(iconSource, join(targetBundle, 'Contents', 'Resources', 'icon.icns'))
+      try {
+        set('CFBundleIconFile', 'icon.icns')
+      } catch {
+        /* ignore */
+      }
+    }
+
+    // Copying the bundle invalidates its signature; macOS then refuses to
+    // launch it. An ad-hoc signature is enough for local development.
+    try {
+      execFileSync('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', targetBundle], {
+        stdio: 'ignore'
+      })
+    } catch {
+      console.warn('[dev] ad-hoc signing failed; the Dock icon may not update.')
+    }
+
+    writeFileSync(stampFile, `${version}\n`, 'utf8')
+  }
+
+  if (!branded()) buildBundle()
+
+  // electron-vite resolves the Electron binary from ELECTRON_EXEC_PATH (it
+  // reads `node_modules/electron/path.txt` otherwise), so this — not
+  // ELECTRON_OVERRIDE_DIST_PATH — is what actually launches the branded bundle.
+  run({
+    ...process.env,
+    ELECTRON_EXEC_PATH: join(targetBundle, 'Contents', 'MacOS', 'CharlieCode')
+  })
+}
+
+if (process.platform === 'darwin') dev()
+else run(process.env)

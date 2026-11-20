@@ -17,8 +17,10 @@ describe('guessEfforts', () => {
     expect(guessEfforts('deepseek-v4.1-flash-free')).toEqual(['none', 'low', 'high', 'max'])
   })
 
-  it('limita i modelli ultraleggeri senza reasoning a none', () => {
+  it('limita i modelli senza reasoning a none', () => {
     expect(guessEfforts('gpt-4o-mini')).toEqual(['none'])
+    expect(guessEfforts('gpt-4o')).toEqual(['none'])
+    expect(guessEfforts('llama-3.3-70b')).toEqual(['none'])
   })
 })
 

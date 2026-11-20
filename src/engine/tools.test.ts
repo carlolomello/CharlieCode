@@ -1,9 +1,19 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createPlatform } from './platform'
-import { buildTools, DeniedError, matchesApprovedCommand, resolveWorkspacePath, toolLogFromEvent, type ToolRuntime } from './tools'
+import {
+  buildTools,
+  DeniedError,
+  isPrivateAddress,
+  isRiskyRegex,
+  matchesApprovedCommand,
+  resolveWorkspacePath,
+  toolLogFromEvent,
+  type ToolRuntime
+} from './tools'
 import { defaultConfig } from './config'
 import type { AppConfigPatch } from './app-config'
 import type { EngineEvent, ModelEntry, PermissionDecision, PermissionRequest } from './types'
@@ -146,6 +156,100 @@ describe('permissions', () => {
 
   it('DeniedError è un errore riconoscibile', () => {
     expect(new DeniedError()).toBeInstanceOf(Error)
+  })
+})
+
+describe('sandbox', () => {
+  it('chiede permesso quando un symlink esce dal progetto', async () => {
+    // Creating symlinks on Windows needs privileges; the CI there skips this.
+    if (process.platform === 'win32') return
+    const outside = await mkdtemp(join(tmpdir(), 'charliecode-outside-'))
+    try {
+      await writeFile(join(outside, 'secret.txt'), 'top secret')
+      await symlink(outside, join(workspace, 'link'), 'dir')
+
+      decision = 'deny'
+      const output = await run(
+        'read',
+        { path: 'link/secret.txt' },
+        runtime({ autoApprove: ['read'] })
+      )
+
+      expect(output).toContain('negat')
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.risk).toBe('high')
+    } finally {
+      await rm(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('non legge il file delle credenziali nemmeno con autoApprove', async () => {
+    const rt = runtime({ autoApprove: ['read'] })
+    const credentials = rt.platform.configPath('credentials.json')
+    await mkdir(dirname(credentials), { recursive: true })
+    await writeFile(credentials, '{"openai":{"apiKey":"sk-test"}}')
+
+    const output = await run('read', { path: credentials }, rt)
+    expect(output).toContain('credenziali')
+    expect(requests).toHaveLength(0)
+  })
+
+  it('una scrittura fuori dal progetto chiede sempre permesso', async () => {
+    const name = `escape-${Date.now()}.txt`
+    decision = 'deny'
+
+    const output = await run(
+      'write',
+      { path: `../${name}`, content: 'no' },
+      runtime({ autoApprove: ['write'] })
+    )
+
+    expect(output).toContain('negat')
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.risk).toBe('high')
+    expect(existsSync(join(workspace, '..', name))).toBe(false)
+  })
+
+  it('remember mostra un diff e chiede permesso', async () => {
+    const output = await run(
+      'remember',
+      { note: 'Usa pnpm, non npm.' },
+      runtime({ plugins: ['memory'] })
+    )
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.tool).toBe('remember')
+    expect(requests[0]?.diff?.unified).toContain('pnpm')
+    expect(output).toContain('Nota salvata')
+    expect(await readFile(join(workspace, '.charliecode', 'memory.md'), 'utf8')).toContain('pnpm')
+  })
+
+  it('se l’utente nega, remember non crea nemmeno il file', async () => {
+    decision = 'deny'
+    const output = await run(
+      'remember',
+      { note: 'Non salvarmi.' },
+      runtime({ plugins: ['memory'] })
+    )
+
+    expect(output).toContain('negat')
+    expect(existsSync(join(workspace, '.charliecode', 'memory.md'))).toBe(false)
+  })
+})
+
+describe('regex e rete', () => {
+  it('rifiuta i quantificatori annidati', () => {
+    expect(isRiskyRegex('(a+)+')).toBe(true)
+    expect(isRiskyRegex('a+')).toBe(false)
+  })
+
+  it('riconosce indirizzi privati e pubblici', () => {
+    expect(isPrivateAddress('127.0.0.1')).toBe(true)
+    expect(isPrivateAddress('10.1.2.3')).toBe(true)
+    expect(isPrivateAddress('169.254.169.254')).toBe(true)
+    expect(isPrivateAddress('::1')).toBe(true)
+    expect(isPrivateAddress('8.8.8.8')).toBe(false)
+    expect(isPrivateAddress('2001:4860:4860::8888')).toBe(false)
   })
 })
 

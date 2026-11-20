@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -6,9 +7,12 @@ import {
   MAX_ATTACHMENTS,
   MAX_TEXT_IN_PROMPT,
   attachmentsDir,
+  deleteSessionAttachments,
   detectKind,
   materializeHistory,
-  saveAttachments
+  materializeModelHistory,
+  saveAttachments,
+  sessionAttachmentsDir
 } from './attachments'
 import { createPlatform, type Platform } from './platform'
 
@@ -89,6 +93,36 @@ describe('saveAttachments', () => {
 
   it('non fa nulla senza allegati', async () => {
     expect(await saveAttachments(platform, 's', 'm', [])).toEqual([])
+  })
+})
+
+describe('deleteSessionAttachments', () => {
+  it('elimina tutta la cartella della sessione, non solo message/', async () => {
+    await saveAttachments(platform, 's3', 'm1', [
+      { name: 'uno.txt', mime: 'text/plain', kind: 'text', size: 1, data: 'x' }
+    ])
+    await saveAttachments(platform, 's3', 'm2', [
+      { name: 'due.txt', mime: 'text/plain', kind: 'text', size: 1, data: 'y' }
+    ])
+
+    expect(existsSync(sessionAttachmentsDir(platform, 's3'))).toBe(true)
+    await deleteSessionAttachments(platform, 's3')
+    expect(existsSync(sessionAttachmentsDir(platform, 's3'))).toBe(false)
+  })
+})
+
+describe('materializeModelHistory', () => {
+  it('converte le immagini in parti file per il modello', async () => {
+    const refs = await saveAttachments(platform, 's4', 'm1', [
+      { name: 'pixel.png', mime: 'image/png', kind: 'image', size: 68, data: PNG_DATA_URL }
+    ])
+
+    const [message] = await materializeModelHistory(platform, [
+      { role: 'user', content: 'guarda', attachments: refs }
+    ])
+    expect(Array.isArray(message?.content)).toBe(true)
+    const parts = message?.content as { type: string; mediaType?: string }[]
+    expect(parts.some((part) => part.type === 'file' && part.mediaType === 'image/png')).toBe(true)
   })
 })
 

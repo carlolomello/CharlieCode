@@ -306,13 +306,17 @@ export async function revertChange(
     return
   }
 
-  if (change.status === 'added' || change.status === 'renamed') {
+  // A file that only exists in the index has nothing to restore from HEAD: the
+  // old code removed it and then fell through to a failing `git restore`, so
+  // the UI reported an error even though the file was already gone.
+  if (change.status === 'added') {
     await git(workspace, ['restore', '--staged', '--', change.path])
-    await git(workspace, ['restore', '--source=HEAD', '--staged', '--worktree', '--', change.path])
-    if (change.status === 'added') await rm(absolute, { force: true })
+    await rm(absolute, { force: true })
+    return
   }
 
   if (change.status === 'renamed' && change.from) {
+    await git(workspace, ['restore', '--staged', '--', change.path])
     const restored = await git(workspace, [
       'restore',
       '--source=HEAD',

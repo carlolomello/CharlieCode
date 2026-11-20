@@ -1,14 +1,20 @@
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
 import { buildSystemPrompt, runAgent } from '../engine/agent'
 import { applyConfigPatch, type AppConfigPatch } from '../engine/app-config'
 import { selfKnowledgePrompt } from '../engine/self-knowledge'
 import { globalAgentsPath, loadProjectContext } from '../engine/agents'
-import { attachmentsDir, materializeHistory, saveAttachments } from '../engine/attachments'
+import {
+  deleteSessionAttachments,
+  materializeHistory,
+  materializeModelHistory,
+  saveAttachments
+} from '../engine/attachments'
 import { findModel, loadCatalog, pickDefaultModel } from '../engine/catalog'
 import { resetProviderCache } from '../engine/client'
 import {
@@ -28,7 +34,7 @@ import {
   readAgentContextStats,
   writeAgentContext
 } from '../engine/context-store'
-import { compactMessages, contextBudget } from '../engine/context'
+import { appendCurrentUser, compactMessages, contextBudget, stripImages } from '../engine/context'
 import {
   buildCliArgs,
   findBinary,
@@ -179,6 +185,46 @@ async function openExternalWithConsent(rawUrl: string): Promise<boolean> {
   return true
 }
 
+function isAppNavigation(rawUrl: string): boolean {
+  const devUrl = process.env.ELECTRON_RENDERER_URL
+  if (devUrl) {
+    try {
+      return new URL(rawUrl).origin === new URL(devUrl).origin
+    } catch {
+      return false
+    }
+  }
+  const appUrl = pathToFileURL(join(__dirname, '../renderer/index.html')).toString()
+  return rawUrl === appUrl || rawUrl.startsWith(`${appUrl}#`)
+}
+
+/**
+ * Every project path coming from the renderer must be one the user opened.
+ * `chat:start`, changes and onboarding used to trust it blindly.
+ */
+async function assertDirectory(path: unknown): Promise<string> {
+  if (typeof path !== 'string' || !path.trim()) throw new Error('Progetto mancante.')
+  const resolved = resolve(path)
+  const info = await stat(resolved).catch(() => undefined)
+  if (!info?.isDirectory()) throw new Error(`La cartella del progetto non esiste: ${path}`)
+  return resolved
+}
+
+async function assertWorkspace(path: unknown): Promise<string> {
+  if (typeof path !== 'string' || !path.trim()) throw new Error('Progetto mancante.')
+  const resolved = resolve(path)
+  const { config } = await loadConfig(platform)
+  const allowed = new Set(
+    [config.workspace, ...config.recentWorkspaces]
+      .filter((entry): entry is string => Boolean(entry))
+      .map((entry) => resolve(entry))
+  )
+  if (!allowed.has(resolved)) throw new Error('Progetto non valido o non aperto di recente.')
+  const info = await stat(resolved).catch(() => undefined)
+  if (!info?.isDirectory()) throw new Error(`La cartella del progetto non esiste: ${path}`)
+  return resolved
+}
+
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1320,
@@ -204,6 +250,28 @@ function createWindow(): BrowserWindow {
     void openExternalWithConsent(url)
     return { action: 'deny' }
   })
+
+  // A remote page loaded in this window would keep the preload bridge and
+  // could call chat:start, changes:revert or skills:install. Only our own app
+  // may navigate; links go to the browser, with consent.
+  window.webContents.on('will-navigate', (event, url) => {
+    if (isAppNavigation(url)) return
+    event.preventDefault()
+    void openExternalWithConsent(url)
+  })
+  window.webContents.on('will-attach-webview', (event) => {
+    event.preventDefault()
+  })
+
+  // The app needs no camera, microphone, geolocation or notifications. Copy
+  // still works: clipboard writes are the only permission we grant.
+  const allowedPermissions = new Set<string>(['clipboard-sanitized-write', 'clipboard-read'])
+  window.webContents.session.setPermissionRequestHandler(
+    (_contents, permission, callback) => callback(allowedPermissions.has(permission))
+  )
+  window.webContents.session.setPermissionCheckHandler((_contents, permission) =>
+    allowedPermissions.has(permission)
+  )
 
   window.webContents.on('did-finish-load', () => {
     console.log('[charliecode] renderer loaded')
@@ -271,8 +339,7 @@ async function modelContextBudget(modelKey?: string): Promise<number> {
 async function askUser(
   sender: Electron.WebContents,
   requestId: string,
-  request: PermissionRequest,
-  config: CharlieCodeConfig
+  request: PermissionRequest
 ): Promise<PermissionDecision> {
   if (sender.isDestroyed()) return 'deny'
 
@@ -294,6 +361,9 @@ async function askUser(
   })
 
   if (decision === 'allow-always') {
+    // Reload: the user may have changed a setting in the drawer while the turn
+    // was running, and saving the snapshot taken at the start would lose it.
+    const { config } = await loadConfig(platform)
     const next: CharlieCodeConfig = structuredClone(config)
     if (request.tool === 'bash' && request.command) {
       const prefix = request.command.trim().split(/\s+/).slice(0, 2).join(' ')
@@ -310,27 +380,37 @@ async function askUser(
 }
 
 function launchRuntime(id: 'freellmapi' | 'ollama'): boolean {
+  const label = id === 'freellmapi' ? 'FreeLLMAPI' : 'Ollama'
+  const track = (child: ReturnType<typeof spawn>): void => {
+    // Without this listener a missing binary emits an unhandled `error` and,
+    // on Linux, can take the whole app down.
+    child.on('error', (error) => {
+      console.error(`[charliecode] impossibile avviare ${label}:`, error)
+    })
+    child.unref()
+  }
+
   try {
     if (platform.id === 'darwin') {
-      const name = id === 'freellmapi' ? 'FreeLLMAPI' : 'Ollama'
-      const child = spawn('open', ['-a', name], { detached: true, stdio: 'ignore' })
-      child.unref()
+      track(spawn('open', ['-a', label], { detached: true, stdio: 'ignore' }))
       return true
     }
     if (platform.isWindows) {
       const command = id === 'freellmapi' ? 'FreeLLMAPI' : 'ollama'
-      const child = spawn('cmd.exe', ['/c', 'start', '', command], {
+      track(
+        spawn('cmd.exe', ['/c', 'start', '', command], {
+          detached: true,
+          stdio: 'ignore'
+        })
+      )
+      return true
+    }
+    track(
+      spawn(id === 'freellmapi' ? 'freellmapi' : 'ollama', ['serve'], {
         detached: true,
         stdio: 'ignore'
       })
-      child.unref()
-      return true
-    }
-    const child = spawn(id === 'freellmapi' ? 'freellmapi' : 'ollama', ['serve'], {
-      detached: true,
-      stdio: 'ignore'
-    })
-    child.unref()
+    )
     return true
   } catch {
     return false
@@ -339,7 +419,7 @@ function launchRuntime(id: 'freellmapi' | 'ollama'): boolean {
 
 function registerIpc(): void {
   ipcMain.handle('charliecode:info', async (): Promise<AppInfo> => {
-    const { config } = await loadConfig(platform)
+    const { config, recovered } = await loadConfig(platform)
     return {
       version: app.getVersion(),
       platform: platform.id,
@@ -350,7 +430,8 @@ function registerIpc(): void {
       workspacePath: config.workspace,
       recentWorkspaces: config.recentWorkspaces,
       defaultModel: config.defaultModel,
-      effort: config.effort
+      effort: config.effort,
+      ...(recovered ? { configRecovered: recovered } : {})
     }
   })
 
@@ -391,9 +472,13 @@ function registerIpc(): void {
     'charliecode:workspace:use',
     async (_event, path: string): Promise<{ path?: string }> => {
       if (!path) return {}
+      // `useWorkspace` is how a project enters the recent list (a session can
+      // point at a folder older than the last eight), so it checks that the
+      // folder exists. The dangerous handlers check the allow-list.
+      const valid = await assertDirectory(path)
       const { config } = await loadConfig(platform)
-      await saveConfig(platform, rememberWorkspace(config, path))
-      return { path }
+      await saveConfig(platform, rememberWorkspace(config, valid))
+      return { path: valid }
     }
   )
 
@@ -505,10 +590,11 @@ function registerIpc(): void {
    * turn is not overwritten by a stale snapshot.
    */
   const applyAgentConfig = async (
-    patch: AppConfigPatch
+    patch: AppConfigPatch,
+    validKeys?: string[]
   ): Promise<{ config: CharlieCodeConfig; path: string; summary: string }> => {
     const { config: current } = await loadConfig(platform)
-    const result = applyConfigPatch(current, patch)
+    const result = applyConfigPatch(current, patch, validKeys)
     const path = await saveConfig(platform, result.config)
     resetProviderCache()
     notifyModelsChanged()
@@ -803,7 +889,7 @@ hanno priorità su queste.
   ipcMain.handle('charliecode:sessions:delete', async (_event, id: string): Promise<boolean> => {
     const removed = await deleteSession(platform, id)
     await deleteAgentContext(platform, id)
-    await rm(attachmentsDir(platform, id, ''), { recursive: true, force: true }).catch(() => undefined)
+    await deleteSessionAttachments(platform, id).catch(() => undefined)
     return removed
   })
 
@@ -821,7 +907,7 @@ hanno priorità su queste.
       // Legacy sessions predate the sidecar: measure the transcript instead of
       // showing 0 tokens for a conversation that is clearly long.
       const fallback = session
-        ? await materializeHistory(platform, toChatHistory(session))
+        ? await materializeModelHistory(platform, toChatHistory(session))
         : []
       return readAgentContextStats(platform, sessionId, budget, fallback)
     }
@@ -833,7 +919,7 @@ hanno priorità su queste.
       const budget = await modelContextBudget(modelKey)
       const session = await readSession(platform, sessionId)
       const fallback = session
-        ? await materializeHistory(platform, toChatHistory(session))
+        ? await materializeModelHistory(platform, toChatHistory(session))
         : []
       return compactAgentContext(platform, sessionId, budget, fallback)
     }
@@ -849,8 +935,26 @@ hanno priorità su queste.
       event,
       payload: ChatStartPayload
     ): Promise<{ ok: boolean; error?: string; sessionId?: string }> => {
+      if (!payload || typeof payload.requestId !== 'string' || typeof payload.text !== 'string') {
+        return { ok: false, error: 'Richiesta non valida.' }
+      }
       if (inFlight.has(payload.requestId)) {
         return { ok: false, error: 'Richiesta già in corso' }
+      }
+      if (!payload.text.trim()) {
+        return { ok: false, error: 'Il messaggio è vuoto.' }
+      }
+      if (!Array.isArray(payload.attachments)) {
+        return { ok: false, error: 'Allegati non validi.' }
+      }
+      if (payload.effort && !['none', 'low', 'high', 'max'].includes(payload.effort)) {
+        return { ok: false, error: 'Livello di effort non valido.' }
+      }
+      if (
+        payload.maxOutputTokens !== undefined &&
+        (!Number.isFinite(payload.maxOutputTokens) || payload.maxOutputTokens <= 0)
+      ) {
+        return { ok: false, error: 'maxOutputTokens non valido.' }
       }
 
       const controller = new AbortController()
@@ -858,11 +962,40 @@ hanno priorità su queste.
       const sender = event.sender
 
       const { config } = await loadConfig(platform)
+      const existing = payload.sessionId ? await readSession(platform, payload.sessionId) : undefined
+
+      // The renderer is untrusted: only projects the user actually opened are
+      // accepted, so a remote page (or a bug) cannot point the agent at `~`.
+      const allowed = new Set(
+        [config.workspace, ...config.recentWorkspaces]
+          .filter((entry): entry is string => Boolean(entry))
+          .map((entry) => resolve(entry))
+      )
+      const requestedWorkspace = payload.workspacePath?.trim()
+      if (requestedWorkspace && !allowed.has(resolve(requestedWorkspace))) {
+        return {
+          ok: false,
+          error: 'Il progetto richiesto non è tra quelli aperti di recente. Riaprilo dal selettore.'
+        }
+      }
+      const sessionWorkspace =
+        existing?.workspacePath && allowed.has(resolve(existing.workspacePath))
+          ? existing.workspacePath
+          : undefined
+      const workspace = requestedWorkspace ?? sessionWorkspace ?? config.workspace
+      if (!workspace) {
+        return { ok: false, error: 'Apri un progetto prima di inviare un messaggio.' }
+      }
+      const workspaceInfo = await stat(workspace).catch(() => undefined)
+      if (!workspaceInfo?.isDirectory()) {
+        return { ok: false, error: `La cartella del progetto non esiste: ${workspace}` }
+      }
+
       const session =
-        (payload.sessionId ? await readSession(platform, payload.sessionId) : undefined) ??
+        existing ??
         (await createSession(platform, {
           id: payload.sessionId,
-          workspacePath: payload.workspacePath ?? config.workspace,
+          workspacePath: workspace,
           modelKey: payload.modelKey,
           effort: payload.effort ?? config.effort
         }))
@@ -895,7 +1028,7 @@ hanno priorità su queste.
       await updateSession(platform, session.id, {
         modelKey: payload.modelKey,
         effort: payload.effort ?? config.effort,
-        ...(payload.workspacePath ? { workspacePath: payload.workspacePath } : {})
+        workspacePath: workspace
       })
 
       void (async () => {
@@ -907,7 +1040,6 @@ hanno priorità su queste.
         let logs: ToolLog[] = []
         let fullHistory: import('ai').ModelMessage[] = []
         let newMessages: import('ai').ModelMessage[] | undefined
-        const workspace = payload.workspacePath ?? config.workspace
 
         // The answer is persisted while it streams, so a crash or a quit does
         // not lose ten minutes of work. Drafts and the final version share the
@@ -920,7 +1052,8 @@ hanno priorità su queste.
         const flushDraft = (): void => {
           if (!streamed.trim()) return
           const at = Date.now()
-          if (at - lastDraftAt < 1_500) return
+          // Rewriting the whole JSONL every 1.5s was O(n²) on long chats.
+          if (at - lastDraftAt < 5_000) return
           lastDraftAt = at
           const content = streamed
           draftChain = draftChain
@@ -974,10 +1107,19 @@ hanno priorità su queste.
         try {
           const stored = (await readSession(platform, session.id)) ?? session
           const savedContext = await readAgentContext(platform, session.id)
+          // The sidecar is written at the end of a turn, so it never contains
+          // the message that opens the next one: append it explicitly.
+          const currentUser = await materializeModelHistory(platform, [
+            {
+              role: 'user',
+              content: payload.text,
+              ...(attachmentRefs.length > 0 ? { attachments: attachmentRefs } : {})
+            }
+          ])
           fullHistory =
             savedContext.length > 0
-              ? savedContext
-              : await materializeHistory(platform, toChatHistory(stored))
+              ? appendCurrentUser(savedContext, currentUser)
+              : await materializeModelHistory(platform, toChatHistory(stored))
           const projectContext = await loadProjectContext(platform, workspace)
           const cliTarget = parseCliModelKey(payload.modelKey)
           const cliInfo = await cliStatus()
@@ -1041,15 +1183,10 @@ hanno priorità su queste.
                 emit({ type: 'error', message })
               }
 
-              // Import the CLI turn into the canonical context: the next
-              // native model must read it like any other turn.
-              const last = fullHistory[fullHistory.length - 1]
-              const alreadyUser =
-                last?.role === 'user' &&
-                typeof last.content === 'string' &&
-                last.content === payload.text
+              // Import the CLI turn into the canonical context: the current
+              // user message is already in `fullHistory`, so only the answer
+              // is new.
               newMessages = [
-                ...(alreadyUser ? [] : [{ role: 'user' as const, content: payload.text }]),
                 { role: 'assistant' as const, content: text || '(nessuna risposta)' }
               ]
             }
@@ -1067,10 +1204,13 @@ hanno priorità su queste.
             }
 
             // The model gets a fitted context; the sidecar keeps the full one.
+            // Images are dropped when the active model cannot see them, not
+            // left in the request to make the provider answer 400.
+            const vision = activeModel?.caps.vision ?? true
+            const fitted = vision ? fullHistory : stripImages(fullHistory)
             const budget = contextBudget(activeModel?.caps)
-            const history = compactMessages(fullHistory, { budget }).messages
-            const system =
-              payload.system ?? buildSystemPrompt(projectContext.system, workspace)
+            const history = compactMessages(fitted, { budget }).messages
+            const system = buildSystemPrompt(projectContext.system, workspace)
             const routing = await readRouting(workspace, platform.homeDir)
 
             const result = await runAgent(
@@ -1079,7 +1219,7 @@ hanno priorità su queste.
                 messages: [],
                 system,
                 effort: payload.effort,
-                maxOutputTokens: payload.maxOutputTokens,
+                maxOutputTokens: Math.min(payload.maxOutputTokens ?? 4096, 32_000),
                 signal: controller.signal,
                 mode: payload.mode ?? 'build',
                 ...(payload.team ? { team: true } : {})
@@ -1090,14 +1230,14 @@ hanno priorità su queste.
                 models,
                 cliProfiles: cliInfo.profiles,
                 workspace,
+                projectContext: projectContext.system,
                 modelMessages: history,
                 maxSteps: config.agents.maxSteps,
                 subagentMaxSteps: config.agents.subagentMaxSteps,
                 routing,
                 appVersion: app.getVersion(),
                 applyConfig: applyAgentConfig,
-                askPermission: (request) =>
-                  askUser(sender, payload.requestId, request, config),
+                askPermission: (request) => askUser(sender, payload.requestId, request),
                 emit
               }
             )
@@ -1139,10 +1279,13 @@ hanno priorità su queste.
               meta,
               ...(logs.length > 0 ? { tools: logs } : {})
             })
-            if (newMessages) {
-              // Persist the *full* history, not the compacted one the model
-              // saw: compaction is a read-time view and must stay reversible.
-              await writeAgentContext(platform, session.id, [...fullHistory, ...newMessages])
+            // Persist the *full* history, not the compacted one the model saw:
+            // compaction is a read-time view and must stay reversible. The
+            // sidecar is written even when the turn produced no assistant
+            // message, so the next turn still starts from the real context.
+            const persisted = newMessages ?? []
+            if (fullHistory.length > 0 || persisted.length > 0) {
+              await writeAgentContext(platform, session.id, [...fullHistory, ...persisted])
             }
             const saved = await readSession(platform, session.id)
             if (!sender.isDestroyed()) {
@@ -1261,13 +1404,13 @@ hanno priorità su queste.
   ipcMain.handle(
     'charliecode:onboarding:facts',
     async (_event, workspace: string): Promise<OnboardingFacts> =>
-      inspectProject(platform, workspace)
+      inspectProject(platform, await assertWorkspace(workspace))
   )
 
   ipcMain.handle(
     'charliecode:onboarding:preview',
     async (_event, payload: { workspace: string; answers: OnboardingAnswers }) =>
-      planOnboarding(platform, payload.workspace, payload.answers)
+      planOnboarding(platform, await assertWorkspace(payload.workspace), payload.answers)
   )
 
   ipcMain.handle(
@@ -1276,7 +1419,11 @@ hanno priorità su queste.
       _event,
       payload: { workspace: string; apply: OnboardingApplyPayload }
     ): Promise<OnboardingResult> => {
-      const result = await applyOnboarding(platform, payload.workspace, payload.apply)
+      const result = await applyOnboarding(
+        platform,
+        await assertWorkspace(payload.workspace),
+        payload.apply
+      )
       if (result.autoApprove.length > 0) {
         const { config } = await loadConfig(platform)
         const merged = [...new Set([...config.agents.autoApproveCommands, ...result.autoApprove])]
@@ -1290,25 +1437,33 @@ hanno priorità su queste.
   )
 
   ipcMain.handle('charliecode:onboarding:skip', async (_event, workspace: string): Promise<void> => {
-    await skipOnboarding(workspace)
+    await skipOnboarding(await assertWorkspace(workspace))
   })
 
   /* ----------------------------- changes ---------------------------- */
 
   ipcMain.handle(
     'charliecode:changes:list',
-    async (_event, workspace: string): Promise<WorkspaceChanges> => listChanges(workspace)
+    async (_event, workspace: string): Promise<WorkspaceChanges> => {
+      const valid = await assertWorkspace(workspace)
+      return listChanges(valid)
+    }
   )
 
   ipcMain.handle(
     'charliecode:changes:init',
-    async (_event, workspace: string): Promise<WorkspaceChanges> => initRepository(workspace)
+    async (_event, workspace: string): Promise<WorkspaceChanges> => {
+      const valid = await assertWorkspace(workspace)
+      return initRepository(valid)
+    }
   )
 
   ipcMain.handle(
     'charliecode:changes:diff',
-    async (_event, payload: { workspace: string; path: string }) =>
-      changeDiff(payload.workspace, payload.path)
+    async (_event, payload: { workspace: string; path: string }) => {
+      const valid = await assertWorkspace(payload.workspace)
+      return changeDiff(valid, payload.path)
+    }
   )
 
   ipcMain.handle(
@@ -1317,15 +1472,17 @@ hanno priorità su queste.
       _event,
       payload: { workspace: string; change: WorkspaceChange }
     ): Promise<WorkspaceChanges> => {
-      await revertChange(payload.workspace, payload.change)
-      return listChanges(payload.workspace)
+      const valid = await assertWorkspace(payload.workspace)
+      await revertChange(valid, payload.change)
+      return listChanges(valid)
     }
   )
 
   ipcMain.handle(
     'charliecode:file:open',
     async (_event, payload: { workspace: string; path: string }): Promise<void> => {
-      const target = workspacePath(payload.workspace, payload.path)
+      const valid = await assertWorkspace(payload.workspace)
+      const target = workspacePath(valid, payload.path)
       const error = await shell.openPath(target)
       if (error) throw new Error(error)
     }

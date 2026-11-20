@@ -141,6 +141,9 @@ export default function App() {
   const [input, setInput] = useState('')
   const [streamingId, setStreamingId] = useState<string | null>(null)
   const [fatal, setFatal] = useState<string | null>(null)
+  /** Incremented whenever the visible conversation changes: stale async work
+   *  (a late `chat:session`, a slow `loadSession`) must not touch the new one. */
+  const viewEpoch = useRef(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [keyDrafts, setKeyDrafts] = useState<Record<string, string>>({})
   const [newProvider, setNewProvider] = useState({ id: '', label: '', baseUrl: '' })
@@ -443,7 +446,8 @@ export default function App() {
     })
 
     const unsubscribeSession = window.charliecode.onChatSession(({ sessionId: id, title }) => {
-      setSessionId((current) => current ?? id)
+      // The result of `startChat` already set the id. A late event for an old
+      // request must not attach the new chat to the old session.
       setSessions((previous) => {
         const existing = previous.find((session) => session.id === id)
         if (!existing) return previous
@@ -748,6 +752,7 @@ export default function App() {
   }, [models])
 
   const startNewChat = useCallback((): void => {
+    viewEpoch.current += 1
     // Leaving a running turn in the background would keep burning tokens (and
     // writing) in a chat the user can no longer see.
     if (streamingId) void window.charliecode.stopChat(streamingId)
@@ -812,6 +817,7 @@ export default function App() {
   }, [refreshSessions, startNewChat])
 
   const openSession = useCallback(async (id: string): Promise<void> => {
+    const epoch = ++viewEpoch.current
     // One conversation at a time: stop the previous turn before swapping the
     // transcript, otherwise its events would land in the wrong chat.
     if (streamingId) {
@@ -830,7 +836,19 @@ export default function App() {
     setLoadingSession(true)
     try {
       const session: Session | null = await window.charliecode.loadSession(id)
-      if (!session) return
+      if (!session || epoch !== viewEpoch.current) return
+
+      // A saved chat can belong to another project: open that project too, or
+      // the drawer, skills, routing and memory keep pointing at the old one.
+      if (session.workspacePath && session.workspacePath !== workspace) {
+        const result = await window.charliecode.useWorkspace(session.workspacePath)
+        if (epoch !== viewEpoch.current) return
+        if (result.path) {
+          setWorkspace(result.path)
+          setInfo(await window.charliecode.info())
+        }
+      }
+
       setSessionId(session.id)
       setItems(session.messages.map((message) => ({ ...message, pending: false })))
       if (session.modelKey) {
@@ -845,11 +863,16 @@ export default function App() {
         }
       }
       setEffort(session.effort)
-      if (session.workspacePath) setWorkspace(session.workspacePath)
+    } catch (cause) {
+      // A saved chat can point at a folder the user moved or deleted. Say so
+      // instead of leaving an unhandled rejection from the click handler.
+      if (epoch === viewEpoch.current) {
+        setFatal(cause instanceof Error ? cause.message : String(cause))
+      }
     } finally {
-      setLoadingSession(false)
+      if (epoch === viewEpoch.current) setLoadingSession(false)
     }
-  }, [streamingId])
+  }, [streamingId, workspace])
 
   const removeSession = useCallback(
     async (id: string): Promise<void> => {
@@ -927,7 +950,12 @@ export default function App() {
       const isOverride = overrideText !== undefined
       const sentAttachments = isOverride ? [] : attachments
       if ((!text && sentAttachments.length === 0) || streamingId || !modelKey) return
+      if (!workspace) {
+        setFatal('Apri un progetto prima di inviare un messaggio.')
+        return
+      }
       const activeMode = overrideMode ?? mode
+      const epoch = viewEpoch.current
 
       const requestId = crypto.randomUUID()
       const userMessageId = crypto.randomUUID()
@@ -996,6 +1024,7 @@ export default function App() {
           : {})
       })
 
+      if (epoch !== viewEpoch.current) return
       if (!result.ok) {
         setItems((previous) =>
           previous.map((item) =>
@@ -1010,6 +1039,7 @@ export default function App() {
 
       if (result.sessionId) setSessionId(result.sessionId)
     } catch (error) {
+      if (epoch !== viewEpoch.current) return
       const message = error instanceof Error ? error.message : String(error)
       setItems((previous) =>
         previous.map((item) =>
@@ -1351,6 +1381,13 @@ export default function App() {
         )}
 
         {fatal && <div className="banner error">{fatal}</div>}
+
+        {info?.configRecovered && (
+          <div className="banner warn">
+            Config non valida: ho salvato un backup in <code>{info.configRecovered}</code> e sono
+            ripartito dai default.
+          </div>
+        )}
 
         <main
           className="scroll"

@@ -1,12 +1,14 @@
 import type { ModelMessage } from 'ai'
 import { describe, expect, it } from 'vitest'
 import {
+  appendCurrentUser,
   buildSummary,
   compactMessages,
   contextBudget,
   contextStats,
   estimateMessagesTokens,
   estimateTokens,
+  stripImages,
   trimToolOutputs
 } from './context'
 
@@ -61,6 +63,68 @@ function resultIds(messages: ModelMessage[]): string[] {
   }
   return ids
 }
+
+describe('appendCurrentUser', () => {
+  it('aggiunge il messaggio del turno corrente al contesto salvato', () => {
+    const saved: ModelMessage[] = [
+      { role: 'user', content: 'prima richiesta' },
+      { role: 'assistant', content: 'prima risposta' }
+    ]
+
+    const next = appendCurrentUser(saved, [{ role: 'user', content: 'seconda richiesta' }])
+    expect(next).toHaveLength(3)
+    expect(next[2]).toEqual({ role: 'user', content: 'seconda richiesta' })
+  })
+
+  it('non duplica un retry identico', () => {
+    const saved: ModelMessage[] = [{ role: 'user', content: 'ciao' }]
+    expect(appendCurrentUser(saved, [{ role: 'user', content: 'ciao' }])).toHaveLength(1)
+  })
+
+  it('considera diversi due messaggi con lo stesso testo ma allegati diversi', () => {
+    const saved: ModelMessage[] = [{ role: 'user', content: 'guarda' }]
+    const current = [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'guarda' },
+          { type: 'file', mediaType: 'image/png', data: { type: 'data', data: 'AAAA' } }
+        ]
+      }
+    ] as unknown as ModelMessage[]
+
+    expect(appendCurrentUser(saved, current)).toHaveLength(2)
+  })
+})
+
+describe('stripImages', () => {
+  it('toglie i file immagine e lascia il testo', () => {
+    const messages = [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'guarda questo screenshot' },
+          { type: 'file', mediaType: 'image/png', data: { type: 'data', data: 'AAAA' } }
+        ]
+      }
+    ] as unknown as ModelMessage[]
+
+    const result = stripImages(messages)
+    expect(JSON.stringify(result)).not.toContain('image/png')
+    expect(JSON.stringify(result)).toContain('guarda questo screenshot')
+  })
+
+  it('sostituisce un messaggio di sole immagini con una nota', () => {
+    const messages = [
+      {
+        role: 'user',
+        content: [{ type: 'file', mediaType: 'image/jpeg', data: { type: 'data', data: 'AAAA' } }]
+      }
+    ] as unknown as ModelMessage[]
+
+    expect(JSON.stringify(stripImages(messages))).toContain('immagine omessa')
+  })
+})
 
 describe('estimateTokens', () => {
   it('stima il testo latino a circa 4 caratteri per token', () => {

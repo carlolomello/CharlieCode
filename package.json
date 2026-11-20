@@ -6,6 +6,7 @@
   "author": "carlolomello",
   "license": "Apache-2.0",
   "private": true,
+  "packageManager": "pnpm@9.15.9",
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "build": "electron-vite build",

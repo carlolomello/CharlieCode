@@ -1,13 +1,15 @@
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
+import { lookup } from 'node:dns/promises'
+import { isIP } from 'node:net'
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
 import { tool } from 'ai'
 import { z } from 'zod'
 import { createDiff } from './diff'
 import { isExclusiveCommand, withExclusive } from './exclusive'
 import { suggestSetup } from './advisor'
-import { rememberNote } from './plugins'
+import { applyRememberPlan, planRememberNote } from './plugins'
 import { listSkills, readSkill } from './skills'
 import { detectEol, type Platform } from './platform'
 import { resolveApiKey } from './config'
@@ -98,7 +100,7 @@ export interface ToolRuntime {
    * Persists an already-validated patch. Provided by main, which reloads the
    * config, saves it and notifies the renderer. Absent for CLI backends.
    */
-  applyConfig?: (patch: AppConfigPatch) => Promise<{
+  applyConfig?: (patch: AppConfigPatch, validKeys?: string[]) => Promise<{
     config: CharlieCodeConfig
     path: string
     summary: string
@@ -224,6 +226,44 @@ async function permission(
 }
 
 /**
+ * Resolves symlinks before deciding whether a path is inside the project. The
+ * old check was lexical: `docs/notes` could be a symlink to `~/.ssh` and the
+ * read was auto-approved. For a file that does not exist yet we resolve the
+ * nearest existing parent, so a new file cannot be created through a symlink.
+ */
+async function realInsideProject(runtime: ToolRuntime, abs: string): Promise<boolean> {
+  try {
+    const root = await realpath(runtime.workspace)
+    let probe = abs
+    for (let depth = 0; depth < 64; depth += 1) {
+      try {
+        const real = await realpath(probe)
+        return real === root || real.startsWith(`${root}${sep}`)
+      } catch {
+        const parent = dirname(probe)
+        if (parent === probe) return false
+        probe = parent
+      }
+    }
+    return false
+  } catch {
+    return false
+  }
+}
+
+/** The agent must never be able to read or overwrite its own API keys. */
+async function isSensitivePath(runtime: ToolRuntime, abs: string): Promise<boolean> {
+  const lexical = resolve(runtime.platform.configPath('credentials.json'))
+  const credentials = await realpath(lexical).catch(() => lexical)
+  if (resolve(abs) === credentials) return true
+  try {
+    return (await realpath(abs)) === credentials
+  } catch {
+    return false
+  }
+}
+
+/**
  * Reading outside the project is never silent: `read` and friends are in the
  * default auto-approve list, so this gate deliberately bypasses it. A prompt
  * injection in a project file must not be able to read `~/.ssh`.
@@ -233,7 +273,7 @@ async function ensureInsideProject(
   target: ResolvedPath,
   action = 'Leggere'
 ): Promise<void> {
-  if (!target.outside) return
+  if (!target.outside && (await realInsideProject(runtime, target.abs))) return
   await permission(
     runtime,
     {
@@ -244,6 +284,17 @@ async function ensureInsideProject(
     },
     { force: true }
   )
+}
+
+/**
+ * A model-supplied regex can backtrack catastrophically and block the main
+ * process (and the UI) for minutes. Nested quantifiers are the usual culprit;
+ * refusing them is cheaper than a worker and covers the realistic cases.
+ */
+const RISKY_REGEX = /(\([^)]*[+*][^)]*\)[+*])|(\[[^\]]*\][+*][+*])/
+
+export function isRiskyRegex(pattern: string): boolean {
+  return pattern.length > 500 || RISKY_REGEX.test(pattern)
 }
 
 export class DeniedError extends Error {
@@ -406,6 +457,9 @@ export function buildTools(runtime: ToolRuntime) {
     }),
     run: async ({ path, offset, limit }) => {
       const target = resolveWorkspacePath(runtime, path)
+      if (await isSensitivePath(runtime, target.abs)) {
+        throw new Error('Le credenziali di CharlieCode non sono accessibili dall’agente.')
+      }
       await ensureInsideProject(runtime, target)
       const info = await stat(target.abs).catch(() => undefined)
       if (!info?.isFile()) throw new Error(`File non trovato: ${target.rel}`)
@@ -502,6 +556,9 @@ export function buildTools(runtime: ToolRuntime) {
     run: async ({ pattern, path, include, ignoreCase }) => {
       const root = resolveWorkspacePath(runtime, path ?? '.')
       await ensureInsideProject(runtime, root, 'Cercare')
+      if (isRiskyRegex(pattern)) {
+        throw new Error('Regex troppo complessa: usa un pattern più semplice e specifico.')
+      }
       let regex: RegExp
       try {
         regex = new RegExp(pattern, ignoreCase ? 'i' : '')
@@ -541,8 +598,11 @@ export function buildTools(runtime: ToolRuntime) {
         const lines = content.split(/\r?\n/)
         const hits: string[] = []
         for (let index = 0; index < lines.length; index++) {
-          if (!regex.test(lines[index]!)) continue
-          hits.push(`${rel}:${index + 1}:${lines[index]!.slice(0, 240)}`)
+          // Long minified lines are where a simple regex explodes: cap the
+          // input instead of letting the engine scan a megabyte of JSX.
+          const line = lines[index]!.slice(0, 2_000)
+          if (!regex.test(line)) continue
+          hits.push(`${rel}:${index + 1}:${line.slice(0, 240)}`)
         }
         return hits
       }
@@ -576,7 +636,12 @@ export function buildTools(runtime: ToolRuntime) {
       content: z.string().describe('Contenuto completo del file')
     }),
     run: async ({ path, content }) => {
+      if (runtime.readOnly) throw new Error('Modalità piano: non posso scrivere file.')
       const target = resolveWorkspacePath(runtime, path)
+      if (await isSensitivePath(runtime, target.abs)) {
+        throw new Error('Le credenziali di CharlieCode non sono accessibili dall’agente.')
+      }
+      const outside = target.outside || !(await realInsideProject(runtime, target.abs))
       const before = existsSync(target.abs) ? await readFile(target.abs, 'utf8').catch(() => '') : ''
       // Rewriting a CRLF file with LF turns a one-line change into a whole-file
       // diff. Preserve what the file already uses; new files keep the model's
@@ -588,13 +653,17 @@ export function buildTools(runtime: ToolRuntime) {
           : content.replace(/\r?\n/g, '\r\n')
       const diff = createDiff(target.abs, before, next, target.rel)
 
-      await permission(runtime, {
-        tool: 'write',
-        title: `Scrivere ${target.rel}`,
-        detail: before ? `Sovrascrive ${describeSize(before.length)} esistenti.` : 'Crea un nuovo file.',
-        risk: target.outside ? 'high' : 'medium',
-        diff
-      })
+      await permission(
+        runtime,
+        {
+          tool: 'write',
+          title: `Scrivere ${target.rel}`,
+          detail: before ? `Sovrascrive ${describeSize(before.length)} esistenti.` : 'Crea un nuovo file.',
+          risk: outside ? 'high' : 'medium',
+          diff
+        },
+        { force: outside }
+      )
 
       await mkdir(dirname(target.abs), { recursive: true })
       await writeFile(target.abs, next, 'utf8')
@@ -618,7 +687,12 @@ export function buildTools(runtime: ToolRuntime) {
       replaceAll: z.boolean().optional()
     }),
     run: async ({ path, oldString, newString, replaceAll }) => {
+      if (runtime.readOnly) throw new Error('Modalità piano: non posso modificare file.')
       const target = resolveWorkspacePath(runtime, path)
+      if (await isSensitivePath(runtime, target.abs)) {
+        throw new Error('Le credenziali di CharlieCode non sono accessibili dall’agente.')
+      }
+      const outside = target.outside || !(await realInsideProject(runtime, target.abs))
       if (!existsSync(target.abs)) throw new Error(`File non trovato: ${target.rel}`)
       const before = await readFile(target.abs, 'utf8')
 
@@ -633,13 +707,17 @@ export function buildTools(runtime: ToolRuntime) {
         : before.replace(oldString, newString)
       const diff = createDiff(target.abs, before, after, target.rel)
 
-      await permission(runtime, {
-        tool: 'edit',
-        title: `Modificare ${target.rel}`,
-        detail: `${occurrences} sostituzione${occurrences === 1 ? '' : 'i'}.`,
-        risk: target.outside ? 'high' : 'medium',
-        diff
-      })
+      await permission(
+        runtime,
+        {
+          tool: 'edit',
+          title: `Modificare ${target.rel}`,
+          detail: `${occurrences} sostituzione${occurrences === 1 ? '' : 'i'}.`,
+          risk: outside ? 'high' : 'medium',
+          diff
+        },
+        { force: outside }
+      )
 
       await writeFile(target.abs, after, 'utf8')
       return {
@@ -919,11 +997,12 @@ export function buildTools(runtime: ToolRuntime) {
               tool: 'config',
               title: 'Configurare CharlieCode',
               detail: preview.changes.join('\n'),
-              risk: 'medium',
+              // A remote base URL or a blocked auto-approval is not routine.
+              risk: preview.changes.some((change) => change.startsWith('⚠')) ? 'high' : 'medium',
               diff
             })
 
-            const saved = await runtime.applyConfig(patch)
+            const saved = await runtime.applyConfig(patch, validKeys)
             const summary = saved.summary.trim() || preview.changes.join('\n')
             return {
               output: [
@@ -994,7 +1073,22 @@ function pluginTools(runtime: ToolRuntime): Record<string, unknown> {
         note: z.string().min(3).describe('La nota da ricordare, autonoma e concisa')
       }),
       run: async ({ note }) => {
-        const path = await rememberNote(runtime.workspace, note)
+        if (runtime.readOnly) throw new Error('Modalità piano: non posso modificare la memoria.')
+        const plan = await planRememberNote(runtime.workspace, note)
+        const diff = createDiff(
+          plan.path,
+          plan.before,
+          plan.after,
+          relative(runtime.workspace, plan.path)
+        )
+        await permission(runtime, {
+          tool: 'remember',
+          title: 'Aggiornare la memoria del progetto',
+          detail: note,
+          risk: 'low',
+          diff
+        })
+        const path = await applyRememberPlan(plan)
         return {
           output: `Nota salvata in ${relative(runtime.workspace, path)}`,
           summary: 'memoria del progetto aggiornata'
@@ -1048,6 +1142,60 @@ function pluginTools(runtime: ToolRuntime): Record<string, unknown> {
 
 const MAX_FETCH_BYTES = 600_000
 
+/** True for loopback, link-local, private, CGNAT and multicast addresses. */
+export function isPrivateAddress(address: string): boolean {
+  const value = address.trim().toLowerCase()
+  const version = isIP(value)
+  if (version === 4) {
+    const parts = value.split('.').map(Number)
+    if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part))) return true
+    const [a, b] = parts as [number, number, number, number]
+    return (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 192 && b === 0) ||
+      (a === 198 && (b === 18 || b === 19)) ||
+      a >= 224
+    )
+  }
+  if (version === 6) {
+    if (value === '::' || value === '::1') return true
+    if (value.startsWith('fc') || value.startsWith('fd')) return true
+    if (/^fe[89ab]/.test(value)) return true
+    if (value.startsWith('::ffff:')) return isPrivateAddress(value.slice(7))
+    return false
+  }
+  return true
+}
+
+async function assertPublicUrl(url: URL): Promise<void> {
+  // Opt-out for local documentation during development.
+  if (process.env.CHARLIECODE_ALLOW_LOCAL_FETCH === '1') return
+  const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase()
+  if (
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host.endsWith('.local') ||
+    host.endsWith('.internal')
+  ) {
+    throw new Error(`Host non pubblico: ${host}.`)
+  }
+  if (isIP(host)) {
+    if (isPrivateAddress(host)) throw new Error(`Host non pubblico: ${host}.`)
+    return
+  }
+  const addresses = await lookup(host, { all: true }).catch(() => [])
+  if (addresses.length === 0) throw new Error(`Host non risolvibile: ${host}.`)
+  if (addresses.some((entry) => isPrivateAddress(entry.address))) {
+    throw new Error(`Host non pubblico: ${host}.`)
+  }
+}
+
 /** GET a URL and flatten HTML into something a model can read. */
 export async function fetchAsText(
   rawUrl: string,
@@ -1069,15 +1217,33 @@ export async function fetchAsText(
   signal?.addEventListener('abort', onAbort)
 
   try {
-    const response = await fetch(url, {
-      redirect: 'follow',
-      signal: controller.signal,
-      headers: {
-        'user-agent': 'CharlieCode/0.0 (agent)',
-        accept: 'text/html,text/plain,application/json;q=0.9,*/*;q=0.5'
+    // Redirects are followed by hand: `redirect: 'follow'` would let a public
+    // URL bounce to 127.0.0.1 or to the cloud metadata endpoint.
+    let response: Response | undefined
+    let current = url
+    for (let hop = 0; hop < 5; hop += 1) {
+      await assertPublicUrl(current)
+      response = await fetch(current, {
+        redirect: 'manual',
+        signal: controller.signal,
+        headers: {
+          'user-agent': 'CharlieCode/0.0 (agent)',
+          accept: 'text/html,text/plain,application/json;q=0.9,*/*;q=0.5'
+        }
+      })
+      if (response.status < 300 || response.status >= 400) break
+      const location = response.headers.get('location')
+      if (!location) throw new Error(`Redirect senza Location da ${current.hostname}.`)
+      const next = new URL(location, current)
+      if (next.protocol !== 'http:' && next.protocol !== 'https:') {
+        throw new Error('Redirect verso un protocollo non ammesso.')
       }
-    })
-    if (!response.ok) throw new Error(`HTTP ${response.status} da ${url.hostname}.`)
+      current = next
+    }
+    if (!response || (response.status >= 300 && response.status < 400)) {
+      throw new Error('Troppi redirect.')
+    }
+    if (!response.ok) throw new Error(`HTTP ${response.status} da ${current.hostname}.`)
 
     const raw = await response.text()
     const body = raw.length > MAX_FETCH_BYTES ? raw.slice(0, MAX_FETCH_BYTES) : raw

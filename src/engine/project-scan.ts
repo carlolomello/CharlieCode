@@ -162,7 +162,8 @@ export function detectCommands(
   for (const name of ['typecheck', 'lint', 'test', 'build', 'format']) {
     if (scripts[name]) commands.push(`${manager} ${name}`)
   }
-  if (commands.length === 0 && pkg) commands.push(`${manager} test`)
+  // A package.json without a test script cannot run `npm test`: suggesting it
+  // was worse than suggesting nothing at all.
 
   if (files.some((f) => f.endsWith('pyproject.toml') || f.endsWith('pytest.ini'))) {
     commands.push('pytest -q')

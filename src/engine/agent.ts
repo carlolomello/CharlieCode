@@ -32,6 +32,8 @@ export interface AgentDeps {
   workspace?: string
   /** Full model context from a previous turn, when available. */
   modelMessages?: ModelMessage[]
+  /** Project rules from AGENTS.md, shared with subagents. */
+  projectContext?: string
   askPermission: (request: PermissionRequest) => Promise<PermissionDecision>
   emit: (event: EngineEvent) => void
   maxSteps?: number
@@ -41,7 +43,7 @@ export interface AgentDeps {
   /** Version shown by the self-knowledge tool. */
   appVersion?: string
   /** Saves a validated app-config patch; absent for CLI backends. */
-  applyConfig?: (patch: AppConfigPatch) => Promise<{
+  applyConfig?: (patch: AppConfigPatch, validKeys?: string[]) => Promise<{
     config: CharlieCodeConfig
     path: string
     summary: string
@@ -163,6 +165,23 @@ export async function runAgent(
 ): Promise<AgentResult> {
   const depth = options.depth ?? 0
   const modelKey = options.modelKey ?? request.modelKey
+  if (!deps.workspace) {
+    // Falling back to `process.cwd()` made the agent operate on the Electron
+    // app directory (or the CLI's home) without telling anyone.
+    const message = 'Nessun progetto aperto: scegli una cartella prima di usare l’agente.'
+    deps.emit({ type: 'error', message })
+    return {
+      text: '',
+      modelKey,
+      messages: [],
+      newMessages: [],
+      steps: 0,
+      toolCalls: 0,
+      aborted: false,
+      error: message
+    }
+  }
+  const workspace = deps.workspace
   const planMode = (request.mode ?? 'build') === 'plan'
   const plugins = enabledPluginIds(deps.config)
   // Plan mode never gets a writing tool, even if a caller passes one.
@@ -187,6 +206,9 @@ export async function runAgent(
       : ''
   const systemPrompt = [
     options.system ?? request.system,
+    // Project rules are part of the main prompt already; a subagent starts from
+    // a clean context, so it needs them too.
+    depth > 0 ? deps.projectContext ?? '' : '',
     selfPrompt,
     pluginPrompt,
     skillsPrompt,
@@ -262,7 +284,7 @@ export async function runAgent(
 
     const runtime: ToolRuntime = {
       platform: deps.platform,
-      workspace: deps.workspace ?? process.cwd(),
+      workspace,
       signal: request.signal,
       depth,
       ...(options.agentId ? { agentId: options.agentId } : {}),
@@ -358,7 +380,7 @@ export async function runAgent(
 
         const allow =
           role === 'explorer' || role === 'reviewer'
-            ? ['read', 'ls', 'glob', 'grep']
+            ? ['read', 'ls', 'glob', 'grep', 'skill']
             : undefined
 
         const started = Date.now()
@@ -376,7 +398,7 @@ export async function runAgent(
                 // Reading is always allowed; writing only for an implementer.
                 ...(planMode || role !== 'implementer' ? { plan: true } : {}),
                 auto: target.auto && !planMode && role === 'implementer',
-                workspace: deps.workspace ?? deps.platform.homeDir
+                workspace
               },
               {
                 home: deps.platform.homeDir,
@@ -431,8 +453,8 @@ export async function runAgent(
               agentName: name,
               ...(allow ? { allow } : {}),
               system: `${SUBAGENT_PROMPTS[role] ?? SUBAGENT_PROMPTS.explorer!}\n\nProgetto: ${
-                deps.workspace ?? '(nessuna cartella)'
-              }`
+                workspace
+              }${deps.projectContext ? `\n\n${deps.projectContext}` : ''}`
             }
           )
 

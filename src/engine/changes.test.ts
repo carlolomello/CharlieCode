@@ -88,6 +88,20 @@ describe('changes', () => {
     expect((await listChanges(repo)).changes).toHaveLength(0)
   })
 
+  it('reverts a staged new file without failing after the delete', async () => {
+    await writeFile(join(repo, 'new.ts'), 'nuovo\n', 'utf8')
+    await git(['add', 'new.ts'])
+
+    const before = await listChanges(repo)
+    expect(before.changes.find((change) => change.path === 'new.ts')?.status).toBe('added')
+
+    await expect(
+      revertChange(repo, { path: 'new.ts', status: 'added' })
+    ).resolves.toBeUndefined()
+    expect(existsSync(join(repo, 'new.ts'))).toBe(false)
+    expect((await listChanges(repo)).changes).toHaveLength(0)
+  })
+
   it('handles a rename', async () => {
     await git(['mv', 'b.ts', 'c.ts'])
 

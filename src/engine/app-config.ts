@@ -15,6 +15,30 @@ import type { AgentSettings, CharlieCodeConfig, EffortLevel, ModelOverride } fro
 
 export const EFFORT_LEVELS: EffortLevel[] = ['none', 'low', 'high', 'max']
 
+/**
+ * Tools that always need an explicit confirmation. A model-writable setting
+ * must never be able to turn off the gate on writes or commands: that is the
+ * difference between "configure the app" and "give me a permanent backdoor".
+ */
+const ALWAYS_CONFIRM_TOOLS = new Set(['bash', 'write', 'edit', 'config', 'remember'])
+
+function isLocalHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  return (
+    host === 'localhost' ||
+    host === '127.0.0.1' ||
+    host === '::1' ||
+    host === '0.0.0.0' ||
+    host.endsWith('.localhost') ||
+    /^10\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+    host.startsWith('fe80') ||
+    host.startsWith('fc') ||
+    host.startsWith('fd')
+  )
+}
+
 export interface AppConfigPatch {
   /** Native model key (`provider::model`); null clears the default. */
   defaultModel?: string | null
@@ -229,7 +253,14 @@ export function applyConfigPatch(
     }
 
     if (patch.agents.autoApprove !== undefined) {
-      const list = uniqueStrings(patch.agents.autoApprove, 'agents.autoApprove')
+      const requested = uniqueStrings(patch.agents.autoApprove, 'agents.autoApprove')
+      const blocked = requested.filter((tool) => ALWAYS_CONFIRM_TOOLS.has(tool))
+      const list = requested.filter((tool) => !ALWAYS_CONFIRM_TOOLS.has(tool))
+      if (blocked.length > 0) {
+        changes.push(
+          `⚠ ${blocked.join(', ')} restano sempre confermati: non possono essere auto-approvati dalla configurazione.`
+        )
+      }
       if (!sameList(list, agents.autoApprove)) {
         changes.push(`tool auto-approvati: ${showList(agents.autoApprove)} → ${showList(list)}`)
         agents.autoApprove = list
@@ -301,8 +332,21 @@ export function applyConfigPatch(
           throw new Error(`providers["${entry.id}"].baseUrl deve iniziare con http:// o https://.`)
         }
         const baseUrl = entry.baseUrl.trim().replace(/\/+$/, '')
+        let parsed: URL
+        try {
+          parsed = new URL(baseUrl)
+        } catch {
+          throw new Error(`providers["${entry.id}"].baseUrl non è un URL valido.`)
+        }
         if (provider.baseUrl !== baseUrl) {
           changes.push(`provider ${entry.id}: base URL ${provider.baseUrl} → ${baseUrl}`)
+          if (!isLocalHost(parsed.hostname)) {
+            // The saved API key follows the base URL. Moving it to a remote
+            // host is a decision the user must see before approving the diff.
+            changes.push(
+              `⚠ provider ${entry.id}: la nuova base URL è remota (${parsed.hostname}). La API key salvata verrà inviata a quell'host: conferma solo se è il tuo endpoint.`
+            )
+          }
           provider.baseUrl = baseUrl
         }
       }

@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Platform } from './platform'
 import type { CharlieCodeConfig, ProviderConfig } from './types'
@@ -118,6 +118,17 @@ export async function ensureConfigDir(platform: Platform): Promise<void> {
   await mkdir(platform.configDir, { recursive: true })
 }
 
+/**
+ * Writes a file through a temporary sibling and a rename. A crash mid-write
+ * used to leave a truncated config that made every IPC handler fail.
+ */
+async function writeAtomic(path: string, content: string, mode?: number): Promise<void> {
+  const temp = `${path}.${process.pid}.${Date.now()}.tmp`
+  await writeFile(temp, content, { encoding: 'utf8', ...(mode !== undefined ? { mode } : {}) })
+  await rename(temp, path)
+  if (mode !== undefined) await chmod(path, mode).catch(() => undefined)
+}
+
 function mergeConfig(partial: Partial<CharlieCodeConfig>): CharlieCodeConfig {
   const base = defaultConfig()
   const providers: ProviderConfig[] = [...(partial.providers ?? [])]
@@ -152,6 +163,8 @@ export interface LoadConfigResult {
   config: CharlieCodeConfig
   path: string
   created: boolean
+  /** Where a corrupt config was moved before falling back to defaults. */
+  recovered?: string
 }
 
 export async function loadConfig(platform: Platform): Promise<LoadConfigResult> {
@@ -159,7 +172,7 @@ export async function loadConfig(platform: Platform): Promise<LoadConfigResult> 
   if (!existsSync(path)) {
     await ensureConfigDir(platform)
     const config = applyEnvOverrides(defaultConfig())
-    await writeFile(path, `${JSON.stringify(config, null, 2)}\n`, 'utf8')
+    await writeAtomic(path, `${JSON.stringify(config, null, 2)}\n`)
     return { config, path, created: true }
   }
 
@@ -168,8 +181,15 @@ export async function loadConfig(platform: Platform): Promise<LoadConfigResult> 
     const config = applyEnvOverrides(mergeConfig(JSON.parse(raw) as Partial<CharlieCodeConfig>))
     return { config, path, created: false }
   } catch (error) {
+    // A broken config must not brick the app: keep the user's file for repair
+    // and start from defaults instead of throwing on every IPC call.
     const reason = error instanceof Error ? error.message : String(error)
-    throw new Error(`Config non valida in ${path}: ${reason}`)
+    const backup = `${path}.corrupt-${Date.now()}`
+    await rename(path, backup).catch(() => undefined)
+    console.error(`[charliecode] config non valida in ${path}: ${reason}. Backup: ${backup}`)
+    const config = applyEnvOverrides(defaultConfig())
+    await writeAtomic(path, `${JSON.stringify(config, null, 2)}\n`)
+    return { config, path, created: true, recovered: backup }
   }
 }
 
@@ -193,7 +213,7 @@ function applyEnvOverrides(config: CharlieCodeConfig): CharlieCodeConfig {
 export async function saveConfig(platform: Platform, config: CharlieCodeConfig): Promise<string> {
   await ensureConfigDir(platform)
   const path = platform.configPath(CONFIG_FILE)
-  await writeFile(path, `${JSON.stringify(config, null, 2)}\n`, 'utf8')
+  await writeAtomic(path, `${JSON.stringify(config, null, 2)}\n`)
   return path
 }
 
@@ -219,8 +239,16 @@ async function readCredentials(platform: Platform): Promise<CredentialsFile> {
   if (!existsSync(path)) return {}
   try {
     return JSON.parse(await readFile(path, 'utf8')) as CredentialsFile
-  } catch {
-    // A broken credentials file must not break the whole app: env keys still work.
+  } catch (error) {
+    // A broken credentials file must not break the whole app: env keys still
+    // work. Keep the original for the user instead of overwriting it blindly.
+    const backup = `${path}.corrupt-${Date.now()}`
+    await rename(path, backup).catch(() => undefined)
+    console.error(
+      `[charliecode] credentials.json non valido: ${
+        error instanceof Error ? error.message : String(error)
+      }. Backup: ${backup}`
+    )
     return {}
   }
 }
@@ -273,10 +301,7 @@ export async function writeCredentials(
   const path = platform.configPath(CREDENTIALS_FILE)
   const existing = await readCredentials(platform)
   existing[providerId] = { apiKey }
-  await writeFile(path, `${JSON.stringify(existing, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
-  if (!platform.isWindows) {
-    await chmod(path, 0o600).catch(() => undefined)
-  }
+  await writeAtomic(path, `${JSON.stringify(existing, null, 2)}\n`, 0o600)
   return path
 }
 
@@ -288,10 +313,7 @@ export async function deleteCredential(
   const path = platform.configPath(CREDENTIALS_FILE)
   const existing = await readCredentials(platform)
   delete existing[providerId]
-  await writeFile(path, `${JSON.stringify(existing, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
-  if (!platform.isWindows) {
-    await chmod(path, 0o600).catch(() => undefined)
-  }
+  await writeAtomic(path, `${JSON.stringify(existing, null, 2)}\n`, 0o600)
   return path
 }
 

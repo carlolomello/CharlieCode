@@ -131,6 +131,61 @@ export function sanitizeMessages(messages: ModelMessage[]): ModelMessage[] {
   return cleaned
 }
 
+/**
+ * Appends the current user turn to the stored context.
+ *
+ * The sidecar is written at the end of a turn, so it never contains the message
+ * that opens the next one. Without this append the model answered the previous
+ * request on every turn after the first. An identical retry (same content) is
+ * not duplicated.
+ */
+export function appendCurrentUser(
+  history: ModelMessage[],
+  current: ModelMessage[]
+): ModelMessage[] {
+  if (current.length === 0) return history
+  const last = history[history.length - 1]
+  const first = current[0]
+  if (
+    last &&
+    first &&
+    last.role === 'user' &&
+    first.role === 'user' &&
+    JSON.stringify(last.content) === JSON.stringify(first.content)
+  ) {
+    return history
+  }
+  return [...history, ...current]
+}
+
+/**
+ * Removes image parts from a model context.
+ *
+ * A conversation can move from a vision model to a text-only one. Sending the
+ * old images anyway makes the provider reject the whole request, so they are
+ * dropped with a short note in their place. The stored sidecar is untouched:
+ * switching back to a vision model restores them.
+ */
+export function stripImages(messages: ModelMessage[]): ModelMessage[] {
+  return messages.map((message) => {
+    if (typeof message.content === 'string') return message
+    const parts = message.content.filter((part) => {
+      const candidate = part as { type?: string; mediaType?: string }
+      if (candidate.type === 'image') return false
+      if (candidate.type === 'file' && candidate.mediaType?.startsWith('image/')) return false
+      return true
+    })
+    if (parts.length === message.content.length) return message
+    if (parts.length === 0) {
+      return {
+        ...message,
+        content: '[immagine omessa: il modello in uso non supporta le immagini]'
+      } as ModelMessage
+    }
+    return { ...message, content: parts } as ModelMessage
+  })
+}
+
 /* ------------------------------- estimates ------------------------------ */
 
 function toolOutputText(output: unknown): string {

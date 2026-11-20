@@ -26,6 +26,8 @@ export interface AppInfo {
   recentWorkspaces: string[]
   defaultModel?: string
   effort: EffortLevel
+  /** Backup path when a corrupt config was recovered at startup. */
+  configRecovered?: string
 }
 
 export interface ModelsResponse {
@@ -62,7 +64,6 @@ export interface ChatStartPayload {
   effort?: EffortLevel
   /** Split this turn across parallel `task` subagents. */
   team?: boolean
-  system?: string
   maxOutputTokens?: number
   workspacePath?: string
   /** `plan` explores read-only; `build` can write. Defaults to build. */

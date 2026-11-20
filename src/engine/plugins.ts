@@ -180,14 +180,38 @@ function insertIntoSection(source: string, heading: string, line: string, keepLa
   return rebuilt.join('\n').replace(/\n{3,}/g, '\n\n')
 }
 
+export interface RememberPlan {
+  path: string
+  before: string
+  after: string
+}
+
+/**
+ * Computes the memory file after a note without writing it. The `remember`
+ * tool shows this as a diff and asks permission first: a prompt injection in a
+ * project file must not be able to poison future sessions silently.
+ */
+export async function planRememberNote(
+  workspace: string,
+  note: string
+): Promise<RememberPlan> {
+  // Do not create the file here: a denied `remember` must leave no trace.
+  const path = projectMemoryPath(workspace)
+  const before = await readFile(path, 'utf8').catch(() => MEMORY_TEMPLATE)
+  const stamp = new Date().toISOString().slice(0, 10)
+  const after = insertIntoSection(before, 'Note', `- ${stamp} — ${note.trim()}`)
+  return { path, before, after }
+}
+
+export async function applyRememberPlan(plan: RememberPlan): Promise<string> {
+  await mkdir(dirname(plan.path), { recursive: true })
+  await writeFile(plan.path, plan.after, 'utf8')
+  return plan.path
+}
+
 /** Appends a deliberate note (`remember` tool). */
 export async function rememberNote(workspace: string, note: string): Promise<string> {
-  const path = await ensureMemoryFile(workspace)
-  const current = await readFile(path, 'utf8').catch(() => MEMORY_TEMPLATE)
-  const stamp = new Date().toISOString().slice(0, 10)
-  const next = insertIntoSection(current, 'Note', `- ${stamp} — ${note.trim()}`)
-  await writeFile(path, next, 'utf8')
-  return path
+  return applyRememberPlan(await planRememberNote(workspace, note))
 }
 
 export interface TurnMemoryEntry {

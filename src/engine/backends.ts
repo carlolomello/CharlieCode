@@ -1,3 +1,5 @@
+import { readdir, stat } from 'node:fs/promises'
+import { join, relative, sep } from 'node:path'
 import type {
   AgentMode,
   ChatMessage,
@@ -139,12 +141,91 @@ function changeSignature(change: {
   return `${change.status}:${change.added}:${change.removed}`
 }
 
+interface SnapshotEntry {
+  mtimeMs: number
+  size: number
+}
+
+const SNAPSHOT_IGNORED = new Set([
+  'node_modules',
+  '.git',
+  '.hg',
+  '.svn',
+  'dist',
+  'out',
+  'build',
+  'release',
+  '.next',
+  '.nuxt',
+  '.turbo',
+  '.cache',
+  'coverage',
+  '.venv',
+  'venv',
+  '__pycache__',
+  'target'
+])
+
+/**
+ * mtime+size snapshot of a project without git. `listChanges` needs a
+ * repository; without one the CLI could write a dozen files and the transcript
+ * still claimed nothing had changed.
+ */
+async function snapshotWorkspace(root: string): Promise<Map<string, SnapshotEntry>> {
+  const result = new Map<string, SnapshotEntry>()
+
+  const walk = async (dir: string, depth: number): Promise<void> => {
+    if (depth > 8 || result.size >= 4_000) return
+    let entries
+    try {
+      entries = await readdir(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      if (result.size >= 4_000) return
+      if (SNAPSHOT_IGNORED.has(entry.name)) continue
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) {
+        await walk(full, depth + 1)
+        continue
+      }
+      if (!entry.isFile()) continue
+      const info = await stat(full).catch(() => undefined)
+      if (!info) continue
+      result.set(relative(root, full).split(sep).join('/'), {
+        mtimeMs: info.mtimeMs,
+        size: info.size
+      })
+    }
+  }
+
+  await walk(root, 0)
+  return result
+}
+
 /**
  * Runs one turn through the CLI and turns its output into the same events a
  * native model produces. The CLI writes directly to the workspace; the diff is
  * computed around the run, so the user still sees what changed.
  */
 export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
+  // A profile without a read-only flag cannot honour plan mode. Saying so is
+  // better than running it in build mode after the user chose "Piano".
+  if (input.mode === 'plan' && !input.profile.planArgs?.length) {
+    const message = `${input.profile.label} non ha un flag di sola lettura configurato: aggiungi \`planArgs\` al profilo o usa un modello nativo per la modalità piano.`
+    input.emit({ type: 'error', message })
+    input.emit({
+      type: 'done',
+      modelKey: cliModelKey(input.profile.id, input.model),
+      ms: 0,
+      ttftMs: 0,
+      steps: 0,
+      toolCalls: 0
+    })
+    return { text: '', error: message, aborted: false, toolCalls: 0 }
+  }
+
   const started = Date.now()
   let firstTextAt: number | undefined
   let toolCalls = 0
@@ -152,6 +233,10 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
 
   const before: WorkspaceChanges | undefined =
     input.mode === 'build' ? await listChanges(input.workspace).catch(() => undefined) : undefined
+  const beforeSnapshot =
+    input.mode === 'build' && !before?.git
+      ? await snapshotWorkspace(input.workspace).catch(() => new Map<string, SnapshotEntry>())
+      : undefined
 
   input.emit({
     type: 'start',
@@ -201,7 +286,7 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
     }
   )
 
-  if (before) {
+  if (before?.git) {
     const after = await listChanges(input.workspace).catch(() => undefined)
     if (after) {
       const previous = new Map(
@@ -239,6 +324,39 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
           ms: 0
         })
       }
+    }
+  } else if (beforeSnapshot) {
+    const afterSnapshot = await snapshotWorkspace(input.workspace).catch(
+      () => new Map<string, SnapshotEntry>()
+    )
+    const changed = [...afterSnapshot.entries()]
+      .filter(([path, info]) => {
+        const previous = beforeSnapshot.get(path)
+        return !previous || previous.mtimeMs !== info.mtimeMs || previous.size !== info.size
+      })
+      .map(([path]) => path)
+    const removed = [...beforeSnapshot.keys()].filter((path) => !afterSnapshot.has(path))
+
+    for (const path of [...changed, ...removed].slice(0, 20)) {
+      const id = `cli-write-${path}`
+      toolCalls++
+      input.emit({
+        type: 'tool-call',
+        id,
+        name: 'cli-write',
+        title: `Scrittura tramite CLI: ${path}`,
+        input: { path }
+      })
+      input.emit({
+        type: 'tool-result',
+        id,
+        name: 'cli-write',
+        ok: true,
+        summary: removed.includes(path)
+          ? 'file rimosso (progetto senza git)'
+          : 'file modificato (progetto senza git)',
+        ms: 0
+      })
     }
   }
 

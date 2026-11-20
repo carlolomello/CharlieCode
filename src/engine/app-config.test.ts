@@ -88,6 +88,31 @@ describe('applyConfigPatch', () => {
     ).toThrow(/effort non valido/i)
   })
 
+  it('non permette di auto-approvare i tool che richiedono sempre conferma', () => {
+    const { config, changes } = applyConfigPatch(
+      defaultConfig(),
+      { agents: { autoApprove: ['read', 'bash', 'write', 'edit', 'config', 'remember'] } },
+      KEYS
+    )
+
+    expect(config.agents.autoApprove).toEqual(['read'])
+    expect(changes.join('\n')).toContain('⚠')
+    expect(changes.join('\n')).toContain('sempre confermati')
+  })
+
+  it('segnala quando una base URL porta la key su un host remoto', () => {
+    const base = defaultConfig()
+    const { config, changes } = applyConfigPatch(
+      base,
+      { providers: [{ id: base.providers[0]!.id, baseUrl: 'https://evil.example/v1' }] },
+      KEYS
+    )
+
+    expect(config.providers[0]!.baseUrl).toBe('https://evil.example/v1')
+    expect(changes.join('\n')).toContain('⚠')
+    expect(changes.join('\n')).toContain('evil.example')
+  })
+
   it('azzera il default e il modello dei subagenti con null', () => {
     const base = defaultConfig()
     base.defaultModel = 'openai::gpt-4.1'

@@ -32,12 +32,10 @@ const DEFAULT_CONTEXT = 32_768
 const REASONING_MODEL =
   /(reasoning|thinking|think|deepseek-r|deepseek-v4|gpt-5|gpt-6|o1|o3|o4|glm-5|qwen3|gemini-3|gemini-4|claude-(opus|sonnet)-[5-9]|grok-4|kimi-k2|minimax|nemotron|ling-|ernie|seed-oss|step-3|magistral)/i
 
-const LIGHT_MODEL = /(nano|mini|lite|small|flash-free|:free$|-free$|1b|1\.7b|3b|4b|7b|8b|9b|12b)/i
-
 export function guessEfforts(id: string): EffortLevel[] {
-  if (REASONING_MODEL.test(id)) return ['none', 'low', 'high', 'max']
-  if (/^(gpt-4o-mini|claude-3-5-haiku|gemini-1\.5-flash|deepseek-chat)$/i.test(id)) return ['none']
-  return ['none', 'low', 'high', 'max']
+  // `reasoning_effort` is a reasoning-model knob. Offering it on a plain chat
+  // model produced 400s and contradicted the picker's own promise.
+  return REASONING_MODEL.test(id) ? ['none', 'low', 'high', 'max'] : ['none']
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -241,10 +239,36 @@ export async function fetchProviderModels(
   return { models, notice }
 }
 
+interface CatalogCacheEntry {
+  key: string
+  at: number
+  result: CatalogResult
+}
+
+let catalogCache: CatalogCacheEntry | undefined
+const CATALOG_TTL_MS = 30_000
+
+/** Called whenever providers, keys or overrides change. */
+export function resetCatalogCache(): void {
+  catalogCache = undefined
+}
+
 export async function loadCatalog(
   platform: Platform,
   config: CharlieCodeConfig
 ): Promise<CatalogResult> {
+  // The context badge asks for a budget after every turn and every session
+  // switch. Hitting every provider's `/models` each time was both slow and
+  // rude; a short cache keeps the badge instant.
+  const cacheKey = JSON.stringify({
+    providers: config.providers,
+    overrides: config.modelOverrides,
+    effort: config.effort
+  })
+  if (catalogCache && catalogCache.key === cacheKey && Date.now() - catalogCache.at < CATALOG_TTL_MS) {
+    return catalogCache.result
+  }
+
   const errors: CatalogError[] = []
 
   // A provider with no key that is not a local server cannot answer. Listing
@@ -289,7 +313,9 @@ export async function loadCatalog(
     return a.label.localeCompare(b.label)
   })
 
-  return { models, errors }
+  const result: CatalogResult = { models, errors }
+  catalogCache = { key: cacheKey, at: Date.now(), result }
+  return result
 }
 
 function isLocalBaseUrl(url: string): boolean {

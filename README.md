@@ -458,7 +458,7 @@ git tag -f v0.0.1 <commit>
 git push -f origin v0.0.1     # rebuilds and replaces the release assets
 ```
 
-Or, without touching the tag: **Actions → release → Run workflow**, leaving `tag` empty to use the branch head, or filling `v0.0.1` to attach the fresh build to the existing release.
+Or, without touching the tag: **Actions → release → Run workflow**, leaving `tag` empty to publish to `v<version>` from `package.json` (the branch head is built), or filling `v0.0.1` to attach the fresh build to that existing release.
 
 ---
 
@@ -485,6 +485,7 @@ Or, without touching the tag: **Actions → release → Run workflow**, leaving 
 ## Security
 
 - Keys live in `~/.charliecode/credentials.json` (mode `600`) or environment variables and are sent only to the endpoint you configured.
+- Tools stay inside the project folder: a path outside it, a symlink that escapes it, and `credentials.json` always go through the permission gate, whatever the auto-approve settings say. `fetch_url` refuses localhost, private ranges and cloud-metadata addresses, and re-checks every redirect.
 - The self-configuration tool can change `config.json` but never reads or writes `credentials.json`: key presence is reported as a boolean, and every change goes through the permission gate with a diff.
 - There is no CharlieCode backend; nothing is proxied.
 - The renderer runs with `contextIsolation`, `sandbox`, no `nodeIntegration` and a restrictive CSP; all filesystem and network access goes through typed IPC. Markdown is rendered as React elements, never as injected HTML.

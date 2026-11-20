@@ -1,6 +1,6 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { APICallError, streamText, type ModelMessage } from 'ai'
-import { findModel } from './catalog'
+import { findModel, resetCatalogCache } from './catalog'
 import { resolveApiKey } from './config'
 import { getDetectedBaseUrl } from './discovery'
 import type { Platform } from './platform'
@@ -20,6 +20,7 @@ const providerCache = new Map<string, CompatibleProvider>()
 
 export function resetProviderCache(): void {
   providerCache.clear()
+  resetCatalogCache()
 }
 
 export async function providerFor(

@@ -119,7 +119,7 @@ describe('runCliTurn', () => {
 
     const result = await runCliTurn({
       profile,
-      mode: 'plan',
+      mode: 'build',
       prompt: 'dimmi ciao',
       history: [{ role: 'user', content: 'dimmi ciao' }],
       workspace: dir,
@@ -199,5 +199,56 @@ describe('runCliTurn', () => {
     expect(result.error).toMatch(/codice 3/)
     expect(result.aborted).toBe(false)
     expect(events.some((event) => event.type === 'done')).toBe(true)
+  })
+
+  it('rifiuta la modalità piano quando il profilo non ha planArgs', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'charliecode-backend-'))
+    const withoutPlan = { ...profile }
+    delete withoutPlan.planArgs
+    const events: EngineEvent[] = []
+
+    const result = await runCliTurn({
+      profile: withoutPlan,
+      mode: 'plan',
+      prompt: 'esplora',
+      history: [{ role: 'user', content: 'esplora' }],
+      workspace: dir,
+      home: dir,
+      emit: (event) => events.push(event)
+    })
+
+    expect(result.error).toMatch(/planArgs/)
+    expect(result.text).toBe('')
+    expect(events.some((event) => event.type === 'error')).toBe(true)
+  })
+
+  it('segnala i file scritti anche in un progetto senza git', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'charliecode-backend-'))
+    const events: EngineEvent[] = []
+
+    const result = await runCliTurn({
+      profile: {
+        ...profile,
+        args: [
+          '-e',
+          'require("fs").writeFileSync("nuovo.txt", "contenuto"); process.stdout.write("fatto")'
+        ]
+      },
+      mode: 'build',
+      prompt: 'crea il file',
+      history: [],
+      workspace: dir,
+      home: dir,
+      emit: (event) => events.push(event)
+    })
+
+    expect(result.text).toBe('fatto')
+    const written = events.find(
+      (event) => event.type === 'tool-result' && event.name === 'cli-write'
+    )
+    expect(written).toMatchObject({
+      ok: true,
+      summary: 'file modificato (progetto senza git)'
+    })
   })
 })
