@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm } from 'node:fs/promises'
+import { writeFileAtomic } from './atomic-write'
 import type { Platform } from './platform'
 import type { CliOutputFormat, CliProfile } from './types'
 
@@ -275,9 +276,7 @@ export async function saveCliProfile(platform: Platform, input: unknown): Promis
   const profile = validateCliProfile(input)
   await mkdir(cliProfilesDir(platform), { recursive: true })
   const path = cliProfilePath(platform, profile.id)
-  const tmp = `${path}.tmp`
-  await writeFile(tmp, `${JSON.stringify(profile, null, 2)}\n`, 'utf8')
-  await rename(tmp, path)
+  await writeFileAtomic(path, `${JSON.stringify(profile, null, 2)}\n`)
   return profile
 }
 

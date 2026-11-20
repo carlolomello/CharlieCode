@@ -58,6 +58,7 @@ const PROBE_TIMEOUT_MS = 60_000
 interface Capture {
   stdout: string
   stderr: string
+  code: number
 }
 
 /** Runs one candidate command. Resolves even on a non-zero exit or timeout. */
@@ -71,7 +72,7 @@ function capture(
     // shell, since no prompt is involved here.
     const target = spawnTarget(binary, args, { allowShell: true })
     if (!target) {
-      resolve({ stdout: '', stderr: '' })
+      resolve({ stdout: '', stderr: '', code: -1 })
       return
     }
     execFile(
@@ -85,8 +86,13 @@ function capture(
         ...(options.cwd ? { cwd: options.cwd } : {}),
         env: { ...process.env, ...target.env, CI: '1', NO_COLOR: '1', FORCE_COLOR: '0' }
       },
-      (_error, stdout, stderr) => {
-        resolve({ stdout: String(stdout ?? ''), stderr: String(stderr ?? '') })
+      (error, stdout, stderr) => {
+        const code = (error as (Error & { code?: number }) | null)?.code
+        resolve({
+          stdout: String(stdout ?? ''),
+          stderr: String(stderr ?? ''),
+          code: typeof code === 'number' ? code : error ? -1 : 0
+        })
       }
     )
   })
@@ -113,24 +119,40 @@ export async function discoverModelCommand(
   binary: string,
   options: { workspace?: string; timeoutMs?: number } = {}
 ): Promise<ModelCommand | undefined> {
+  const cwd = options.workspace ? { cwd: options.workspace } : {}
+  const timeoutMs = options.timeoutMs ?? PROBE_TIMEOUT_MS
+
   // All spellings at once: a CLI that does not know a flag answers in
   // milliseconds, while the one that lists its models may take half a minute.
   // Run in parallel the wait is the slowest probe, not the sum of six.
   const results = await Promise.all(
-    MODEL_CANDIDATES.map((args) =>
-      capture(binary, args, {
-        ...(options.workspace ? { cwd: options.workspace } : {}),
-        timeoutMs: options.timeoutMs ?? PROBE_TIMEOUT_MS
-      })
-    )
+    MODEL_CANDIDATES.map((args) => capture(binary, args, { ...cwd, timeoutMs }))
   )
 
+  const silent: number[] = []
   for (const [index, result] of results.entries()) {
     const args = MODEL_CANDIDATES[index]
     if (!args) continue
     const models = modelNamesFromOutput(result.stdout || result.stderr)
     if (models.length > 0) return { args, models }
+    // Exit 0 and nothing printed is the signature of a CLI whose provider list
+    // is still loading (opencode answers `models` that way on a cold start).
+    if (result.code === 0 && !result.stdout.trim() && !result.stderr.trim()) silent.push(index)
   }
+
+  // Only the probes that answered "nothing yet" are repeated: the ones that
+  // printed an error or opened a screen already said their word.
+  if (silent.length > 0) {
+    await new Promise((resolve) => setTimeout(resolve, 3_000))
+    for (const index of silent) {
+      const args = MODEL_CANDIDATES[index]
+      if (!args) continue
+      const retry = await capture(binary, args, { ...cwd, timeoutMs })
+      const models = modelNamesFromOutput(retry.stdout || retry.stderr)
+      if (models.length > 0) return { args, models }
+    }
+  }
+
   return undefined
 }
 

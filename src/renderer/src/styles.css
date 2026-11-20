@@ -331,10 +331,14 @@ button.ghost.wide {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 10px 16px;
   padding: 10px 16px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
+  /* Profile, model, effort, squadra and mode are five groups of controls: in a
+     normal window they do not fit one row. Wrapping keeps every label whole
+     instead of squeezing "Piano" into "Pian…". */
+  flex-wrap: wrap;
 }
 
 .controls {
@@ -345,6 +349,21 @@ button.ghost.wide {
   /* The topbar is space-between: without growing, the controls keep only
      their content width and every label truncates. */
   flex: 1 1 auto;
+  flex-wrap: wrap;
+}
+
+/* A label is a word, not elastic: shrinking these is what cut "Piano",
+   "Modifiche" and the folder name in half. They wrap to the next row instead. */
+.controls > button,
+.controls > .mode-switch,
+.controls > .cli-model-field,
+.topbar-right > button {
+  flex: 0 0 auto;
+}
+
+/* The model picker is the one control that should take the leftover room. */
+.controls > .model-picker {
+  flex: 1 1 260px;
 }
 
 .select {
@@ -491,6 +510,8 @@ button.ghost.wide {
   align-items: center;
   gap: 8px;
   min-width: 0;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
 }
 
 button.ghost.small {
@@ -820,6 +841,7 @@ button.ghost.small {
   padding: 4px 11px;
   border-radius: 6px;
   cursor: pointer;
+  white-space: nowrap;
   transition: background 120ms ease, color 120ms ease;
 }
 

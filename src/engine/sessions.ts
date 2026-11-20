@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm, stat } from 'node:fs/promises'
+import { writeFileAtomic } from './atomic-write'
 import type { Platform } from './platform'
 import type {
   NewSessionInput,
@@ -115,9 +116,10 @@ export function deriveTitle(text: string): string {
 }
 
 async function writeAtomic(path: string, content: string): Promise<void> {
-  const tmp = `${path}.tmp`
-  await writeFile(tmp, content, 'utf8')
-  await rename(tmp, path)
+  // A rename on Windows fails with EPERM while another handle holds the file,
+  // and a failed save aborted the whole turn. The helper retries and falls
+  // back to an in-place write.
+  await writeFileAtomic(path, content)
 }
 
 function toHeader(session: Session): SessionHeader {

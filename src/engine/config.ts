@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs'
-import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename } from 'node:fs/promises'
+import { writeFileAtomic } from './atomic-write'
 import { join } from 'node:path'
 import type { Platform } from './platform'
 import type { CharlieCodeConfig, ProviderConfig } from './types'
@@ -123,10 +124,7 @@ export async function ensureConfigDir(platform: Platform): Promise<void> {
  * used to leave a truncated config that made every IPC handler fail.
  */
 async function writeAtomic(path: string, content: string, mode?: number): Promise<void> {
-  const temp = `${path}.${process.pid}.${Date.now()}.tmp`
-  await writeFile(temp, content, { encoding: 'utf8', ...(mode !== undefined ? { mode } : {}) })
-  await rename(temp, path)
-  if (mode !== undefined) await chmod(path, mode).catch(() => undefined)
+  await writeFileAtomic(path, content, mode !== undefined ? { mode } : {})
 }
 
 function mergeConfig(partial: Partial<CharlieCodeConfig>): CharlieCodeConfig {

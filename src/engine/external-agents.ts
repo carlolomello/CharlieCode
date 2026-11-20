@@ -56,12 +56,28 @@ export interface ExternalRunResult {
   aborted: boolean
   /** Human-readable failure, when there is one. */
   error?: string
+  /**
+   * The command line that ran, with the prompt shortened. A CLI that answers
+   * with a bare `ERROR` gives the user nothing to act on; the command is what
+   * lets them reproduce the failure in their own terminal.
+   */
+  command?: string
   /** A note for the user when the turn succeeded after a fallback. */
   warning?: string
 }
 
 const MAX_OUTPUT = 2 * 1024 * 1024
 const DEFAULT_TIMEOUT_MS = 10 * 60_000
+/** How many times a models command that printed nothing is repeated. */
+const MODEL_LIST_ATTEMPTS = 3
+/** A cold CLI answers with an empty list; a couple of seconds later it knows. */
+const MODEL_LIST_RETRY_MS = 2_500
+/** A probe slower than this is not a cold start: repeating it wastes time. */
+const MODEL_LIST_RETRY_MAX_MS = 30_000
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
 /**
  * How fast a failure must be to read as "the arguments were rejected". A CLI
  * that does not accept the model flag dies before doing anything; a turn that
@@ -711,38 +727,53 @@ export async function profileModels(
   // non-zero over an unrelated warning (a missing telemetry key, an update
   // check). Reading only a clean stdout turned a working list into an empty
   // picker, which is exactly what the user sees as "there is no list".
-  const output = await new Promise<string>((resolve) => {
-    execFile(
-      target.file,
-      target.args,
-      {
-        // A cold Windows start of an agent CLI loads its whole runtime before
-        // the first id: a minute was still not enough on some machines.
-        timeout: 120_000,
-        killSignal: 'SIGKILL',
-        windowsHide: true,
-        maxBuffer: 4 * 1024 * 1024,
-        env: { ...process.env, ...target.env },
-        ...(workspace ? { cwd: workspace } : {})
-      },
-      (_error, stdout, stderr) => {
-        const out = String(stdout ?? '')
-        resolve(out.trim() ? out : String(stderr ?? ''))
-      }
-    )
-  })
-  if (!output.trim()) return []
+  const probe = (): Promise<string> =>
+    new Promise<string>((resolve) => {
+      execFile(
+        target.file,
+        target.args,
+        {
+          // A cold Windows start of an agent CLI loads its whole runtime before
+          // the first id: a minute was still not enough on some machines.
+          timeout: 120_000,
+          killSignal: 'SIGKILL',
+          windowsHide: true,
+          maxBuffer: 4 * 1024 * 1024,
+          env: { ...process.env, ...target.env },
+          ...(workspace ? { cwd: workspace } : {})
+        },
+        (_error, stdout, stderr) => {
+          const out = String(stdout ?? '')
+          resolve(out.trim() ? out : String(stderr ?? ''))
+        }
+      )
+    })
 
   const format = profile.modelsFormat ?? 'lines'
-  if (format === 'json') {
-    try {
-      const parsed: unknown = JSON.parse(output)
-      return [...new Set(modelNames(parsed, profile.modelsPath))].slice(0, 400)
-    } catch {
-      return []
+  const parse = (output: string): string[] => {
+    if (format === 'json') {
+      try {
+        const parsed: unknown = JSON.parse(output)
+        return [...new Set(modelNames(parsed, profile.modelsPath))].slice(0, 400)
+      } catch {
+        return []
+      }
     }
+    return [...new Set(modelNamesFromOutput(output))].slice(0, 400)
   }
-  return [...new Set(modelNamesFromOutput(output))].slice(0, 400)
+
+  // Some CLIs load their provider list in the background and answer the models
+  // command before that list exists: `opencode models` prints nothing and exits
+  // 0 on a cold start, while the same command works seconds later. Without the
+  // retry the picker stays empty and the CLI looks like it has no models.
+  for (let attempt = 0; attempt < MODEL_LIST_ATTEMPTS; attempt += 1) {
+    const started = Date.now()
+    const output = await probe()
+    if (output.trim()) return parse(output)
+    if (Date.now() - started > MODEL_LIST_RETRY_MAX_MS) break
+    if (attempt < MODEL_LIST_ATTEMPTS - 1) await delay(MODEL_LIST_RETRY_MS * (attempt + 1))
+  }
+  return []
 }
 
 /* ------------------------------- process -------------------------------- */
@@ -973,20 +1004,31 @@ function attempt(
         .split('\n')
         .map((line) => line.trim())
         .filter(Boolean)
-      const detail =
-        (stderrLines.length > 0 ? stderrLines.slice(0, 4).join(' | ') : '') ||
-        raw
-          .split('\n')
-          .map((line) => line.trim())
-          .filter(Boolean)
-          .slice(-1)[0] ||
-        ''
+      // Some CLIs explain the failure on stdout and leave a bare `ERROR` on
+      // stderr: both are read, and the last line of stdout usually carries the
+      // real reason.
+      const stdoutTail = raw
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .slice(-1)[0]
+      const detail = [...new Set([...stderrLines.slice(0, 3), ...(stdoutTail ? [stdoutTail] : [])])]
+        .join(' | ')
+        .slice(0, 400)
+
+      // The prompt is the bulk of the argv: shortening it keeps the command
+      // readable and still reproducible by pasting the prompt back in.
+      const displayCommand = formatCommand(
+        binary,
+        argv.map((arg) => (arg === options.prompt ? '…' : arg))
+      ).slice(0, 400)
+
       const failure = timedOut
         ? `${profile.label} non ha risposto entro ${Math.round(timeoutMs / 1000)}s`
         : aborted
           ? `${profile.label} interrotta`
           : exitCode !== 0
-            ? `${profile.label} è uscita con codice ${exitCode}${detail ? `: ${detail.slice(0, 400)}` : ''}`
+            ? `${profile.label} è uscita con codice ${exitCode}${detail ? `: ${detail}` : ''}\nComando: ${displayCommand}`
             : undefined
 
       resolve({
@@ -997,6 +1039,7 @@ function attempt(
         ms: Date.now() - started,
         timedOut,
         aborted,
+        command: displayCommand,
         ...(failure ? { error: failure } : {})
       })
     }
