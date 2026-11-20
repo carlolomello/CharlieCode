@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -250,5 +250,96 @@ describe('runCliTurn', () => {
       ok: true,
       summary: 'file modificato (progetto senza git)'
     })
+  })
+})
+
+/** A CLI that plans two items, works on one per prompt, then integrates. */
+const teamScript = `
+const fs = require('fs')
+const prompt = process.argv[process.argv.length - 1]
+if (prompt.includes('Rispondi SOLO con un oggetto JSON')) {
+  process.stdout.write(JSON.stringify({ items: [
+    { title: 'A', files: ['a.txt'], instructions: 'crea a' },
+    { title: 'B', files: ['b.txt'], instructions: 'crea b' }
+  ] }))
+} else if (prompt.includes('Sei il worker')) {
+  const target = prompt.includes('a.txt') ? 'a.txt' : 'b.txt'
+  const end = Date.now() + 250
+  while (Date.now() < end) {}
+  fs.writeFileSync(target, 'x')
+  process.stdout.write('fatto ' + target)
+} else {
+  process.stdout.write('integrazione completata')
+}
+`
+
+describe('runCliTurn in squadra', () => {
+  let dir: string | undefined
+
+  afterEach(async () => {
+    if (dir) await rm(dir, { recursive: true, force: true })
+    dir = undefined
+  })
+
+  it('pianifica, esegue i lavori in parallelo e integra', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'charliecode-team-'))
+    const events: EngineEvent[] = []
+
+    const result = await runCliTurn({
+      profile: { ...profile, args: ['-e', teamScript] },
+      mode: 'build',
+      team: true,
+      prompt: 'crea due file',
+      history: [{ role: 'user', content: 'crea due file' }],
+      workspace: dir,
+      home: dir,
+      emit: (event) => events.push(event)
+    })
+
+    expect(result.text).toBe('integrazione completata')
+    expect(events.some((event) => event.type === 'tool-call' && event.name === 'cli-plan')).toBe(
+      true
+    )
+
+    const starts = events.filter((event) => event.type === 'subagent-start')
+    const ends = events.filter((event) => event.type === 'subagent-end')
+    expect(starts).toHaveLength(2)
+    expect(ends).toHaveLength(2)
+    expect(ends.every((event) => event.type === 'subagent-end' && event.ok)).toBe(true)
+
+    // Both workers started before either finished: they ran at the same time.
+    const firstEnd = events.findIndex((event) => event.type === 'subagent-end')
+    const lastStart = events.map((event) => event.type).lastIndexOf('subagent-start')
+    expect(lastStart).toBeLessThan(firstEnd)
+
+    expect(await readFile(join(dir, 'a.txt'), 'utf8')).toBe('x')
+    expect(await readFile(join(dir, 'b.txt'), 'utf8')).toBe('x')
+  })
+
+  it('con un solo lavoro nel piano fa un turno normale', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'charliecode-team-'))
+    const events: EngineEvent[] = []
+    const single = `
+const prompt = process.argv[process.argv.length - 1]
+if (prompt.includes('Rispondi SOLO con un oggetto JSON')) {
+  process.stdout.write(JSON.stringify({ items: [{ title: 'unico', files: ['a.txt'], instructions: 'crea a' }] }))
+} else {
+  process.stdout.write('risposta singola')
+}
+`
+
+    const result = await runCliTurn({
+      profile: { ...profile, args: ['-e', single] },
+      mode: 'build',
+      team: true,
+      prompt: 'crea un file',
+      history: [{ role: 'user', content: 'crea un file' }],
+      workspace: dir,
+      home: dir,
+      emit: (event) => events.push(event)
+    })
+
+    expect(result.text).toBe('risposta singola')
+    expect(events.some((event) => event.type === 'subagent-start')).toBe(false)
   })
 })

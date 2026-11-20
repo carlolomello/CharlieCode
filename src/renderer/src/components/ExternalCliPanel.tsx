@@ -40,6 +40,7 @@ interface Draft {
   modelsPath: string
   notes: string
   timeoutSeconds: string
+  maxWorkers: string
 }
 
 const EMPTY_DRAFT: Draft = {
@@ -59,7 +60,8 @@ const EMPTY_DRAFT: Draft = {
   activityPath: '',
   modelsPath: '',
   notes: '',
-  timeoutSeconds: ''
+  timeoutSeconds: '',
+  maxWorkers: ''
 }
 
 const OUTPUT_LABELS: Record<CliOutputFormat, string> = {
@@ -100,12 +102,14 @@ function draftFromProfile(profile: CliProfile): Draft {
     activityPath: profile.activityPath ?? '',
     modelsPath: profile.modelsPath ?? '',
     notes: profile.notes ?? '',
-    timeoutSeconds: profile.timeoutSeconds ? String(profile.timeoutSeconds) : ''
+    timeoutSeconds: profile.timeoutSeconds ? String(profile.timeoutSeconds) : '',
+    maxWorkers: profile.maxWorkers ? String(profile.maxWorkers) : ''
   }
 }
 
 function profileFromDraft(draft: Draft): Record<string, unknown> {
   const timeout = Number(draft.timeoutSeconds)
+  const workers = Number(draft.maxWorkers)
   return {
     ...(draft.id ? { id: draft.id } : {}),
     label: draft.label.trim(),
@@ -138,7 +142,8 @@ function profileFromDraft(draft: Draft): Record<string, unknown> {
     ...(draft.activityPath.trim() ? { activityPath: draft.activityPath.trim() } : {}),
     ...(draft.modelsPath.trim() ? { modelsPath: draft.modelsPath.trim() } : {}),
     ...(draft.notes.trim() ? { notes: draft.notes.trim() } : {}),
-    ...(Number.isFinite(timeout) && timeout > 0 ? { timeoutSeconds: timeout } : {})
+    ...(Number.isFinite(timeout) && timeout > 0 ? { timeoutSeconds: timeout } : {}),
+    ...(Number.isFinite(workers) && workers > 0 ? { maxWorkers: workers } : {})
   }
 }
 
@@ -1143,6 +1148,15 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
                   inputMode="numeric"
                   placeholder="600"
                   onChange={(event) => setDraft({ ...draft, timeoutSeconds: event.target.value })}
+                />
+              </label>
+              <label className="cli-field">
+                <span>Worker in parallelo (2-6)</span>
+                <input
+                  value={draft.maxWorkers}
+                  inputMode="numeric"
+                  placeholder="3"
+                  onChange={(event) => setDraft({ ...draft, maxWorkers: event.target.value })}
                 />
               </label>
             </div>

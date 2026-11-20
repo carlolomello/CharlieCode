@@ -1218,6 +1218,7 @@ hanno priorità su queste.
                 ...(cliTarget.model ? { model: cliTarget.model } : {}),
                 ...(payload.effort ? { effort: payload.effort } : {}),
                 mode: payload.mode ?? 'build',
+                team: payload.team === true,
                 prompt: payload.text,
                 history,
                 system: cliSystem,

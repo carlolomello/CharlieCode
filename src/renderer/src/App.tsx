@@ -206,6 +206,17 @@ export default function App() {
       return false
     }
   })
+  /**
+   * A CLI backend splits by itself: it plans the turn and only parallelises
+   * independent items, so this is on unless the user turned it off.
+   */
+  const [cliTeam, setCliTeam] = useState(() => {
+    try {
+      return window.localStorage.getItem('charliecode.team.cli') !== '0'
+    } catch {
+      return true
+    }
+  })
   /** The workshop scene, shown on demand from the sidebar mascot. */
   const [teamPreview, setTeamPreview] = useState(false)
   const [changesCount, setChangesCount] = useState(0)
@@ -671,10 +682,21 @@ export default function App() {
     }
   }, [teamMode])
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('charliecode.team.cli', cliTeam ? '1' : '0')
+    } catch {
+      // Preference only.
+    }
+  }, [cliTeam])
+
   const selectedModel = useMemo(
     () => models.find((model) => model.key === modelKey),
     [models, modelKey]
   )
+
+  const cliBackend = selectedModel?.providerId === 'cli'
+  const teamActive = cliBackend ? cliTeam : teamMode
 
   /**
    * Where the backend changed mid-conversation. The canonical context lives in
@@ -1076,7 +1098,7 @@ export default function App() {
         text,
         effort,
         mode: activeMode,
-        team: teamMode,
+        team: teamActive,
         workspacePath: workspace,
         ...(sentAttachments.length > 0
           ? {
@@ -1124,7 +1146,7 @@ export default function App() {
     modelKey,
     sessionId,
     streamingId,
-    teamMode,
+    teamActive,
     workspace
   ])
 
@@ -1400,17 +1422,19 @@ export default function App() {
             </button>
 
             <button
-              className={`ghost small team-toggle ${teamMode ? 'active' : ''}`}
-              onClick={() => setTeamMode((value) => !value)}
-              disabled={selectedModel?.providerId === 'cli'}
+              className={`ghost small team-toggle ${teamActive ? 'active' : ''}`}
+              onClick={() => {
+                if (cliBackend) setCliTeam((value) => !value)
+                else setTeamMode((value) => !value)
+              }}
               title={
-                selectedModel?.providerId === 'cli'
-                  ? 'La CLI gestisce il turno con il proprio loop di agenti'
+                cliBackend
+                  ? 'Squadra: la CLI pianifica, i lavori indipendenti girano in parallelo e lei integra. Se il lavoro è uno solo resta un agente.'
                   : 'Divide il turno tra subagenti in parallelo: Charlie supervisiona, loro lavorano'
               }
-              aria-pressed={teamMode}
+              aria-pressed={teamActive}
             >
-              Squadra
+              {cliBackend ? 'Squadra auto' : 'Squadra'}
             </button>
 
             <div className="mode-switch" role="group" aria-label="Modalità dell'agente">

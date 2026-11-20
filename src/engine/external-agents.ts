@@ -38,6 +38,12 @@ export interface AgentRunOptions {
 
 export interface ExternalRunResult {
   text: string
+  /**
+   * Everything the CLI wrote to stdout, before any format parsing. A plan or
+   * any other structured answer must be read from here: `text` is the chat
+   * text a format may have extracted (and a JSON line may extract nothing).
+   */
+  raw: string
   /** Exit code, or -1 when the process was killed. */
   code: number
   stderr: string
@@ -759,6 +765,7 @@ export function runExternalAgent(
   if (hooks.signal?.aborted) {
     return Promise.resolve({
       text: '',
+      raw: '',
       code: -1,
       stderr: '',
       ms: 0,
@@ -794,6 +801,7 @@ export function runExternalAgent(
     })
 
     let text = ''
+    let raw = ''
     let stderr = ''
     let buffer = ''
     let timedOut = false
@@ -828,6 +836,7 @@ export function runExternalAgent(
 
     child.stdout?.setEncoding('utf8')
     child.stdout?.on('data', (chunk: string) => {
+      raw = (raw + chunk).slice(-MAX_OUTPUT)
       buffer += chunk
       if (buffer.length > MAX_OUTPUT) buffer = buffer.slice(-MAX_OUTPUT)
       let index = buffer.indexOf('\n')
@@ -877,6 +886,7 @@ export function runExternalAgent(
 
       resolve({
         text: text.trim(),
+        raw: raw.trim(),
         code: exitCode,
         stderr: stderr.trim(),
         ms: Date.now() - started,

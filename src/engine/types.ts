@@ -155,6 +155,11 @@ export interface CliProfile {
   planArgs?: string[]
   /** Extra argv that lets the CLI write without asking. */
   autoArgs?: string[]
+  /**
+   * CLI processes a team turn may run at once. Only disjoint file scopes are
+   * parallelised; default 3.
+   */
+  maxWorkers?: number
   /** Command that prints the models this CLI can use. */
   modelsArgs?: string[]
   /** How to read `modelsArgs` output. */

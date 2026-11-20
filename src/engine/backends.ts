@@ -12,8 +12,16 @@ import type {
 import type { CliProfileInfo, WorkspaceChanges } from '../shared/ipc'
 import { changeDiff, listChanges } from './changes'
 import { buildSummary } from './context'
-import { runExternalAgent } from './external-agents'
+import { runExternalAgent, type ExternalRunResult } from './external-agents'
 import { cliModelKey } from '../shared/cli-key'
+import {
+  integrationPrompt,
+  maxWorkersOf,
+  parseCliPlan,
+  planPrompt,
+  scheduleWaves,
+  workerPrompt
+} from './cli-team'
 
 /**
  * A CLI as a first-class backend for the main conversation.
@@ -125,6 +133,11 @@ export interface CliTurnInput {
   workspace: string
   home: string
   signal?: AbortSignal
+  /**
+   * Split the turn across parallel CLI processes. The CLI itself plans the
+   * split; a plan with one item runs as a normal turn.
+   */
+  team?: boolean
   emit: (event: EngineEvent) => void
 }
 
@@ -246,47 +259,188 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
     label: input.profile.label
   })
 
-  const result = await runExternalAgent(
-    input.profile,
-    {
-      prompt: buildCliBriefing({
+  const projectContext = (input.system ?? '').slice(0, 4_000)
+
+  const emitActivity = (activity: string, agent?: { id: string; name: string }): void => {
+    // A CLI can print hundreds of progress lines. The transcript is not a log
+    // viewer: the first fifty are enough to show that work happened.
+    if (toolCalls >= 50) return
+    const id = `cli-activity-${++activityId}`
+    toolCalls++
+    const attribution = agent ? { agentId: agent.id, agentName: agent.name } : {}
+    input.emit({ type: 'tool-call', id, name: 'cli', title: activity, ...attribution })
+    input.emit({
+      type: 'tool-result',
+      id,
+      name: 'cli',
+      ok: true,
+      summary: 'attività riportata dalla CLI',
+      ms: 0,
+      ...attribution
+    })
+  }
+
+  /** One CLI process. `quiet` keeps the output out of the transcript. */
+  const runOnce = (
+    prompt: string,
+    options: {
+      mode: AgentMode
+      quiet?: boolean
+      agent?: { id: string; name: string }
+    }
+  ): Promise<ExternalRunResult> =>
+    runExternalAgent(
+      input.profile,
+      {
+        prompt,
+        ...(input.model ? { model: input.model } : {}),
+        ...(input.effort ? { effort: input.effort } : {}),
+        plan: options.mode === 'plan',
+        auto: options.mode === 'build',
+        workspace: input.workspace
+      },
+      {
+        home: input.home,
+        ...(input.signal ? { signal: input.signal } : {}),
+        onText: (chunk) => {
+          if (options.quiet) return
+          if (firstTextAt === undefined) firstTextAt = Date.now()
+          input.emit({ type: 'delta', text: chunk })
+        },
+        onActivity: (activity) => emitActivity(activity, options.agent)
+      }
+    )
+
+  interface Outcome {
+    text: string
+    error?: string
+    aborted: boolean
+  }
+
+  const runSingle = async (): Promise<Outcome> => {
+    const result = await runOnce(
+      buildCliBriefing({
         ...(input.system ? { system: input.system } : {}),
         messages: input.history,
         prompt: input.prompt,
         mode: input.mode,
         ...(input.attachments?.length ? { attachments: input.attachments } : {})
       }),
-      ...(input.model ? { model: input.model } : {}),
-      ...(input.effort ? { effort: input.effort } : {}),
-      plan: input.mode === 'plan',
-      auto: input.mode === 'build',
-      workspace: input.workspace
-    },
-    {
-      home: input.home,
-      ...(input.signal ? { signal: input.signal } : {}),
-      onText: (chunk) => {
-        if (firstTextAt === undefined) firstTextAt = Date.now()
-        input.emit({ type: 'delta', text: chunk })
-      },
-      onActivity: (activity) => {
-        // A CLI can print hundreds of progress lines. The transcript is not a
-        // log viewer: the first fifty are enough to show that work happened.
-        if (toolCalls >= 50) return
-        const id = `cli-activity-${++activityId}`
-        toolCalls++
-        input.emit({ type: 'tool-call', id, name: 'cli', title: activity })
-        input.emit({
-          type: 'tool-result',
-          id,
-          name: 'cli',
-          ok: true,
-          summary: 'attività riportata dalla CLI',
-          ms: 0
-        })
-      }
+      { mode: input.mode }
+    )
+    return {
+      text: result.text,
+      ...(result.error ? { error: result.error } : {}),
+      aborted: result.aborted || result.timedOut
     }
-  )
+  }
+
+  /**
+   * Squadra CLI: the CLI plans, the app runs the independent items as parallel
+   * processes on disjoint files, the CLI integrates. A plan with a single item
+   * (or no plan at all) falls back to a normal turn, so a task that cannot be
+   * split costs only the planning call.
+   */
+  const runTeam = async (): Promise<Outcome> => {
+    const maxWorkers = maxWorkersOf(input.profile.maxWorkers)
+    const planCall = await runOnce(
+      planPrompt({
+        prompt: input.prompt,
+        maxWorkers: maxWorkers,
+        ...(projectContext ? { context: projectContext } : {})
+      }),
+      { mode: 'plan', quiet: true }
+    )
+
+    // The plan is structured output: read the raw stdout, not the chat text a
+    // JSON output format may have emptied.
+    const plan = parseCliPlan(planCall.raw || planCall.text)
+    if (!plan || plan.items.length < 2) {
+      return runSingle()
+    }
+
+    input.emit({
+      type: 'tool-call',
+      id: `cli-plan-${Date.now()}`,
+      name: 'cli-plan',
+      title: `Squadra: ${plan.items.length} lavori indipendenti`,
+      input: { items: plan.items.map((entry) => entry.title) }
+    })
+
+    const waves = scheduleWaves(plan.items, maxWorkers)
+    const reports: { item: (typeof plan.items)[number]; text: string; error?: string }[] = []
+    let workerIndex = 0
+
+    for (const wave of waves) {
+      if (input.signal?.aborted) break
+      const results = await Promise.all(
+        wave.map(async (item) => {
+          const agentId = `cli-worker-${++workerIndex}`
+          const startedAt = Date.now()
+          input.emit({
+            type: 'subagent-start',
+            agentId,
+            name: item.title,
+            description: item.instructions.slice(0, 200),
+            modelKey: `${input.profile.label}${input.model ? ` · ${input.model}` : ''}`
+          })
+          const result = await runOnce(
+            workerPrompt({
+              item,
+              index: workerIndex,
+              total: plan.items.length,
+              workspace: input.workspace,
+              ...(projectContext ? { context: projectContext } : {})
+            }),
+            { mode: 'build', quiet: true, agent: { id: agentId, name: item.title } }
+          )
+          const failed = result.error ?? (result.timedOut ? 'timeout' : undefined)
+          input.emit({
+            type: 'subagent-end',
+            agentId,
+            name: item.title,
+            ok: !failed,
+            summary:
+              failed ?? ((result.text.trim().split('\n')[0] ?? '').slice(0, 200) || 'fatto'),
+            ms: Date.now() - startedAt
+          })
+          return {
+            item,
+            text: result.text,
+            ...(failed ? { error: failed } : {})
+          }
+        })
+      )
+      reports.push(...results)
+    }
+
+    if (input.signal?.aborted) return { text: '', aborted: true }
+
+    const integration = await runOnce(
+      integrationPrompt({ prompt: input.prompt, workers: reports }),
+      { mode: 'build' }
+    )
+
+    const failedAll = reports.length > 0 && reports.every((report) => report.error)
+    const fallback = reports
+      .map((report) =>
+        `${report.item.title}: ${report.error ?? report.text.trim().slice(0, 400)}`
+      )
+      .join('\n\n')
+
+    return {
+      text: integration.text.trim() || fallback,
+      ...(integration.error
+        ? { error: integration.error }
+        : failedAll
+          ? { error: 'Tutti i worker della squadra sono falliti.' }
+          : {}),
+      aborted: integration.aborted || integration.timedOut
+    }
+  }
+
+  const outcome =
+    input.team === true && input.mode === 'build' ? await runTeam() : await runSingle()
 
   if (before?.git) {
     const after = await listChanges(input.workspace).catch(() => undefined)
@@ -363,7 +517,7 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
   }
 
   const ms = Date.now() - started
-  const aborted = result.aborted || result.timedOut
+  const aborted = outcome.aborted
   input.emit({
     type: 'done',
     modelKey: cliModelKey(input.profile.id, input.model),
@@ -375,8 +529,8 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
   })
 
   return {
-    text: result.text,
-    ...(result.error ? { error: result.error } : {}),
+    text: outcome.text,
+    ...(outcome.error ? { error: outcome.error } : {}),
     aborted,
     toolCalls
   }

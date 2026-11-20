@@ -168,6 +168,8 @@ What that means in practice:
 - writing is opt-in per CLI, and only for **implementer** subagents;
 - a CLI that fails the test is reported as failed, not retried silently.
 
+**Squadra CLI.** A CLI normally works one item at a time, which is slow when the items are independent (ten Salesforce fields, ten metadata files). With **Squadra auto** — on by default for a CLI backend — the split happens outside the CLI: the turn starts with a read-only call that must answer with a JSON plan of independent items, the app runs those items as parallel processes of the same CLI (never two on the same file, at most `maxWorkers`, default 3, 2–6 in the profile), then the CLI integrates and verifies once and its answer is the turn's answer. A plan with a single item, or no parsable plan, falls back to a normal turn, so unsplittable work only pays the planning call. Deploy, validate, publish and push stay in the final turn, never in a worker; the workshop shows each worker, its file scope and its result, and stopping the turn stops them all.
+
 ### Routing per ruolo (opzionale)
 
 By default every `task` subagent uses the main model, or the configured CLI worker. A project can override that per role in `.charliecode/routing.yaml` — **⚙ Impostazioni → Progetto** shows the current routes and creates the template:

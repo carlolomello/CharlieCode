@@ -124,6 +124,15 @@ export function validateCliProfile(value: unknown, fallbackId?: string): CliProf
             throw new Error('modelsFormat deve essere "lines" o "json".')
           })()
 
+  const workersRaw = record.maxWorkers
+  let maxWorkers: number | undefined
+  if (workersRaw !== undefined && workersRaw !== null) {
+    if (typeof workersRaw !== 'number' || !Number.isFinite(workersRaw)) {
+      throw new Error('maxWorkers deve essere un numero.')
+    }
+    maxWorkers = Math.min(6, Math.max(2, Math.round(workersRaw)))
+  }
+
   const timeoutRaw = record.timeoutSeconds
   let timeoutSeconds: number | undefined
   if (timeoutRaw !== undefined && timeoutRaw !== null) {
@@ -175,6 +184,7 @@ export function validateCliProfile(value: unknown, fallbackId?: string): CliProf
       const notes = readOptionalString(record, 'notes', 500)
       return notes ? { notes } : {}
     })(),
+    ...(maxWorkers ? { maxWorkers } : {}),
     ...(timeoutSeconds ? { timeoutSeconds } : {})
   }
 }
