@@ -1342,8 +1342,9 @@ export default function App() {
                     onChange={(event) => setCliModel(event.target.value)}
                     disabled={cliModelsBusy}
                     title="Modello passato alla CLI scelta"
+                    aria-label="Modello della CLI"
                   >
-                    <option value="">modello predefinito</option>
+                    <option value="">modello della CLI (predefinito)</option>
                     {cliModels.map((model) => (
                       <option key={model} value={model}>
                         {model}

@@ -46,7 +46,7 @@ import {
   searchBinaries
 } from '../engine/external-agents'
 import { introspectCli } from '../engine/cli-introspect'
-import { connectCli } from '../engine/cli-connect'
+import { connectCli, discoverModelCommand } from '../engine/cli-connect'
 import {
   deleteCliProfile,
   listCliProfiles,
@@ -815,7 +815,25 @@ function registerIpc(): void {
     const { config } = await loadConfig(platform)
     const profile = await readCliProfile(platform, id)
     if (!profile) return []
-    return profileModels(profile, platform.homeDir, config.workspace)
+
+    const models = await profileModels(profile, platform.homeDir, config.workspace)
+    if (models.length > 0) return models
+
+    // A profile saved without a models command (an older connect, a profile
+    // written by hand) gets one now: the picker must not stay empty for a CLI
+    // that knows how to list its own models.
+    const binary =
+      findBinary(profile.command, platform.homeDir, config.workspace) ??
+      (await resolveBinaryViaShell(profile.command, { home: platform.homeDir }))
+    if (!binary) return []
+
+    const discovered = await discoverModelCommand(binary, {
+      ...(config.workspace ? { workspace: config.workspace } : {})
+    })
+    if (!discovered) return []
+
+    await saveCliProfile(platform, { ...profile, modelsArgs: discovered.args })
+    return discovered.models
   })
 
   ipcMain.handle(

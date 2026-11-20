@@ -23,6 +23,20 @@ const models: ModelEntry[] =
   view === 'nosetup'
     ? []
     : [
+        // First on purpose: the CLI backend must show its own model picker next
+        // to the main one without any interaction.
+        {
+          key: 'cli:opencode',
+          providerId: 'cli',
+          providerLabel: 'CLI esterne',
+          id: 'opencode',
+          label: 'opencode',
+          caps: { tools: true, vision: false, contextWindow: 32000 },
+          capsConfidence: 'guess',
+          effort: 'none',
+          acceptsModel: true,
+          efforts: ['none']
+        },
         {
           key: 'freellmapi::auto',
           providerId: 'freellmapi',
@@ -322,7 +336,7 @@ const bridge = {
   installSkill: async () => skills,
   removeSkill: async () => skills,
   compactContext: async () => context,
-  cliProfileModels: async () => [],
+  cliProfileModels: async () => ['sonnet-5.5', 'gpt-6.1-terra', 'gpt-5-mini'],
   stopChat: noop,
   respondPermission: noop,
   pickWorkspace: async () => ({ path: workspace }),
