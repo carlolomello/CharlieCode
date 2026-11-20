@@ -1324,7 +1324,16 @@ export default function App() {
               title={selectedModel?.key ?? ''}
             />
 
-            {selectedModel?.providerId === 'cli' && (
+            {selectedModel?.providerId === 'cli' && selectedModel.acceptsModel === false && (
+              <span
+                className="muted cli-model-note"
+                title="Il profilo non ha un flag per il modello: la CLI usa il suo predefinito"
+              >
+                modello: predefinito della CLI
+              </span>
+            )}
+
+            {selectedModel?.providerId === 'cli' && selectedModel.acceptsModel !== false && (
               <div className="cli-model-field">
                 {cliModels.length > 0 ? (
                   <select

@@ -3908,3 +3908,8 @@ button.ghost:hover,
 .cli-model-input {
   font: inherit;
 }
+
+.cli-model-note {
+  font-size: 12px;
+  white-space: nowrap;
+}

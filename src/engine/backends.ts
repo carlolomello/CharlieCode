@@ -38,6 +38,8 @@ export function cliModelEntries(profiles: CliProfileInfo[]): ModelEntry[] {
       caps: { tools: true, vision: false, contextWindow: 32_000 },
       capsConfidence: 'guess' as const,
       effort: 'none' as const,
+      // Without a model flag the picker must not offer a name it cannot pass.
+      acceptsModel: Boolean(profile.modelArgs?.length),
       efforts: profile.effortArgs?.length
         ? (['none', 'low', 'high', 'max'] as EffortLevel[])
         : (['none'] as EffortLevel[])

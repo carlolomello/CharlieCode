@@ -208,6 +208,8 @@ export interface ModelEntry {
   effort: EffortLevel
   /** Levels the picker offers for this model. */
   efforts: EffortLevel[]
+  /** A CLI backend: false when its profile has no flag to choose a model. */
+  acceptsModel?: boolean
 }
 
 export interface CatalogError {
