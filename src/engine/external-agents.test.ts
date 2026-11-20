@@ -152,7 +152,9 @@ describe('findBinary', () => {
     expect(findBinary(script)).toBe(script)
   })
 
-  it('rifiuta un file non eseguibile', async () => {
+  // Windows has no executable bit: there is nothing to reject here, and the
+  // test would only assert a POSIX permission model.
+  it.runIf(process.platform !== 'win32')('rifiuta un file non eseguibile', async () => {
     const script = join(dir, 'plain')
     await writeFile(script, 'niente')
     await chmod(script, 0o644)
