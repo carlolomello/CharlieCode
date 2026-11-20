@@ -8,7 +8,11 @@ export default defineConfig({
     outDir: '.preview',
     emptyOutDir: true,
     rollupOptions: {
-      input: ['scripts/preview-wizard.html', 'scripts/preview-panels.html']
+      input: [
+        'scripts/preview-wizard.html',
+        'scripts/preview-panels.html',
+        'scripts/preview-app.html'
+      ]
     }
   }
 })

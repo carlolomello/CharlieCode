@@ -216,9 +216,7 @@ const sidebar = (
       onOpenSession={() => undefined}
       onRenameSession={() => undefined}
       onRemoveSession={() => undefined}
-      onOpenWizard={() => undefined}
       onOpenSettings={() => undefined}
-      onOpenConfig={() => undefined}
     />
     <div style={{ flex: 1 }} />
   </div>

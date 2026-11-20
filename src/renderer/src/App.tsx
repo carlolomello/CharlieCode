@@ -31,6 +31,7 @@ import { SetupWizard } from './components/SetupWizard'
 import { ProjectWizard } from './components/ProjectWizard'
 import { ChangesPanel } from './components/ChangesPanel'
 import { ToolActivity, type SubagentRun } from './components/ToolActivity'
+import { ModelPicker } from './components/ModelPicker'
 
 type ChatItem = StoredMessage & {
   pending?: boolean
@@ -89,7 +90,7 @@ function formatBytes(bytes: number): string {
 }
 
 const EFFORT_LABEL: Record<EffortLevel, string> = {
-  none: 'default',
+  none: 'predefinito',
   low: 'basso',
   high: 'alto',
   max: 'massimo'
@@ -101,14 +102,43 @@ function shortKey(key: string): string {
   return key.length > 46 ? `${key.slice(0, 45)}…` : key
 }
 
-/** 8234 → "8.2k": compact enough for a composer badge. */
+/** 8234 → "8.2k", 128000 → "128k": compact, no trailing .0 in a badge. */
 function formatTokens(value: number): string {
-  return value >= 1000 ? `${(value / 1000).toFixed(1)}k` : String(value)
+  if (value < 1000) return String(value)
+  const thousands = value / 1000
+  return `${Number.isInteger(thousands) ? thousands : thousands.toFixed(1)}k`
 }
+
+/**
+ * The settings drawer has six independent jobs. One long scroll hid the last
+ * two behind everything else, so each job is a tab: the drawer shows one
+ * section at a time and the tab bar never scrolls away.
+ */
+type DrawerSection = 'models' | 'plugins' | 'project' | 'skills' | 'permissions' | 'instructions'
+
+const DRAWER_SECTIONS: { id: DrawerSection; label: string }[] = [
+  { id: 'models', label: 'Modelli' },
+  { id: 'plugins', label: 'Plugin' },
+  { id: 'project', label: 'Progetto' },
+  { id: 'skills', label: 'Skill' },
+  { id: 'permissions', label: 'Permessi' },
+  { id: 'instructions', label: 'Istruzioni' }
+]
 
 function modelLabel(model: ModelEntry): string {
   const free = /free/i.test(model.id)
   return `${free ? '★ ' : ''}${model.label === model.id ? shortKey(model.id) : model.label}`
+}
+
+/**
+ * A message header names the backend that produced it. The catalog label is
+ * what the picker showed; a model that has since disappeared (retired, or a
+ * CLI profile removed) falls back to its key rather than showing nothing.
+ */
+function messageModelLabel(modelKey: string | undefined, models: ModelEntry[]): string {
+  if (!modelKey) return 'assistant'
+  const known = models.find((model) => model.key === modelKey)
+  return known ? modelLabel(known) : shortKey(modelKey)
 }
 
 export default function App() {
@@ -145,6 +175,8 @@ export default function App() {
    *  (a late `chat:session`, a slow `loadSession`) must not touch the new one. */
   const viewEpoch = useRef(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  /** Which drawer section is on screen; the drawer is tabbed, not scrolled. */
+  const [drawerTab, setDrawerTab] = useState<DrawerSection>('models')
   const [keyDrafts, setKeyDrafts] = useState<Record<string, string>>({})
   const [newProvider, setNewProvider] = useState({ id: '', label: '', baseUrl: '' })
   const [loadingSession, setLoadingSession] = useState(false)
@@ -178,6 +210,7 @@ export default function App() {
   const [newToolDraft, setNewToolDraft] = useState('')
   const [newCommandDraft, setNewCommandDraft] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
+  const drawerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const permissionQueue = useRef<PermissionEnvelope[]>([])
@@ -408,7 +441,7 @@ export default function App() {
                   item.meta,
                   event.steps ? `${event.steps} step` : undefined,
                   event.toolCalls ? `${event.toolCalls} tool` : undefined,
-                  `ttft ${event.ttftMs}ms`,
+                  `primo token ${event.ttftMs}ms`,
                   `totale ${event.ms}ms`,
                   event.usage?.outputTokens ? `${event.usage.outputTokens} token` : undefined,
                   event.aborted ? 'interrotto' : undefined
@@ -751,6 +784,15 @@ export default function App() {
     return [...groups.entries()]
   }, [models])
 
+  /** Flat options for the searchable picker; `group` keeps the provider header. */
+  const modelOptions = useMemo(
+    () =>
+      groupedModels.flatMap(([group, entries]) =>
+        entries.map((model) => ({ key: model.key, label: modelLabel(model), group }))
+      ),
+    [groupedModels]
+  )
+
   const startNewChat = useCallback((): void => {
     viewEpoch.current += 1
     // Leaving a running turn in the background would keep burning tokens (and
@@ -767,6 +809,27 @@ export default function App() {
     permissionQueue.current = []
     setPermission(null)
   }, [streamingId])
+
+  // Three shortcuts cover how the app is actually driven: a new chat, finding
+  // an old one, and the settings drawer. Enter already sends.
+  useEffect(() => {
+    const onKey = (event: globalThis.KeyboardEvent): void => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) return
+      const key = event.key.toLowerCase()
+      if (key === 'n') {
+        event.preventDefault()
+        startNewChat()
+      } else if (key === 'k') {
+        event.preventDefault()
+        document.getElementById('session-search')?.focus()
+      } else if (key === ',') {
+        event.preventDefault()
+        setSettingsOpen(true)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [startNewChat])
 
   /** Projects in the sidebar: the open one first, then the recent ones. */
   const projects = useMemo(() => {
@@ -1240,35 +1303,22 @@ export default function App() {
         onOpenSession={(id) => void openSession(id)}
         onRenameSession={(id, title) => void renameSession(id, title)}
         onRemoveSession={(id) => void removeSession(id)}
-        onOpenWizard={() => setWizardOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
-        onOpenConfig={() => void window.charliecode.openConfigDir()}
       />
 
       <div className="main">
         <header className="topbar">
           <div className="controls">
-            <select
-              className="select model-select"
+            <ModelPicker
+              options={modelOptions}
               value={modelKey}
-              onChange={(event) => {
-                setModelKey(event.target.value)
+              onChange={(key) => {
+                setModelKey(key)
                 setCliModel('')
               }}
               disabled={models.length === 0}
               title={selectedModel?.key ?? ''}
-            >
-              {models.length === 0 && <option value="">nessun modello</option>}
-              {groupedModels.map(([providerLabel, group]) => (
-                <optgroup key={providerLabel} label={providerLabel}>
-                  {group.map((model) => (
-                    <option key={model.key} value={model.key}>
-                      {modelLabel(model)}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
+            />
 
             {selectedModel?.providerId === 'cli' && (cliModelsBusy || cliModels.length > 0) && (
               <select
@@ -1298,12 +1348,18 @@ export default function App() {
             >
               {effortOptions.map((level) => (
                 <option key={level} value={level}>
-                  effort: {EFFORT_LABEL[level]}
+                  ragionamento: {EFFORT_LABEL[level]}
                 </option>
               ))}
             </select>
 
-            <button className="ghost" onClick={() => void refreshModels()} disabled={loadingModels}>
+            <button
+              className="ghost"
+              onClick={() => void refreshModels()}
+              disabled={loadingModels}
+              title="Ricarica l’elenco dei modelli"
+              aria-label="Ricarica l’elenco dei modelli"
+            >
               {loadingModels ? '…' : '↻'}
             </button>
 
@@ -1380,7 +1436,19 @@ export default function App() {
           </div>
         )}
 
-        {fatal && <div className="banner error">{fatal}</div>}
+        {fatal && (
+          <div className="banner error">
+            <button
+              className="banner-close"
+              onClick={() => setFatal(null)}
+              title="Chiudi"
+              aria-label="Chiudi l’errore"
+            >
+              ✕
+            </button>
+            {fatal}
+          </div>
+        )}
 
         {info?.configRecovered && (
           <div className="banner warn">
@@ -1423,11 +1491,15 @@ export default function App() {
                       <button
                         key={provider.id}
                         className="free-chip"
-                        onClick={() => {
-                          setSettingsOpen(true)
-                          if (provider.docs) void window.charliecode.openExternal(provider.docs)
-                        }}
-                        title={provider.docs ? `Crea la key su ${provider.docs}` : provider.baseUrl}
+                        // Opening the browser from a chip was a surprise: it now
+                        // just shows the provider, whose "come ottenere la key"
+                        // link is one click away.
+                        onClick={() => setSettingsOpen(true)}
+                        title={
+                          provider.docs
+                            ? `${provider.label} · la key si crea su ${provider.docs}`
+                            : provider.baseUrl
+                        }
                       >
                         {provider.label}
                       </button>
@@ -1446,17 +1518,19 @@ export default function App() {
               <h1>{workspace ? baseName(workspace) : 'Ciao, sono Charlie.'}</h1>
               <p className="muted">
                 {models.length} modelli · {sessions.length} chat salvate
-                {workspace ? ` · progetto ${workspace}` : ' · nessun progetto selezionato'}
+                {workspace ? '' : ' · nessun progetto selezionato'}
               </p>
               <p className="empty-lead">
                 Posso leggere, cercare, modificare ed eseguire comandi nel progetto — e mostrarti
                 ogni diff prima di applicarlo. Per lavori grandi lancio subagenti in parallelo.
               </p>
               <div className="hints">
-                <button onClick={() => void pickWorkspace()}>Scegli un progetto</button>
+                <button onClick={() => void pickWorkspace()}>
+                  {workspace ? 'Apri un’altra cartella' : 'Scegli un progetto'}
+                </button>
                 <button
                   onClick={() =>
-                    setInput(
+                    void send(
                       'Esplora questo progetto: leggi AGENTS.md e il package.json, poi spiegami com’è organizzato.'
                     )
                   }
@@ -1465,7 +1539,9 @@ export default function App() {
                 </button>
                 <button
                   onClick={() =>
-                    setInput('Usa un subagente explorer per trovare dove viene gestita l’autenticazione.')
+                    void send(
+                      'Usa un subagente explorer per trovare dove viene gestita l’autenticazione.'
+                    )
                   }
                 >
                   Prova un subagente
@@ -1480,9 +1556,7 @@ export default function App() {
                     <span className="role">
                       {item.role === 'user'
                         ? 'tu'
-                        : item.modelKey
-                          ? shortKey(item.modelKey)
-                          : 'assistant'}
+                        : messageModelLabel(item.modelKey, models)}
                     </span>
                     {handoffIds.has(item.id) && (
                       <span
@@ -1706,9 +1780,9 @@ export default function App() {
             </button>
             <span className="muted small">
               {selectedModel
-                ? `${selectedModel.caps.tools ? 'tools' : 'no-tools'} · ${
-                    selectedModel.caps.vision ? 'vision' : 'testo'
-                  } · ${Math.round(selectedModel.caps.contextWindow / 1024)}k ctx`
+                ? `${selectedModel.caps.tools ? 'strumenti' : 'senza strumenti'} · ${
+                    selectedModel.caps.vision ? 'immagini' : 'solo testo'
+                  } · ${Math.round(selectedModel.caps.contextWindow / 1024)}k contesto`
                 : 'nessun modello'}
             </span>
             {streamingId ? (
@@ -1805,14 +1879,34 @@ export default function App() {
 
       {settingsOpen && (
         <div className="overlay" onClick={() => setSettingsOpen(false)}>
-          <div className="drawer" onClick={(event) => event.stopPropagation()}>
+          <div className="drawer" ref={drawerRef} onClick={(event) => event.stopPropagation()}>
             <div className="drawer-head">
-              <h2>Provider e chiavi</h2>
+              <h2>Impostazioni</h2>
               <button className="ghost" onClick={() => setSettingsOpen(false)}>
                 ✕
               </button>
             </div>
 
+            <nav className="drawer-tabs" role="tablist" aria-label="Sezioni delle impostazioni">
+              {DRAWER_SECTIONS.map((section) => (
+                <button
+                  key={section.id}
+                  role="tab"
+                  aria-selected={drawerTab === section.id}
+                  className={`drawer-tab ${drawerTab === section.id ? 'active' : ''}`}
+                  onClick={() => {
+                    setDrawerTab(section.id)
+                    drawerRef.current?.scrollTo({ top: 0 })
+                  }}
+                >
+                  {section.label}
+                </button>
+              ))}
+            </nav>
+
+            {drawerTab === 'models' && (
+              <>
+            <h3 id="set-models">Modelli</h3>
             <p className="muted small">
               Le chiavi finiscono in <code>{info?.credentialsPath ?? '~/.charliecode/credentials.json'}</code>{' '}
               con permessi 600. Vengono usate solo verso il provider a cui appartengono.
@@ -1935,8 +2029,12 @@ export default function App() {
                 Aggiungi
               </button>
             </div>
+              </>
+            )}
 
-            <h3>Plugin</h3>
+            {drawerTab === 'plugins' && (
+              <>
+            <h3 id="set-plugins">Plugin</h3>
             <p className="muted small">
               Arrivano già installati con l’app: ognuno aggiunge qualcosa all’agente e si
               accende o spegne da qui. Se li spegni, spariscono anche i loro tool.
@@ -1970,6 +2068,12 @@ export default function App() {
               ))}
               {plugins.length === 0 && <p className="muted small">Nessun plugin disponibile.</p>}
             </div>
+              </>
+            )}
+
+            {drawerTab === 'project' && (
+              <>
+            <h3 id="set-project">Progetto</h3>
             <div className="setup-actions">
               <button
                 className="ghost"
@@ -2015,7 +2119,7 @@ export default function App() {
               </div>
             )}
 
-            <h3>Routing dei subagenti</h3>
+            <h3 id="set-routing">Routing dei subagenti</h3>
             <p className="muted small">
               Opzionale: <code>explorer</code>, <code>reviewer</code> e <code>implementer</code>{' '}
               possono usare modelli diversi, nativi o CLI. Si configura in{' '}
@@ -2053,8 +2157,12 @@ export default function App() {
                 {routing?.source ? 'Apri routing.yaml' : 'Crea routing.yaml'}
               </button>
             </div>
+              </>
+            )}
 
-            <h3>Skill</h3>
+            {drawerTab === 'skills' && (
+              <>
+            <h3 id="set-skills">Skill</h3>
             <p className="muted small">
               Procedure riutilizzabili in <code>SKILL.md</code>, come negli altri strumenti. Stanno in{' '}
               <code>.charliecode/skills</code> del progetto o in <code>~/.charliecode/skills</code>.
@@ -2125,8 +2233,12 @@ export default function App() {
                 Skill del progetto
               </button>
             </div>
+              </>
+            )}
 
-            <h3>Permessi automatici</h3>
+            {drawerTab === 'permissions' && (
+              <>
+            <h3 id="set-permissions">Permessi automatici</h3>
             <p className="muted small">
               Tool e comandi che CharlieCode esegue senza chiedere. I tool di sola
               lettura partono già approvati; aggiungi un comando bash per
@@ -2188,8 +2300,12 @@ export default function App() {
                 </div>
               </div>
             </div>
+              </>
+            )}
 
-            <h3>Istruzioni del progetto</h3>
+            {drawerTab === 'instructions' && (
+              <>
+            <h3 id="set-instructions">Istruzioni del progetto</h3>
             <p className="muted small">
               CharlieCode legge <code>AGENTS.md</code>, <code>CHARLIECODE.md</code> e{' '}
               <code>CLAUDE.md</code> dalla radice del progetto, più un{' '}
@@ -2202,7 +2318,12 @@ export default function App() {
               >
                 Apri AGENTS.md globale
               </button>
+              <button className="ghost" onClick={() => void window.charliecode.openConfigDir()}>
+                Apri cartella config
+              </button>
             </div>
+              </>
+            )}
           </div>
         </div>
       )}

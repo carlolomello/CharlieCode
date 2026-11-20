@@ -27,9 +27,45 @@ export interface SidebarProps {
   onOpenSession: (id: string) => void
   onRenameSession: (id: string, title: string) => void
   onRemoveSession: (id: string) => void
-  onOpenWizard: () => void
   onOpenSettings: () => void
-  onOpenConfig: () => void
+}
+
+const DAY_GROUPS = ['Oggi', 'Ieri', 'Ultimi 7 giorni', 'Più vecchie'] as const
+
+/** Midnight, `daysAgo` days back: DST-safe, unlike subtracting 24h. */
+function startOfDay(daysAgo: number): number {
+  const date = new Date()
+  date.setHours(0, 0, 0, 0)
+  date.setDate(date.getDate() - daysAgo)
+  return date.getTime()
+}
+
+/**
+ * Chats read as a history, not a list: a flat column of timestamps makes it
+ * hard to tell today's work from something from last month.
+ */
+function groupByDay(sessions: SessionSummary[]): { label: string; sessions: SessionSummary[] }[] {
+  const buckets = new Map<string, SessionSummary[]>(DAY_GROUPS.map((label) => [label, []]))
+  const today = startOfDay(0)
+  const yesterday = startOfDay(1)
+  const week = startOfDay(7)
+
+  for (const session of sessions) {
+    const time = new Date(session.updatedAt).getTime()
+    const label =
+      !Number.isFinite(time) || time < week
+        ? 'Più vecchie'
+        : time >= today
+          ? 'Oggi'
+          : time >= yesterday
+            ? 'Ieri'
+            : 'Ultimi 7 giorni'
+    buckets.get(label)?.push(session)
+  }
+
+  return DAY_GROUPS.map((label) => ({ label, sessions: buckets.get(label) ?? [] })).filter(
+    (group) => group.sessions.length > 0
+  )
 }
 
 function SessionRow({
@@ -102,6 +138,7 @@ function SessionRow({
             <button
               className="icon danger-text"
               title="Conferma eliminazione"
+              aria-label="Conferma eliminazione"
               onClick={(event) => {
                 event.stopPropagation()
                 setConfirming(false)
@@ -113,6 +150,7 @@ function SessionRow({
             <button
               className="icon"
               title="Annulla"
+              aria-label="Annulla eliminazione"
               onClick={(event) => {
                 event.stopPropagation()
                 setConfirming(false)
@@ -126,6 +164,7 @@ function SessionRow({
             <button
               className="icon"
               title="Rinomina"
+              aria-label="Rinomina la chat"
               onClick={(event) => {
                 event.stopPropagation()
                 setDraft(session.title)
@@ -137,6 +176,7 @@ function SessionRow({
             <button
               className="icon danger-text"
               title="Elimina"
+              aria-label="Elimina la chat"
               onClick={(event) => {
                 event.stopPropagation()
                 setConfirming(true)
@@ -167,9 +207,7 @@ export function Sidebar({
   onOpenSession,
   onRenameSession,
   onRemoveSession,
-  onOpenWizard,
-  onOpenSettings,
-  onOpenConfig
+  onOpenSettings
 }: SidebarProps): React.JSX.Element {
   const [query, setQuery] = useState('')
   const needle = query.trim().toLowerCase()
@@ -208,6 +246,7 @@ export function Sidebar({
         </button>
 
         <input
+          id="session-search"
           className="sidebar-search"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
@@ -224,16 +263,21 @@ export function Sidebar({
           matches.length === 0 ? (
             <div className="session-empty">Nessuna chat trovata</div>
           ) : (
-            matches.map((session) => (
-              <SessionRow
-                key={session.id}
-                session={session}
-                active={session.id === sessionId}
-                {...(session.workspacePath ? { projectLabel: session.workspacePath } : {})}
-                onOpen={() => onOpenSession(session.id)}
-                onRename={(title) => onRenameSession(session.id, title)}
-                onRemove={() => onRemoveSession(session.id)}
-              />
+            groupByDay(matches).map((group) => (
+              <div key={group.label} className="session-group">
+                <div className="session-group-label">{group.label}</div>
+                {group.sessions.map((session) => (
+                  <SessionRow
+                    key={session.id}
+                    session={session}
+                    active={session.id === sessionId}
+                    {...(session.workspacePath ? { projectLabel: session.workspacePath } : {})}
+                    onOpen={() => onOpenSession(session.id)}
+                    onRename={(title) => onRenameSession(session.id, title)}
+                    onRemove={() => onRemoveSession(session.id)}
+                  />
+                ))}
+              </div>
             ))
           )
         ) : (
@@ -266,15 +310,20 @@ export function Sidebar({
                       {projectSessions.length === 0 && (
                         <div className="session-empty">Nessuna chat in questo progetto</div>
                       )}
-                      {projectSessions.map((session) => (
-                        <SessionRow
-                          key={session.id}
-                          session={session}
-                          active={session.id === sessionId}
-                          onOpen={() => onOpenSession(session.id)}
-                          onRename={(title) => onRenameSession(session.id, title)}
-                          onRemove={() => onRemoveSession(session.id)}
-                        />
+                      {groupByDay(projectSessions).map((group) => (
+                        <div key={group.label} className="session-group">
+                          <div className="session-group-label">{group.label}</div>
+                          {group.sessions.map((session) => (
+                            <SessionRow
+                              key={session.id}
+                              session={session}
+                              active={session.id === sessionId}
+                              onOpen={() => onOpenSession(session.id)}
+                              onRename={(title) => onRenameSession(session.id, title)}
+                              onRemove={() => onRemoveSession(session.id)}
+                            />
+                          ))}
+                        </div>
                       ))}
                       <button className="new-chat nested" onClick={onNewChat}>
                         + Nuova chat
@@ -289,19 +338,19 @@ export function Sidebar({
       </div>
 
       <div className="sidebar-bottom">
-        <button className="primary wide" onClick={onOpenWizard}>
-          ✦ Collega un modello
-        </button>
-        <button className="ghost wide" onClick={onOpenSettings}>
-          ⚙ Provider e chiavi
-        </button>
-        <button className="ghost wide" onClick={onOpenConfig}>
-          Apri cartella config
+        {/* One entry point: with no model the main area already offers the
+            guided setup as its only action, so the sidebar does not repeat it. */}
+        <button className="primary wide" onClick={onOpenSettings}>
+          ⚙ Impostazioni
         </button>
         <div className="sidebar-foot">
-          {info?.platform ?? '…'} · {providers.filter((provider) => provider.enabled).length} provider
+          {providers.filter((provider) => provider.enabled).length} provider attivi
           {routers?.ollama.running ? ' · ollama ✓' : ''}
           {routers?.freellmapi.running ? ' · router ✓' : ''}
+        </div>
+        <div className="sidebar-foot">
+          {info?.platform === 'darwin' ? '⌘N' : 'Ctrl+N'} nuova chat ·{' '}
+          {info?.platform === 'darwin' ? '⌘K' : 'Ctrl+K'} cerca
         </div>
       </div>
     </aside>

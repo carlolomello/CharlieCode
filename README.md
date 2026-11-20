@@ -54,6 +54,13 @@ pnpm dev           # app with HMR
 
 The app starts **completely clean**: no providers, no keys, no default model. If nothing is reachable it explains what to start instead of failing silently.
 
+### The window
+
+- **Searchable model picker.** The topbar picker filters by model, provider or key as you type; ↑/↓ and Enter switch without touching the mouse. A router that exposes hundreds of models is no longer a long scroll.
+- **Tabbed settings.** ⚙ Impostazioni is six tabs — Modelli, Plugin, Progetto, Skill, Permessi, Istruzioni — so the last one is one click away instead of below everything else.
+- **History by day.** Chats in the sidebar are grouped under *Oggi*, *Ieri*, *Ultimi 7 giorni* and *Più vecchie*, inside their project.
+- **Keyboard.** ⌘N / Ctrl+N new chat, ⌘K / Ctrl+K search chats, ⌘, / Ctrl+, settings, Esc closes the topmost panel, Enter sends.
+
 ### The mascot
 
 Charlie is a pixel-art developer in a near-black shirt, brown trousers and white shoes. He walks across the sidebar every so often, thinks while the model is working, and sits down at his PC when a turn is running.
@@ -64,7 +71,7 @@ When a turn spawns subagents, the scene becomes a workshop: Charlie stands behin
 
 ## Plugins (already installed)
 
-Three plugins ship with the app, enabled by default, each with a switch in **⚙ Provider e chiavi → Plugin**. Turning one off removes its tools *and* its prompt text — nothing lingers.
+Three plugins ship with the app, enabled by default, each with a switch in **⚙ Impostazioni → Plugin**. Turning one off removes its tools *and* its prompt text — nothing lingers.
 
 | Plugin | What it does | Tool |
 | --- | --- | --- |
@@ -110,7 +117,7 @@ description: Come verificare i tipi prima di consegnare
 2. Se fallisce, correggi gli errori nell'ordine in cui compaiono.
 ```
 
-The system prompt carries only **name and description**; the body is read through the `skill` tool when the model decides it is relevant, so twenty skills cost a few lines of context. In **⚙ Provider e chiavi → Skill** you can install one from a git URL (cloned into the chosen folder), open the folders, and remove a skill.
+The system prompt carries only **name and description**; the body is read through the `skill` tool when the model decides it is relevant, so twenty skills cost a few lines of context. In **⚙ Impostazioni → Skill** you can install one from a git URL (cloned into the chosen folder), open the folders, and remove a skill.
 
 ---
 
@@ -119,7 +126,7 @@ The system prompt carries only **name and description**; the body is read throug
 1. Launch CharlieCode. The setup screen offers to **install or launch FreeLLMAPI** if it is missing.
 2. Open the FreeLLMAPI dashboard and add **at least one free provider key** (Google AI Studio, Groq, Cerebras, OpenRouter…). Each is a free signup of a few minutes.
 3. Copy the **unified key** (`freellmapi-…`) from the dashboard header.
-4. Paste it in CharlieCode: **⚙ Provider e chiavi** → *FreeLLMAPI* → *Salva*.
+4. Paste it in CharlieCode: **⚙ Impostazioni → Modelli** → *FreeLLMAPI* → *Salva*.
 
 That is it. Press **↻** if the list is empty, pick a project folder from the sidebar, and start chatting.
 
@@ -141,7 +148,7 @@ FreeLLMAPI is a separate project: <https://github.com/tashfeenahmed/freellmapi>.
 
 **Ports.** The desktop app listens on **31415**; Docker and a source run default to **3001**. CharlieCode auto-detects across `3001`, `31415`, `8080`, `8000`, `4000`, `11434`, so you usually do not need to care.
 
-**One entry, not 300.** FreeLLMAPI exposes every model it can reach, but routing is its job. CharlieCode therefore shows a single entry — *Automatico (il router sceglie il modello)* — and lets the router pick. If you really want the full list, tick *mostra tutti i modelli del router* in the provider drawer.
+**One entry, not 300.** FreeLLMAPI exposes every model it can reach, but routing is its job. CharlieCode therefore shows a single entry — *Automatico (il router sceglie il modello)* — and lets the router pick. If you really want the full list, tick *mostra tutti i modelli del router* in **⚙ Impostazioni → Modelli**.
 
 ### A CLI you already have
 
@@ -160,7 +167,7 @@ What that means in practice:
 
 ### Routing per ruolo (opzionale)
 
-By default every `task` subagent uses the main model, or the configured CLI worker. A project can override that per role in `.charliecode/routing.yaml` — the drawer shows the current routes and creates the template:
+By default every `task` subagent uses the main model, or the configured CLI worker. A project can override that per role in `.charliecode/routing.yaml` — **⚙ Impostazioni → Progetto** shows the current routes and creates the template:
 
 ```yaml
 enabled: true
@@ -180,7 +187,7 @@ roles:
 
 ### Any other OpenAI-compatible API
 
-Providers are plain entries in `~/.charliecode/config.json`; add them from the drawer (**⚙ Provider e chiavi** → *Aggiungi*) or by hand:
+Providers are plain entries in `~/.charliecode/config.json`; add them from the drawer (**⚙ Impostazioni → Modelli** → *Aggiungi*) or by hand:
 
 ```json
 {
@@ -472,7 +479,7 @@ Or, without touching the tag: **Actions → release → Run workflow**, leaving 
 
 **A provider I added does not appear.** Providers without a key and with a non-local URL are hidden on purpose — add the key first.
 
-**I only see one FreeLLMAPI model.** That is the point: the router picks. Tick *mostra tutti i modelli del router* in the provider drawer to see everything.
+**I only see one FreeLLMAPI model.** That is the point: the router picks. Tick *mostra tutti i modelli del router* in **⚙ Impostazioni → Modelli** to see everything.
 
 **429 in the middle of a task.** Free tiers rate-limit. Add another provider in FreeLLMAPI, or set `fallbackModels` so CharlieCode can switch before any text is produced.
 
