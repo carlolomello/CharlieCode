@@ -27,7 +27,9 @@ import type {
   RoutingStatus,
   SkillInfo,
   WorkspaceChange,
-  WorkspaceChanges
+  WorkspaceChanges,
+  WorkspaceDirListing,
+  WorkspaceFile
 } from '../shared/ipc'
 import type { Session, SessionSummary } from '../engine/sessions'
 import type { ContextStats, ExternalWorkerConfig, FileDiff, PermissionDecision } from '../engine/types'
@@ -40,6 +42,10 @@ const api: CharlieCodeApi = {
   useWorkspace: (path: string) =>
     ipcRenderer.invoke('charliecode:workspace:use', path) as Promise<{ path?: string }>,
   openWorkspace: () => ipcRenderer.invoke('charliecode:workspace:open') as Promise<void>,
+  workspaceTree: (workspace: string, path?: string) =>
+    ipcRenderer.invoke('charliecode:workspace:tree', workspace, path) as Promise<WorkspaceDirListing>,
+  workspaceFile: (workspace: string, path: string) =>
+    ipcRenderer.invoke('charliecode:workspace:file', workspace, path) as Promise<WorkspaceFile>,
 
   providers: () => ipcRenderer.invoke('charliecode:providers:list') as Promise<ProviderStatus[]>,
   setProviderKey: (providerId: string, apiKey: string) =>

@@ -322,6 +322,19 @@ const bridge = {
   onConfigChanged: () => unsubscribe,
   openExternal: noop,
   openWorkspace: noop,
+  workspaceTree: async (_workspace: string, path?: string) => ({
+    entries: path
+      ? [{ name: 'index.ts', path: `${path}/index.ts`, dir: false, size: 18 }]
+      : [
+          { name: 'src', path: 'src', dir: true },
+          { name: 'package.json', path: 'package.json', dir: false, size: 812 }
+        ]
+  }),
+  workspaceFile: async (_workspace: string, path: string) => ({
+    path,
+    text: 'export const x = 1\nexport const y = 2\n',
+    size: 36
+  }),
   openConfigDir: noop,
   openProjectMemory: noop,
   openSkillsDir: noop,

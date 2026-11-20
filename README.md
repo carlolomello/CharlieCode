@@ -58,6 +58,7 @@ The app starts **completely clean**: no providers, no keys, no default model. If
 
 - **Searchable model picker.** The topbar picker filters by model, provider or key as you type; ↑/↓ and Enter switch without touching the mouse. A router that exposes hundreds of models is no longer a long scroll.
 - **Tabbed settings.** ⚙ Impostazioni is six tabs — Modelli, Plugin, Progetto, Skill, Permessi, Istruzioni — so the last one is one click away instead of below everything else.
+- **Right workbench.** ◫ Pannello opens *Anteprima*, *Codice* and *Browser* next to the chat: the dev-server URL detected from `package.json` (remembered per project), a read-only tree of the project with numbered lines, and an address bar for everything else. Each one is a sandboxed frame, so a page can never reach the app bridge; a site that refuses to be framed opens in the real browser instead.
 - **History by day.** Chats in the sidebar are grouped under *Oggi*, *Ieri*, *Ultimi 7 giorni* and *Più vecchie*, inside their project.
 - **Keyboard.** ⌘N / Ctrl+N new chat, ⌘K / Ctrl+K search chats, ⌘, / Ctrl+, settings, Esc closes the topmost panel, Enter sends.
 
@@ -251,6 +252,7 @@ Rules worth knowing:
 | **Effort** | Per model: `default` / `low` / `high` / `max`, forwarded as `reasoning_effort`. Non-reasoning models only offer `default`. |
 | **Attachments** | Drag, paste or **+ Allega**. Images go to vision models; documents are inlined as fenced blocks. |
 | **Streaming** | Token-by-token with a stop button; whatever was produced is kept. Scroll only follows when you are at the bottom. |
+| **Workbench** | ◫ Pannello: *Anteprima* (URL del dev server rilevato, ricordato per progetto), *Codice* (albero read-only del progetto, righe numerate, file troncati a 200 kB), *Browser* (barra indirizzi, indietro, ricarica). |
 
 ### Keyboard
 

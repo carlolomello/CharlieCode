@@ -139,6 +139,9 @@ export interface CharlieCodeApi {
   pickWorkspace(): Promise<{ path?: string }>
   useWorkspace(path: string): Promise<{ path?: string }>
   openWorkspace(): Promise<void>
+  /** Read-only browsing of the open project, for the Code tab. */
+  workspaceTree(workspace: string, path?: string): Promise<WorkspaceDirListing>
+  workspaceFile(workspace: string, path: string): Promise<WorkspaceFile>
 
   providers(): Promise<ProviderStatus[]>
   setProviderKey(providerId: string, apiKey: string): Promise<ProviderStatus[]>
@@ -399,6 +402,30 @@ export interface WorkspaceChange {
   /** Previous path, for renames. */
   from?: string
   /** Counts are meaningless for binaries. */
+  binary?: boolean
+}
+
+export interface WorkspaceEntry {
+  name: string
+  /** Path relative to the project, `/` separated. */
+  path: string
+  dir: boolean
+  size?: number
+}
+
+export interface WorkspaceDirListing {
+  entries: WorkspaceEntry[]
+  /** The folder has more entries than the panel shows. */
+  truncated?: boolean
+}
+
+export interface WorkspaceFile {
+  path: string
+  text: string
+  size: number
+  /** Only the first 200 kB are sent. */
+  truncated?: boolean
+  /** Not text: the panel says so instead of showing mojibake. */
   binary?: boolean
 }
 

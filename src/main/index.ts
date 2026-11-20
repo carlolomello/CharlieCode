@@ -47,6 +47,7 @@ import {
 } from '../engine/external-agents'
 import { introspectCli } from '../engine/cli-introspect'
 import { connectCli, discoverModelCommand } from '../engine/cli-connect'
+import { listWorkspaceDir, readWorkspaceFile } from '../engine/workspace-files'
 import {
   deleteCliProfile,
   listCliProfiles,
@@ -114,7 +115,9 @@ import type {
   WorkspaceChange,
   WorkspaceChanges,
   RoutersStatus,
-  RoutingStatus
+  RoutingStatus,
+  WorkspaceDirListing,
+  WorkspaceFile
 } from '../shared/ipc'
 
 const platform = createPlatform()
@@ -489,6 +492,22 @@ function registerIpc(): void {
     const { config } = await loadConfig(platform)
     if (config.workspace) await shell.openPath(config.workspace)
   })
+
+  ipcMain.handle(
+    'charliecode:workspace:tree',
+    async (_event, workspace: string, path?: string): Promise<WorkspaceDirListing> => {
+      const root = await assertDirectory(workspace)
+      return listWorkspaceDir(root, path ?? '')
+    }
+  )
+
+  ipcMain.handle(
+    'charliecode:workspace:file',
+    async (_event, workspace: string, path: string): Promise<WorkspaceFile> => {
+      const root = await assertDirectory(workspace)
+      return readWorkspaceFile(root, path)
+    }
+  )
 
   ipcMain.handle('charliecode:providers:list', async (): Promise<ProviderStatus[]> => {
     const { config } = await loadConfig(platform)

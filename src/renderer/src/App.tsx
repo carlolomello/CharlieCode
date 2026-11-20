@@ -30,6 +30,7 @@ import { PermissionModal } from './components/PermissionModal'
 import { SetupWizard, type SetupPath } from './components/SetupWizard'
 import { ProjectWizard } from './components/ProjectWizard'
 import { ChangesPanel } from './components/ChangesPanel'
+import { WorkbenchPanel } from './components/WorkbenchPanel'
 import { ToolActivity, type SubagentRun } from './components/ToolActivity'
 import { ModelPicker } from './components/ModelPicker'
 
@@ -198,6 +199,8 @@ export default function App() {
   const [projectWizard, setProjectWizard] = useState<string | null>(null)
   /** Right-hand "what changed" panel, and the count for its badge. */
   const [changesOpen, setChangesOpen] = useState(false)
+  /** Right-hand workbench: preview, code and browser. */
+  const [workbenchOpen, setWorkbenchOpen] = useState(false)
   /** "Squadra": force this turn to be split across task subagents. */
   const [teamMode, setTeamMode] = useState(() => {
     try {
@@ -612,11 +615,15 @@ export default function App() {
         setSettingsOpen(false)
         return
       }
+      if (workbenchOpen) {
+        setWorkbenchOpen(false)
+        return
+      }
       if (changesOpen) setChangesOpen(false)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [permission, teamPreview, projectWizard, wizardOpen, settingsOpen, changesOpen])
+  }, [permission, teamPreview, projectWizard, wizardOpen, settingsOpen, changesOpen, workbenchOpen])
 
   // The routing file is edited outside the app: re-read it when the drawer opens.
   useEffect(() => {
@@ -1458,8 +1465,24 @@ export default function App() {
           <div className="topbar-right">
             {workspace && (
               <button
+                className={`ghost small workbench-toggle ${workbenchOpen ? 'active' : ''}`}
+                onClick={() => {
+                  setWorkbenchOpen((open) => !open)
+                  setChangesOpen(false)
+                }}
+                title="Anteprima, codice e browser, accanto alla chat"
+                aria-pressed={workbenchOpen}
+              >
+                ◫ Pannello
+              </button>
+            )}
+            {workspace && (
+              <button
                 className={`ghost small changes-toggle ${changesOpen ? 'active' : ''}`}
-                onClick={() => setChangesOpen((open) => !open)}
+                onClick={() => {
+                  setChangesOpen((open) => !open)
+                  setWorkbenchOpen(false)
+                }}
                 title="Cosa è cambiato nel progetto (git)"
               >
                 Modifiche
@@ -1932,6 +1955,10 @@ export default function App() {
 
       {changesOpen && workspace && (
         <ChangesPanel workspace={workspace} onClose={() => setChangesOpen(false)} />
+      )}
+
+      {workbenchOpen && workspace && (
+        <WorkbenchPanel workspace={workspace} onClose={() => setWorkbenchOpen(false)} />
       )}
 
       {projectWizard && (
