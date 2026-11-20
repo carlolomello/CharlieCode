@@ -215,6 +215,10 @@ export function validateCliProfile(value: unknown, fallbackId?: string): CliProf
       return activityPath ? { activityPath } : {}
     })(),
     ...(() => {
+      const thinkingPath = readOptionalString(record, 'thinkingPath', 200)
+      return thinkingPath ? { thinkingPath } : {}
+    })(),
+    ...(() => {
       const modelsPath = readOptionalString(record, 'modelsPath', 200)
       return modelsPath ? { modelsPath } : {}
     })(),

@@ -37,6 +37,7 @@ interface Draft {
   modelsFormat: 'lines' | 'json'
   textPath: string
   activityPath: string
+  thinkingPath: string
   modelsPath: string
   notes: string
   timeoutSeconds: string
@@ -58,6 +59,7 @@ const EMPTY_DRAFT: Draft = {
   modelsFormat: 'lines',
   textPath: '',
   activityPath: '',
+  thinkingPath: '',
   modelsPath: '',
   notes: '',
   timeoutSeconds: '',
@@ -100,6 +102,7 @@ function draftFromProfile(profile: CliProfile): Draft {
     modelsFormat: profile.modelsFormat ?? 'lines',
     textPath: profile.textPath ?? '',
     activityPath: profile.activityPath ?? '',
+    thinkingPath: profile.thinkingPath ?? '',
     modelsPath: profile.modelsPath ?? '',
     notes: profile.notes ?? '',
     timeoutSeconds: profile.timeoutSeconds ? String(profile.timeoutSeconds) : '',
@@ -140,6 +143,7 @@ function profileFromDraft(draft: Draft): Record<string, unknown> {
     ...(splitLines(draft.modelsArgsText).length ? { modelsFormat: draft.modelsFormat } : {}),
     ...(draft.textPath.trim() ? { textPath: draft.textPath.trim() } : {}),
     ...(draft.activityPath.trim() ? { activityPath: draft.activityPath.trim() } : {}),
+    ...(draft.thinkingPath.trim() ? { thinkingPath: draft.thinkingPath.trim() } : {}),
     ...(draft.modelsPath.trim() ? { modelsPath: draft.modelsPath.trim() } : {}),
     ...(draft.notes.trim() ? { notes: draft.notes.trim() } : {}),
     ...(Number.isFinite(timeout) && timeout > 0 ? { timeoutSeconds: timeout } : {}),
@@ -1132,6 +1136,16 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
                 <input
                   value={draft.activityPath}
                   onChange={(event) => setDraft({ ...draft, activityPath: event.target.value })}
+                />
+              </label>
+              <label className="cli-field">
+                <span>
+                  Percorso del ragionamento{' '}
+                  <span className="muted small">— vuoto: lo riconosce da solo</span>
+                </span>
+                <input
+                  value={draft.thinkingPath}
+                  onChange={(event) => setDraft({ ...draft, thinkingPath: event.target.value })}
                 />
               </label>
               <label className="cli-field">

@@ -168,6 +168,8 @@ export interface CliProfile {
   textPath?: string
   /** Advanced: dot path of a tool/activity name inside a JSON line. */
   activityPath?: string
+  /** Advanced: dot path of the reasoning/thinking text inside a JSON line. */
+  thinkingPath?: string
   /** Advanced: dot path of the model array inside JSON output. */
   modelsPath?: string
   /**
@@ -331,6 +333,11 @@ export interface ToolLog {
 export type EngineEvent =
   | { type: 'start'; modelKey: string; label: string; fallbackFrom?: string }
   | { type: 'delta'; text: string; agentId?: string }
+  /**
+   * Reasoning a CLI streamed before its answer. Shown while the turn runs and
+   * never stored: it is the model's monologue, not part of the conversation.
+   */
+  | { type: 'thinking'; text: string; agentId?: string }
   | { type: 'step'; index: number; agentId?: string }
   | {
       type: 'tool-call'

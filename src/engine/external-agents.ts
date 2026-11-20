@@ -900,6 +900,83 @@ export function extractText(event: Record<string, unknown>, textPath?: string): 
   return undefined
 }
 
+/**
+ * Pulls the reasoning a CLI streams before its answer.
+ *
+ * Every agent CLI shows the model thinking, and each one names it differently:
+ * a `reasoning_content` field, a `thinking` part, an `analysis` delta. Reading
+ * only the answer left the panel blank for the whole wait, which reads as a
+ * stuck app. Thinking is never mixed into `text`: it is the model's monologue
+ * and must not enter the answer, the session or the next briefing.
+ */
+export function extractThinking(
+  event: Record<string, unknown>,
+  thinkingPath?: string
+): string | undefined {
+  if (thinkingPath) {
+    const value = readPath(event, thinkingPath)
+    if (typeof value === 'string' && value) return value
+  }
+
+  for (const key of ['reasoning_content', 'reasoning', 'thinking', 'thought']) {
+    const value = event[key]
+    if (typeof value === 'string' && value) return value
+  }
+
+  const part = asRecord(event.part)
+  if (part && typeof part.type === 'string' && /think|reason|analysis/i.test(part.type)) {
+    const text = thinkingText(part)
+    if (text) return text
+  }
+
+  const message = asRecord(event.message)
+  if (message) {
+    for (const key of ['reasoning_content', 'reasoning', 'thinking', 'thought']) {
+      const value = message[key]
+      if (typeof value === 'string' && value) return value
+    }
+  }
+  if (message && Array.isArray(message.content)) {
+    const pieces = message.content
+      .map((entry) => {
+        const record = asRecord(entry)
+        if (!record || typeof record.type !== 'string') return ''
+        return /think|reason|analysis/i.test(record.type) ? (thinkingText(record) ?? '') : ''
+      })
+      .filter(Boolean)
+    if (pieces.length > 0) return pieces.join('')
+  }
+
+  const choices = Array.isArray(event.choices) ? event.choices : []
+  for (const choice of choices) {
+    const delta = asRecord(asRecord(choice)?.delta)
+    if (!delta) continue
+    for (const key of ['reasoning_content', 'reasoning']) {
+      const value = delta[key]
+      if (typeof value === 'string' && value) return value
+    }
+  }
+
+  // A line that declares itself as reasoning carries the chunk elsewhere.
+  const type = typeof event.type === 'string' ? event.type : ''
+  if (/^(thinking|reasoning|analysis|thought)([_-]?(delta|chunk|part))?$/i.test(type)) {
+    return thinkingText(event)
+  }
+
+  return undefined
+}
+
+/** The text of a reasoning object, whatever it calls the field. */
+function thinkingText(value: unknown): string | undefined {
+  const record = asRecord(value)
+  if (!record) return undefined
+  for (const key of ['text', 'thinking', 'reasoning', 'content', 'delta']) {
+    const inner = record[key]
+    if (typeof inner === 'string' && inner) return inner
+  }
+  return undefined
+}
+
 /** Pulls a tool/activity name out of one parsed line. */
 export function extractActivity(
   event: Record<string, unknown>,
@@ -954,6 +1031,14 @@ function lineText(profile: CliProfile, line: string): string | undefined {
   }
 
   return extractText(event, profile.textPath)
+}
+
+function lineThinking(profile: CliProfile, line: string): string | undefined {
+  // `text` is a plain stream: every line is the answer, and guessing which
+  // lines are reasoning would cut words out of it.
+  if ((profile.output ?? 'auto') === 'text') return undefined
+  const event = parseJson(line)
+  return event ? extractThinking(event, profile.thinkingPath) : undefined
 }
 
 function lineActivity(profile: CliProfile, line: string): string | undefined {
@@ -1098,6 +1183,8 @@ function killTree(child: ChildProcess, signal: NodeJS.Signals): void {
 
 export interface RunHooks {
   onText?: (text: string) => void
+  /** Reasoning the CLI streamed, in order, before its answer. */
+  onThinking?: (text: string) => void
   onActivity?: (activity: string) => void
   onStderr?: (line: string) => void
   signal?: AbortSignal
@@ -1298,6 +1385,14 @@ function attempt(
 
     const consume = (line: string): void => {
       if (!line.trim()) return
+      // Reasoning first: a thinking line also carries a `text` field, and read
+      // as an answer it would end up in the message and in the next briefing.
+      const thinking = lineThinking(profile, line)
+      if (thinking) {
+        hooks.onThinking?.(thinking)
+        return
+      }
+
       const activity = lineActivity(profile, line)
       if (activity) hooks.onActivity?.(activity)
 

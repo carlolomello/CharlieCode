@@ -32,6 +32,7 @@ import { ProjectWizard } from './components/ProjectWizard'
 import { ChangesPanel } from './components/ChangesPanel'
 import { WorkbenchPanel } from './components/WorkbenchPanel'
 import { ToolActivity, type SubagentRun } from './components/ToolActivity'
+import { ThinkingBlock } from './components/ThinkingBlock'
 import { ModelPicker } from './components/ModelPicker'
 
 type ChatItem = StoredMessage & {
@@ -39,6 +40,8 @@ type ChatItem = StoredMessage & {
   requestId?: string
   tools?: ToolLog[]
   subagents?: SubagentRun[]
+  /** Reasoning streamed by a CLI: shown live, never stored. */
+  thinking?: string
   /** Mode the turn ran in; drives the "esegui il piano" affordance. */
   mode?: 'plan' | 'build'
 }
@@ -393,6 +396,11 @@ export default function App() {
                 }
               }
               return { ...item, content: item.content + event.text }
+            case 'thinking':
+              // Subagent reasoning has no card of its own yet: it stays out of
+              // the main answer instead of appearing under the wrong name.
+              if (event.agentId) return item
+              return { ...item, thinking: `${item.thinking ?? ''}${event.text}` }
             case 'tool-call':
               return {
                 ...item,
@@ -1665,6 +1673,9 @@ export default function App() {
                         </span>
                       ))}
                     </div>
+                  )}
+                  {item.role === 'assistant' && (item.thinking ?? '').trim().length > 0 && (
+                    <ThinkingBlock text={item.thinking ?? ''} live={Boolean(item.pending)} />
                   )}
                   {item.role === 'assistant' && item.content ? (
                     <div className="message-body assistant">

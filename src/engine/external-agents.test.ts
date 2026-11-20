@@ -6,6 +6,7 @@ import {
   buildCliArgs,
   extractActivity,
   extractText,
+  extractThinking,
   findBinary,
   formatCommand,
   profileModels,
@@ -428,6 +429,32 @@ describe('runExternalAgent', () => {
     expect(result.code).toBe(0)
     expect(result.error).toBeUndefined()
     expect(result.warning).toMatch(/acme\/uno/)
+  })
+
+  it('riconosce il ragionamento in più forme', () => {
+    expect(extractThinking({ type: 'thinking', text: 'a' })).toBe('a')
+    expect(extractThinking({ type: 'reasoning_delta', delta: 'b' })).toBe('b')
+    expect(extractThinking({ type: 'message', message: { reasoning: 'c' } })).toBe('c')
+    expect(
+      extractThinking({ message: { content: [{ type: 'reasoning', text: 'd' }] } })
+    ).toBe('d')
+    expect(extractThinking({ choices: [{ delta: { reasoning_content: 'e' } }] })).toBe('e')
+    expect(extractThinking({ type: 'text', text: 'risposta' })).toBeUndefined()
+  })
+
+  it('manda il ragionamento a parte, mai dentro la risposta', async () => {
+    const cli = node(
+      'process.stdout.write(JSON.stringify({ type: "thinking", text: "sto leggendo il progetto" }) + "\\n"); process.stdout.write(JSON.stringify({ type: "text", text: "risposta" }) + "\\n")'
+    )
+    const seen: string[] = []
+    const result = await runExternalAgent(
+      profile({ ...cli, output: 'json-lines' }),
+      { prompt: 'ignorato', workspace: process.cwd() },
+      { onThinking: (text) => seen.push(text) }
+    )
+
+    expect(seen).toEqual(['sto leggendo il progetto'])
+    expect(result.text).toBe('risposta')
   })
 
   it('riconosce il flag che la CLI dichiara sconosciuto', () => {

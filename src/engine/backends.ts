@@ -317,6 +317,13 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
           if (firstTextAt === undefined) firstTextAt = Date.now()
           input.emit({ type: 'delta', text: chunk })
         },
+        // Reasoning is shown while the turn runs, like every agent CLI does.
+        // A planning call and a subagent stay quiet: their reasoning belongs to
+        // a card the user did not open.
+        onThinking: (chunk) => {
+          if (options.quiet || options.agent) return
+          input.emit({ type: 'thinking', text: chunk })
+        },
         onActivity: (activity) => emitActivity(activity, options.agent)
       }
     )

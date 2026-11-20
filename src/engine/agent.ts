@@ -528,6 +528,18 @@ export async function runAgent(
               emit({ type: 'delta', text: part.text, ...(options.agentId ? { agentId: options.agentId } : {}) })
               break
             }
+            case 'reasoning-delta': {
+              // A reasoning model talks to itself before answering. Showing it is
+              // what makes a slow first token readable instead of a frozen app;
+              // it stays out of `text`, so it never enters the session.
+              if (!part.text) break
+              emit({
+                type: 'thinking',
+                text: part.text,
+                ...(options.agentId ? { agentId: options.agentId } : {})
+              })
+              break
+            }
             case 'start-step': {
               emit({ type: 'step', index: toolCalls, ...(options.agentId ? { agentId: options.agentId } : {}) })
               break
