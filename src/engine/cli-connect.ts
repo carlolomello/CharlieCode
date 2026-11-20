@@ -11,7 +11,7 @@ import {
   profileModels,
   resolveBinaryViaShell
 } from './external-agents'
-import { introspectCli } from './cli-introspect'
+import { introspectCli, hasPromptMechanism } from './cli-introspect'
 import { readCliProfile, saveCliProfile, slugifyProfileId } from './cli-profiles'
 
 /**
@@ -53,7 +53,7 @@ const MODEL_CANDIDATES: string[][] = [
 // provider load their whole runtime before printing the first id, and on a cold
 // Windows start that easily passes ten seconds. Eight seconds used to turn a
 // working command into "this CLI cannot list its models".
-const PROBE_TIMEOUT_MS = 30_000
+const PROBE_TIMEOUT_MS = 60_000
 
 interface Capture {
   stdout: string
@@ -356,6 +356,23 @@ export async function connectCli(
   const warnings = [...introspection.warnings]
   const findings = [...introspection.findings]
 
+  // A profile saved while the CLI's help was unreadable (a Windows `.cmd` that
+  // answered nothing) has no way to hand the prompt over. Adopting the proposal
+  // that does is what turns `<cli> "prompt"` — a project folder for a TUI-first
+  // CLI — into `<cli> run "prompt"`.
+  const savedArgs = saved?.args ?? []
+  const proposedArgs = proposal.args ?? []
+  const args =
+    !hasPromptMechanism(savedArgs) && hasPromptMechanism(proposedArgs)
+      ? proposedArgs
+      : saved
+        ? savedArgs
+        : proposedArgs
+  const argsChanged = Boolean(saved) && args.join('\u0000') !== savedArgs.join('\u0000')
+  if (argsChanged && args.length > 0) {
+    warnings.push(`Ho corretto l’avvio della CLI: il prompt ora passa come ${args.join(' ')}.`)
+  }
+
   let modelsArgs = saved?.modelsArgs ?? proposal.modelsArgs
   // The CLI's own answer is kept even if it prints nothing in time: a models
   // command that needs half a minute is still the right command.
@@ -371,7 +388,7 @@ export async function connectCli(
     // The resolved path, so the model probe works even when the bare name is
     // only visible to the user's shell.
     command: binary,
-    args: saved?.args ?? proposal.args ?? [],
+    args,
     ...(modelsArgs ? { modelsArgs } : {})
   }
 
@@ -453,6 +470,7 @@ export async function connectCli(
   const profile: CliProfile = saved
     ? {
         ...saved,
+        ...(argsChanged ? { args } : {}),
         ...(modelsArgs && !sameModelsArgs ? { modelsArgs } : {}),
         ...(modelsFormat ? { modelsFormat } : {}),
         ...(modelsPath ? { modelsPath } : {}),
@@ -464,7 +482,7 @@ export async function connectCli(
         // The resolved path keeps working even when the app's PATH differs from
         // the user's shell the next time the profile is used.
         command: binary,
-        args: proposal.args ?? [],
+        args,
         ...(proposal.promptMode ? { promptMode: proposal.promptMode } : {}),
         ...(proposal.output ? { output: proposal.output } : {}),
         // A CLI that can list models but does not advertise the flag still
@@ -494,4 +512,40 @@ export async function connectCli(
     ...(modelsCommand ? { modelsCommand } : {}),
     existing: Boolean(saved)
   }
+}
+
+/**
+ * Repairs a profile that cannot hand its prompt to the CLI.
+ *
+ * A profile saved before the help was readable on this machine (a Windows
+ * `.cmd` that answered nothing) has an empty argv: every turn then runs as
+ * `<cli> "prompt"`, which a TUI-first CLI reads as a project folder. The fix is
+ * the one `connectCli` applies — read the help and adopt the non-interactive
+ * subcommand — applied to a profile that already exists, so the user does not
+ * have to delete and recreate it.
+ */
+export async function ensureCliArgs(
+  platform: Platform,
+  profile: CliProfile,
+  workspace?: string
+): Promise<CliProfile> {
+  if (hasPromptMechanism(profile.args)) return profile
+
+  const binary =
+    findBinary(profile.command, platform.homeDir, workspace) ??
+    (await resolveBinaryViaShell(profile.command, {
+      home: platform.homeDir,
+      timeoutMs: 4_000
+    }))
+  if (!binary) return profile
+
+  const introspection = await introspectCli(binary, {
+    home: platform.homeDir,
+    ...(workspace ? { workspace } : {})
+  }).catch(() => undefined)
+  const proposed = introspection?.proposal.args ?? []
+  if (!hasPromptMechanism(proposed)) return profile
+
+  const repaired: CliProfile = { ...profile, args: proposed }
+  return saveCliProfile(platform, repaired).catch(() => repaired)
 }

@@ -427,3 +427,32 @@ describe('runExternalAgent', () => {
     ).rejects.toThrow(/non trovato/)
   })
 })
+
+describe('profileModels', () => {
+  it.runIf(process.platform !== 'win32')(
+    'legge la lista anche quando arriva su stderr con codice 1',
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'charliecode-models-'))
+      try {
+        const binary = join(dir, 'agent-models')
+        await writeFile(
+          binary,
+          `#!/bin/sh\necho
+echo "acme/uno" >&2
+echo "acme/due" >&2
+exit 1\n`
+        )
+        await chmod(binary, 0o755)
+
+        const models = await profileModels(
+          profile({ command: binary, modelsArgs: ['models'] }),
+          dir,
+          dir
+        )
+        expect(models).toEqual(['acme/uno', 'acme/due'])
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+      }
+    }
+  )
+})

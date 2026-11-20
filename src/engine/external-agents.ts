@@ -707,27 +707,42 @@ export async function profileModels(
   const target = spawnTarget(binary, args, { ...(node ? { node } : {}), allowShell: true })
   if (!target) return []
 
-  try {
-    const { stdout } = await run(target.file, target.args, {
-      // A models command loads the whole CLI runtime before printing the first
-      // id: twenty seconds was not enough on Windows and the list came back
-      // empty.
-      timeout: 60_000,
-      windowsHide: true,
-      maxBuffer: 4 * 1024 * 1024,
-      env: { ...process.env, ...target.env },
-      ...(workspace ? { cwd: workspace } : {})
-    })
+  // A models command may print its list to stderr, or print it and then exit
+  // non-zero over an unrelated warning (a missing telemetry key, an update
+  // check). Reading only a clean stdout turned a working list into an empty
+  // picker, which is exactly what the user sees as "there is no list".
+  const output = await new Promise<string>((resolve) => {
+    execFile(
+      target.file,
+      target.args,
+      {
+        // A cold Windows start of an agent CLI loads its whole runtime before
+        // the first id: a minute was still not enough on some machines.
+        timeout: 120_000,
+        killSignal: 'SIGKILL',
+        windowsHide: true,
+        maxBuffer: 4 * 1024 * 1024,
+        env: { ...process.env, ...target.env },
+        ...(workspace ? { cwd: workspace } : {})
+      },
+      (_error, stdout, stderr) => {
+        const out = String(stdout ?? '')
+        resolve(out.trim() ? out : String(stderr ?? ''))
+      }
+    )
+  })
+  if (!output.trim()) return []
 
-    const format = profile.modelsFormat ?? 'lines'
-    if (format === 'json') {
-      const parsed: unknown = JSON.parse(stdout)
+  const format = profile.modelsFormat ?? 'lines'
+  if (format === 'json') {
+    try {
+      const parsed: unknown = JSON.parse(output)
       return [...new Set(modelNames(parsed, profile.modelsPath))].slice(0, 400)
+    } catch {
+      return []
     }
-    return [...new Set(modelNamesFromOutput(stdout))].slice(0, 400)
-  } catch {
-    return []
   }
+  return [...new Set(modelNamesFromOutput(output))].slice(0, 400)
 }
 
 /* ------------------------------- process -------------------------------- */
@@ -952,24 +967,26 @@ function attempt(
 
       const exitCode = code ?? -1
       // The CLI's own words are the only useful diagnosis: without them the
-      // user reads "codice 1" and has nothing to act on.
+      // user reads "codice 1" and has nothing to act on. A CLI that logs a bare
+      // `ERROR` and the reason on the next line needs more than the first line.
+      const stderrLines = stderr
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
       const detail =
-        stderr
-          .split('\n')
-          .map((line) => line.trim())
-          .find(Boolean) ??
+        (stderrLines.length > 0 ? stderrLines.slice(0, 4).join(' | ') : '') ||
         raw
           .split('\n')
           .map((line) => line.trim())
           .filter(Boolean)
-          .slice(-1)[0] ??
+          .slice(-1)[0] ||
         ''
       const failure = timedOut
         ? `${profile.label} non ha risposto entro ${Math.round(timeoutMs / 1000)}s`
         : aborted
           ? `${profile.label} interrotta`
           : exitCode !== 0
-            ? `${profile.label} è uscita con codice ${exitCode}${detail ? `: ${detail.slice(0, 300)}` : ''}`
+            ? `${profile.label} è uscita con codice ${exitCode}${detail ? `: ${detail.slice(0, 400)}` : ''}`
             : undefined
 
       resolve({

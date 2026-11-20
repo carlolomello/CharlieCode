@@ -46,7 +46,12 @@ import {
   searchBinaries
 } from '../engine/external-agents'
 import { introspectCli } from '../engine/cli-introspect'
-import { askModelCommand, connectCli, discoverModelCommand } from '../engine/cli-connect'
+import {
+  askModelCommand,
+  connectCli,
+  discoverModelCommand,
+  ensureCliArgs
+} from '../engine/cli-connect'
 import { listWorkspaceDir, readWorkspaceFile } from '../engine/workspace-files'
 import {
   deleteCliProfile,
@@ -809,10 +814,13 @@ function registerIpc(): void {
     async (_event, payload: { id: string; model?: string }): Promise<CliTestResult> => {
       const started = Date.now()
       const { config } = await loadConfig(platform)
-      const profile = await readCliProfile(platform, payload.id)
-      if (!profile) {
+      const saved = await readCliProfile(platform, payload.id)
+      if (!saved) {
         return { ok: false, error: `Profilo "${payload.id}" non trovato.`, ms: 0 }
       }
+      // The test is the first place a broken profile shows up: repair it before
+      // spawning instead of reporting a failure the user cannot act on.
+      const profile = await ensureCliArgs(platform, saved, config.workspace)
 
       // A test must never touch the project: it runs in an empty temp folder.
       const scratch = await mkdtemp(join(tmpdir(), 'charliecode-cli-test-'))
@@ -862,8 +870,12 @@ function registerIpc(): void {
     'charliecode:clis:models',
     async (_event, id: string, force?: boolean): Promise<string[]> => {
       const { config } = await loadConfig(platform)
-      const profile = await readCliProfile(platform, id)
-      if (!profile) return []
+      const saved = await readCliProfile(platform, id)
+      if (!saved) return []
+      // Opening this list is the moment the CLI becomes the backend: a profile
+      // saved without a way to pass the prompt is repaired here, so an existing
+      // install works without being deleted and created again.
+      const profile = await ensureCliArgs(platform, saved, config.workspace)
 
       const cache = profile.modelsCache
       const sameArgs =
@@ -1264,9 +1276,19 @@ hanno priorità su queste.
           const cliInfo = await cliStatus()
 
           if (cliTarget) {
-            const profile = cliInfo.profiles.find(
+            const savedProfile = cliInfo.profiles.find(
               (entry) => entry.profile.id === cliTarget.profileId
             )?.profile
+            // Sending a message must not depend on the picker having been
+            // opened first: a profile saved without a way to pass the prompt is
+            // repaired here too.
+            const profile = savedProfile
+              ? await ensureCliArgs(
+                  platform,
+                  savedProfile,
+                  workspace ?? platform.homeDir
+                )
+              : undefined
             if (!profile) {
               const message = `Il profilo CLI "${cliTarget.profileId}" non esiste più. Scegli un altro backend nel selettore.`
               failure = message

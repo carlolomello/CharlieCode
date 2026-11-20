@@ -2,7 +2,12 @@ import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { introspectCli, parseHelpFlags, proposalFromHelp } from './cli-introspect'
+import {
+  hasPromptMechanism,
+  introspectCli,
+  parseHelpFlags,
+  proposalFromHelp
+} from './cli-introspect'
 
 const HELP = `Usage: agent [options]
 
@@ -97,6 +102,37 @@ Options:
 `
     const { proposal } = proposalFromHelp(help)
     expect(proposal.modelsArgs).toEqual(['models'])
+  })
+
+  it('usa il sottocomando run e non il flag che apre l’interfaccia', () => {
+    // The shape of a TUI-first CLI: `--prompt` only pre-fills the screen, while
+    // `run` answers and exits. Passing the prompt as a bare argument is read as
+    // a project folder.
+    const help = `Usage: agent [options] [project]
+
+Commands:
+  run [message..]   Run one turn without the interface
+  models            List models
+
+Options:
+  -m, --model <id>   Model to use
+      --prompt       Prompt to pre-fill in the interface
+`
+    const { proposal, findings } = proposalFromHelp(help)
+
+    expect(proposal.args).toEqual(['run'])
+    expect(proposal.modelArgs).toEqual(['--model', '{model}'])
+    expect(proposal.modelsArgs).toEqual(['models'])
+    expect(findings.find((finding) => finding.field === 'prompt')?.evidence).toContain('run')
+  })
+
+  it('riconosce i modi in cui il prompt raggiunge la CLI', () => {
+    expect(hasPromptMechanism([])).toBe(false)
+    expect(hasPromptMechanism(['--json'])).toBe(false)
+    expect(hasPromptMechanism(['run'])).toBe(true)
+    expect(hasPromptMechanism(['exec', '{prompt}'])).toBe(true)
+    expect(hasPromptMechanism(['-p'])).toBe(true)
+    expect(hasPromptMechanism(['--print'])).toBe(true)
   })
 
   it('non inventa un flag per il modello quando non c’è', () => {

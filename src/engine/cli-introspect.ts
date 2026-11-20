@@ -1,6 +1,7 @@
 import { execFile, type ExecFileException } from 'node:child_process'
 import type { CliFinding, CliIntrospection, CliProfile } from './types'
 import { findBinary } from './external-agents'
+import { spawnTarget } from './cli-shim'
 
 export type { CliFinding, CliIntrospection } from './types'
 
@@ -50,17 +51,34 @@ interface Capture {
  * Runs a command and resolves even on a non-zero exit: help often goes to
  * stderr and still exits 1, and that output is exactly what we need.
  */
-function capture(binary: string, args: string[], timeout: number): Promise<Capture> {
+function capture(
+  binary: string,
+  args: string[],
+  timeout: number,
+  home?: string
+): Promise<Capture> {
   return new Promise((resolve) => {
+    // On Windows an npm/pnpm CLI is a `.cmd` shim, and node cannot spawn it
+    // without a shell. Reading the help through the shim's JavaScript entry is
+    // what makes introspection work there at all: before this, `--help`
+    // answered nothing, the profile was saved with an empty argv, and the
+    // prompt reached the CLI as a bare positional argument.
+    const node = findBinary('node', home)
+    const target = spawnTarget(binary, args, { ...(node ? { node } : {}), allowShell: true })
+    if (!target) {
+      resolve({ stdout: '', stderr: '', failed: true })
+      return
+    }
+
     execFile(
-      binary,
-      args,
+      target.file,
+      target.args,
       {
         timeout,
         killSignal: 'SIGKILL',
         windowsHide: true,
         maxBuffer: 2 * 1024 * 1024,
-        env: { ...process.env, CI: '1', NO_COLOR: '1', FORCE_COLOR: '0' }
+        env: { ...process.env, ...target.env, CI: '1', NO_COLOR: '1', FORCE_COLOR: '0' }
       },
       (error: ExecFileException | null, stdout: string, stderr: string) => {
         resolve({
@@ -196,6 +214,38 @@ function commandNames(help: string): string[] {
 }
 
 /**
+ * Subcommands that run one non-interactive turn. Ordered by how common the
+ * spelling is, never by vendor: a CLI that lists one of these in its `Commands:`
+ * section wants `tool run "prompt"`, and a bare positional is something else
+ * entirely (a project folder for every TUI-first CLI).
+ */
+const RUN_COMMANDS = ['run', 'exec', 'ask', 'prompt', 'send', 'chat', 'generate', 'complete']
+
+/** The subcommand that answers one prompt, when the help lists one. */
+export function runSubcommand(help: string): string | undefined {
+  const commands = commandNames(help)
+  return RUN_COMMANDS.find((name) => commands.includes(name))
+}
+
+/**
+ * True when the argv says how the prompt gets to the CLI: a `{prompt}`
+ * placeholder, a prompt-ish flag, or a non-interactive subcommand first. A
+ * profile without any of them can only be spawned in a way that fails.
+ */
+export function hasPromptMechanism(args: string[]): boolean {
+  if (args.some((arg) => arg.includes('{prompt}'))) return true
+  if (
+    args.some((arg) =>
+      /^(-p|--print|--prompt|--message|--instruction|--input|--query|--ask)$/.test(arg)
+    )
+  ) {
+    return true
+  }
+  const first = args.find((arg) => !arg.startsWith('-'))
+  return first ? RUN_COMMANDS.includes(first) : false
+}
+
+/**
  * Turns help text into a profile proposal. Pure on purpose: the interesting
  * logic is testable without spawning anything.
  */
@@ -221,6 +271,19 @@ export function proposalFromHelp(
 
   /* ------------------------- headless / prompt ------------------------- */
 
+  // The subcommand comes first in the argv and wins over a `--prompt` flag:
+  // on a TUI-first CLI that flag only pre-fills the interface, so the turn
+  // would open a screen, print nothing and look like a hang.
+  const sub = runSubcommand(help)
+  if (sub) {
+    if (!args.includes(sub)) args.unshift(sub)
+    findings.push({
+      field: 'prompt',
+      label: 'prompt',
+      evidence: `${sub} (prompt in coda)`
+    })
+  }
+
   const headless = pickFlag(flags, [
     '--non-interactive',
     '--noninteractive',
@@ -237,7 +300,7 @@ export function proposalFromHelp(
     })
   }
 
-  const print = pickFlag(flags, ['--print', '--prompt', '--message', '--instruction'])
+  const print = sub ? undefined : pickFlag(flags, ['--print', '--prompt', '--message', '--instruction'])
   const printIsPrompt =
     print &&
     /(prompt|message|instruction|question|headless|non-?interactive|one[- ]shot|single|answer)/i.test(
@@ -413,9 +476,9 @@ export function proposalFromHelp(
   }
 }
 
-async function versionOf(binary: string): Promise<string | undefined> {
+async function versionOf(binary: string, home?: string): Promise<string | undefined> {
   for (const flag of ['--version', '-V']) {
-    const result = await capture(binary, [flag], 1_500)
+    const result = await capture(binary, [flag], 1_500, home)
     if (result.failed) continue
     const line = stripAnsi(`${result.stdout}\n${result.stderr}`)
       .split('\n')
@@ -426,9 +489,9 @@ async function versionOf(binary: string): Promise<string | undefined> {
   return undefined
 }
 
-async function helpText(binary: string, timeout: number): Promise<string> {
+async function helpText(binary: string, timeout: number, home?: string): Promise<string> {
   for (const args of [['--help'], ['-h'], ['help']]) {
-    const result = await capture(binary, args, timeout)
+    const result = await capture(binary, args, timeout, home)
     const output = stripAnsi([result.stdout, result.stderr].filter(Boolean).join('\n')).trim()
     if (output.length < 20) continue
     // Some tools answer an unknown flag with a one-line error and exit 1.
@@ -468,8 +531,8 @@ export async function introspectCli(
   }
 
   const [version, help] = await Promise.all([
-    versionOf(binary),
-    helpText(binary, options.timeoutMs ?? 4_000)
+    versionOf(binary, options.home),
+    helpText(binary, options.timeoutMs ?? 4_000, options.home)
   ])
 
   if (!help) {
