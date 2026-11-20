@@ -161,9 +161,9 @@ What that means in practice:
 
 - choose the CLI in the model picker for the main conversation, or leave it as the worker for `task` subagents;
 - the models it printed in the connect step are the ones the second selector offers — no manual list to maintain;
-- its own models appear in a second selector when the CLI is selected, and the effort levels come from the profile; when a profile has no models command yet, CharlieCode looks for one the first time you open that list and remembers it; when a CLI cannot list its models at all, that same spot is a text field where you type the model name — the control is never hidden;
+- its own models appear in a second selector when the CLI is selected, and the effort levels come from the profile; when a profile has no models command yet, CharlieCode looks for one the first time you open that list and remembers it; when a CLI cannot list its models at all, that same spot is a text field where you type the model name — the control is never hidden. A profile that does not advertise the model flag still gets `--model <name>`; edit `modelArgs` in the profile when the CLI spells it differently;
 - the model calls happen inside that CLI — its auth, its quota, its audit log;
-- before each turn CharlieCode writes the recent conversation into a briefing, and after it imports the answer, the tool activity and the diff of the files it changed;
+- before each turn CharlieCode writes the recent conversation into a briefing, and after it imports the answer, the tool activity and the diff of the files it changed. Attached documents are inlined in that briefing, and images are declared as not visible: a CLI sandboxed to the project cannot open files under the app config dir, so no unreachable paths are handed over;
 - switching between a CLI and a native model keeps the same thread: the canonical context lives in the session, not in the backend;
 - **explorer** and **reviewer** subagents run with the profile's read-only flags;
 - writing is opt-in per CLI, and only for **implementer** subagents;

@@ -276,7 +276,10 @@ export async function connectCli(
         args: proposal.args ?? [],
         ...(proposal.promptMode ? { promptMode: proposal.promptMode } : {}),
         ...(proposal.output ? { output: proposal.output } : {}),
-        ...(proposal.modelArgs ? { modelArgs: proposal.modelArgs } : {}),
+        // A CLI that can list models but does not advertise the flag still
+        // takes one: store the usual spelling so the panel shows it and the
+        // user can correct it, instead of hiding the model picker.
+        modelArgs: proposal.modelArgs ?? ['--model', '{model}'],
         ...(proposal.effortArgs ? { effortArgs: proposal.effortArgs } : {}),
         ...(proposal.effortValues ? { effortValues: proposal.effortValues } : {}),
         ...(proposal.planArgs ? { planArgs: proposal.planArgs } : {}),

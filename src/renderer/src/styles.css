@@ -3909,10 +3909,6 @@ button.ghost:hover,
   font: inherit;
 }
 
-.cli-model-note {
-  font-size: 12px;
-  white-space: nowrap;
-}
 
 /* ---------- workbench (anteprima / codice / browser) ---------- */
 

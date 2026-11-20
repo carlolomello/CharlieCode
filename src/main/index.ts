@@ -1211,11 +1211,11 @@ hanno priorità su queste.
                 platform,
                 toChatHistory(stored, stored.messages.length)
               )
-              // Images cannot be read by most CLIs, so the briefing lists their
-              // path on disk instead of inlining the bytes.
-              const cliAttachments = attachmentRefs.flatMap((ref) =>
-                ref.path ? [{ name: ref.name, path: platform.configPath(ref.path) }] : []
-              )
+              // Documents are already inlined in the history by
+              // `materializeHistory`, and the files live under the app config
+              // dir: a CLI sandboxed to the project cannot open those paths, so
+              // handing them over only made it answer that the attachments were
+              // unavailable. Images are declared in the briefing instead.
 
               // A CLI backend has no `charliecode_config` tool, but it still
               // needs the architecture to guide the user instead of inventing.
@@ -1241,7 +1241,6 @@ hanno priorità su queste.
                 prompt: payload.text,
                 history,
                 system: cliSystem,
-                ...(cliAttachments.length > 0 ? { attachments: cliAttachments } : {}),
                 workspace: workspace ?? platform.homeDir,
                 home: platform.homeDir,
                 signal: controller.signal,

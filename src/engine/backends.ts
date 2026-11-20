@@ -46,8 +46,6 @@ export function cliModelEntries(profiles: CliProfileInfo[]): ModelEntry[] {
       caps: { tools: true, vision: false, contextWindow: 32_000 },
       capsConfidence: 'guess' as const,
       effort: 'none' as const,
-      // Without a model flag the picker must not offer a name it cannot pass.
-      acceptsModel: Boolean(profile.modelArgs?.length),
       efforts: profile.effortArgs?.length
         ? (['none', 'low', 'high', 'max'] as EffortLevel[])
         : (['none'] as EffortLevel[])
@@ -96,6 +94,10 @@ export function buildCliBriefing(input: {
   }
 
   const omitted = history.slice(0, start)
+  const images = input.messages.reduce(
+    (total, message) => total + (message.images?.length ?? 0),
+    0
+  )
 
   return [
     'Sei il motore di una conversazione gestita da CharlieCode. Lavora sul progetto nella directory corrente e rispondi alla richiesta finale.',
@@ -111,6 +113,11 @@ export function buildCliBriefing(input: {
       ? `Allegati di questo turno (file su disco):\n${input.attachments
           .map((item) => `- ${item.name}: ${item.path}`)
           .join('\n')}`
+      : '',
+    // A CLI is usually sandboxed to the project: a path under the app config
+    // dir is unreadable there, so images are declared instead of linked.
+    images > 0
+      ? `Nota: questa conversazione contiene ${images} immagine/i che questa CLI non può vedere. Non descriverne il contenuto e non dire che mancano.`
       : '',
     `Richiesta attuale:\n${prompt}`
   ]

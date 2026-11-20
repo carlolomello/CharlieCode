@@ -55,6 +55,24 @@ describe('buildCliArgs', () => {
     expect(argv).toEqual(['run', 'ciao'])
   })
 
+  it('passa il modello con --model quando il profilo non dichiara il flag', () => {
+    const argv = buildCliArgs(profile({ args: ['run'] }), {
+      prompt: 'ciao',
+      workspace: '/proj',
+      model: 'sonnet-5.5'
+    })
+    expect(argv).toEqual(['run', '--model', 'sonnet-5.5', 'ciao'])
+  })
+
+  it('non aggiunge --model quando il modello è già un segnaposto', () => {
+    const argv = buildCliArgs(profile({ args: ['--model', '{model}'] }), {
+      prompt: 'ciao',
+      workspace: '/proj',
+      model: 'm1'
+    })
+    expect(argv).toEqual(['--model', 'm1', 'ciao'])
+  })
+
   it('aggiunge modello, sola lettura e scrittura automatica', () => {
     const argv = buildCliArgs(
       profile({

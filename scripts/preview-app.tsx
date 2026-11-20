@@ -34,7 +34,6 @@ const models: ModelEntry[] =
           caps: { tools: true, vision: false, contextWindow: 32000 },
           capsConfidence: 'guess',
           effort: 'none',
-          acceptsModel: true,
           efforts: ['none']
         },
         {

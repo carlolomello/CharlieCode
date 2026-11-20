@@ -124,8 +124,16 @@ export function buildCliArgs(profile: CliProfile, options: AgentRunOptions): str
   const argv = expandAll(profile.args, options)
   const hasPrompt = profile.args.some((arg) => arg.includes('{prompt}'))
 
-  if (options.model && profile.modelArgs?.length) {
-    argv.push(...expandAll(profile.modelArgs, options))
+  if (options.model) {
+    const alreadyPlaced = profile.args.some((arg) => arg.includes('{model}'))
+    if (profile.modelArgs?.length) {
+      argv.push(...expandAll(profile.modelArgs, options))
+    } else if (!alreadyPlaced) {
+      // Almost every coding CLI spells this flag the same way. The profile
+      // editor overrides it when a CLI disagrees, so a missing `modelArgs`
+      // never turns the model picker into a dead control.
+      argv.push('--model', options.model)
+    }
   }
 
   const effort = options.effort ? effortValue(profile, options.effort) : ''
