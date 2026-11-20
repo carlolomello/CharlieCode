@@ -8,6 +8,7 @@ import {
   extractText,
   findBinary,
   formatCommand,
+  resolveBinaryViaShell,
   runExternalAgent,
   searchBinaries
 } from './external-agents'
@@ -181,6 +182,34 @@ describe('findBinary', () => {
     await chmod(script, 0o755)
 
     expect(findBinary('nested-agent-xyz', dir)).toBe(script)
+  })
+})
+
+describe('resolveBinaryViaShell', () => {
+  it.runIf(process.platform !== 'win32')(
+    'risolve un comando tramite la shell dell’utente',
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'charliecode-shell-'))
+      const oldPath = process.env.PATH
+      try {
+        const script = join(dir, 'shell-agent-xyz')
+        await writeFile(script, '#!/bin/sh\necho ok\n')
+        await chmod(script, 0o755)
+        process.env.PATH = `${dir}${delimiter}${oldPath ?? ''}`
+
+        expect(
+          await resolveBinaryViaShell('shell-agent-xyz', { home: dir, timeoutMs: 5_000 })
+        ).toBe(script)
+      } finally {
+        process.env.PATH = oldPath
+        await rm(dir, { recursive: true, force: true })
+      }
+    }
+  )
+
+  it('rifiuta un comando con metacaratteri', async () => {
+    expect(await resolveBinaryViaShell('agent; rm -rf /')).toBeUndefined()
+    expect(await resolveBinaryViaShell('agent $(whoami)')).toBeUndefined()
   })
 })
 

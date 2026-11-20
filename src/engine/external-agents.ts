@@ -285,6 +285,63 @@ export function findBinary(
   return undefined
 }
 
+const SAFE_COMMAND = /^[A-Za-z0-9._+@/\\:-]+$/
+
+/** The shell the user actually logs in with, when this platform has one. */
+function loginShell(): string {
+  if (process.platform === 'win32') return ''
+  const fromEnv = process.env.SHELL
+  if (fromEnv && isAbsolute(fromEnv)) return fromEnv
+  return process.platform === 'darwin' ? '/bin/zsh' : '/bin/bash'
+}
+
+/**
+ * Resolves a command through the user's own shell.
+ *
+ * An app launched from Finder/Explorer inherits a minimal PATH, while the CLI
+ * was installed by a line in `.zshrc`/`.bashrc`. `findBinary` covers the common
+ * install directories; this covers everything else, using the shell the user
+ * configured. The command is whitelisted before it reaches the shell, so the
+ * prompt can never become a command line.
+ */
+export async function resolveBinaryViaShell(
+  command: string,
+  options: { home?: string; timeoutMs?: number } = {}
+): Promise<string | undefined> {
+  const cleaned = command.trim()
+  if (!cleaned || !SAFE_COMMAND.test(cleaned)) return undefined
+  const shell = loginShell()
+  if (!shell) return undefined
+
+  // `-l` loads the login profile; `-i` also loads the interactive rc, where
+  // most installers append their PATH. Two attempts, each bounded.
+  for (const flags of [['-lc'], ['-ilc']]) {
+    const found = await new Promise<string | undefined>((resolve) => {
+      execFile(
+        shell,
+        [...flags, `command -v ${cleaned}`],
+        {
+          timeout: options.timeoutMs ?? 5_000,
+          killSignal: 'SIGKILL',
+          windowsHide: true,
+          maxBuffer: 64 * 1024,
+          env: { ...process.env, ...(options.home ? { HOME: options.home } : {}) }
+        },
+        (_error, stdout) => {
+          const line = String(stdout ?? '')
+            .split('\n')
+            .map((entry) => entry.trim())
+            .find(Boolean)
+          resolve(line && isAbsolute(line) && isExecutable(line) ? line : undefined)
+        }
+      )
+    })
+    if (found) return found
+  }
+
+  return undefined
+}
+
 /** `<home>/<name>/bin` for every folder directly under the home directory. */
 function nestedBinDirectories(home: string): string[] {
   const directories: string[] = []
@@ -366,6 +423,22 @@ export async function searchBinaries(
         ...(version ? { version } : {})
       }
     ]
+  }
+
+  // Before scanning for partial names: the command may be installed on a PATH
+  // that only the user's shell knows about.
+  if (cleaned.length >= 3 && !cleaned.includes('/') && !cleaned.includes('\\')) {
+    const viaShell = await resolveBinaryViaShell(cleaned, { home, timeoutMs: 800 })
+    if (viaShell) {
+      const version = await versionOf(viaShell)
+      return [
+        {
+          name: displayName(basename(viaShell)),
+          path: viaShell,
+          ...(version ? { version } : {})
+        }
+      ]
+    }
   }
 
   // One character would list half the machine; wait for a real query.

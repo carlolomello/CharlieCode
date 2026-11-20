@@ -2,7 +2,12 @@ import { execFile } from 'node:child_process'
 import { basename, extname } from 'node:path'
 import type { CliFinding, CliProfile } from './types'
 import type { Platform } from './platform'
-import { findBinary, formatCommand, profileModels } from './external-agents'
+import {
+  findBinary,
+  formatCommand,
+  profileModels,
+  resolveBinaryViaShell
+} from './external-agents'
 import { introspectCli } from './cli-introspect'
 import { readCliProfile, saveCliProfile, slugifyProfileId } from './cli-profiles'
 
@@ -181,14 +186,18 @@ export async function connectCli(
   const command = input.command.trim()
   if (!command) throw new Error('Scrivi il comando con cui avvii la CLI.')
 
-  const binary = findBinary(command, platform.homeDir, input.workspace)
+  // PATH first (fast), then the user's own shell: a CLI installed by a line in
+  // `.zshrc` is invisible to an app launched from Finder.
+  const binary =
+    findBinary(command, platform.homeDir, input.workspace) ??
+    (await resolveBinaryViaShell(command, { home: platform.homeDir }))
   if (!binary) {
     throw new Error(
       `Comando "${command}" non trovato. Controlla il nome nel PATH o indica il percorso assoluto della CLI.`
     )
   }
 
-  const introspection = await introspectCli(command, {
+  const introspection = await introspectCli(binary, {
     home: platform.homeDir,
     ...(input.workspace ? { workspace: input.workspace } : {})
   })
@@ -259,7 +268,9 @@ export async function connectCli(
     : {
         id,
         label,
-        command,
+        // The resolved path keeps working even when the app's PATH differs from
+        // the user's shell the next time the profile is used.
+        command: binary,
         args: proposal.args ?? [],
         ...(proposal.promptMode ? { promptMode: proposal.promptMode } : {}),
         ...(proposal.output ? { output: proposal.output } : {}),
