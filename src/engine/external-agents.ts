@@ -1,9 +1,10 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { accessSync, constants, readdirSync, statSync, type Dirent } from 'node:fs'
-import { readdir } from 'node:fs/promises'
+import { mkdir, readFile, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, delimiter, extname, isAbsolute, join } from 'node:path'
 import { promisify } from 'node:util'
+import { writeFileAtomic } from './atomic-write'
 import { spawnTarget } from './cli-shim'
 import { modelNamesFromOutput } from './model-list'
 import type { CliProfile, EffortLevel } from './types'
@@ -355,8 +356,114 @@ export function rejectedGroups(
  * Flags a CLI already refused, remembered per profile signature: the next turn
  * does not pay the failed process again. Editing the profile changes the
  * signature, so a corrected profile is never stuck with an old decision.
+ *
+ * The decision also survives a restart (see `rememberFlags`): the first turn
+ * after every launch used to pay the failed process again, which on a slow CLI
+ * is most of the wait before the first token.
  */
 const refusedFlagsByProfile = new Map<string, ArgvAdjustments>()
+
+/** Where the learned decisions live, inside the app config dir. */
+const LEARNED_FILE = 'cli-learned.json'
+
+interface LearnedEntry {
+  /** The profile as it was when the flag was refused: an edit invalidates it. */
+  signature: string
+  placements?: FlagPlacements
+  refusedArgs?: string[]
+}
+
+function learnedFilePath(stateDir: string): string {
+  return join(stateDir, LEARNED_FILE)
+}
+
+function readPlacements(value: unknown): FlagPlacements {
+  const placements: FlagPlacements = {}
+  if (typeof value !== 'object' || value === null) return placements
+  for (const [group, where] of Object.entries(value as Record<string, unknown>)) {
+    if (!['model', 'effort', 'plan', 'auto'].includes(group)) continue
+    if (where !== 'after' && where !== 'before' && where !== 'off') continue
+    placements[group as FlagGroup] = where
+  }
+  return placements
+}
+
+function readRefused(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((entry): entry is string => typeof entry === 'string')
+    .filter((entry) => normalizeFlag(entry) !== undefined)
+    .slice(0, 16)
+}
+
+/** One read per state dir per run: the file is small, the launch is not. */
+const learnedLoads = new Map<string, Promise<void>>()
+
+async function loadLearned(stateDir?: string): Promise<void> {
+  if (!stateDir) return
+  const pending = learnedLoads.get(stateDir)
+  if (pending) return pending
+
+  const load = (async (): Promise<void> => {
+    try {
+      const parsed: unknown = JSON.parse(await readFile(learnedFilePath(stateDir), 'utf8'))
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return
+      for (const entry of Object.values(parsed as Record<string, unknown>)) {
+        const record = entry as Record<string, unknown> | null
+        if (!record || typeof record.signature !== 'string') continue
+        refusedFlagsByProfile.set(record.signature, {
+          placements: readPlacements(record.placements),
+          refusedArgs: readRefused(record.refusedArgs)
+        })
+      }
+    } catch {
+      // No file yet, or one we cannot read: memory only. Learning again costs
+      // a single failed process, never a broken turn.
+    }
+  })()
+  learnedLoads.set(stateDir, load)
+  return load
+}
+
+/** Writes are serialised: a team turn learns the same flag from three CLIs. */
+let learnedWrites: Promise<void> = Promise.resolve()
+
+function rememberFlags(
+  stateDir: string | undefined,
+  profile: CliProfile,
+  signature: string,
+  adjustments: ArgvAdjustments
+): Promise<void> {
+  refusedFlagsByProfile.set(signature, adjustments)
+  if (!stateDir) return Promise.resolve()
+
+  const placements = adjustments.placements ?? {}
+  const refusedArgs = adjustments.refusedArgs ?? []
+  const entry: LearnedEntry = {
+    signature,
+    ...(Object.keys(placements).length > 0 ? { placements } : {}),
+    ...(refusedArgs.length > 0 ? { refusedArgs } : {})
+  }
+  const path = learnedFilePath(stateDir)
+
+  learnedWrites = learnedWrites
+    .then(async () => {
+      let all: Record<string, LearnedEntry> = {}
+      try {
+        const parsed: unknown = JSON.parse(await readFile(path, 'utf8'))
+        if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+          all = parsed as Record<string, LearnedEntry>
+        }
+      } catch {
+        // First time: the file is created below.
+      }
+      all[profile.id] = entry
+      await mkdir(stateDir, { recursive: true })
+      await writeFileAtomic(path, `${JSON.stringify(all, null, 2)}\n`)
+    })
+    .catch(() => undefined)
+  return learnedWrites
+}
 
 function profileSignature(profile: CliProfile): string {
   return JSON.stringify([
@@ -996,6 +1103,8 @@ export interface RunHooks {
   signal?: AbortSignal
   timeoutMs?: number
   home?: string
+  /** App config dir: where a learned flag decision survives a restart. */
+  stateDir?: string
 }
 
 /**
@@ -1048,6 +1157,7 @@ export async function runExternalAgent(
   }
 
   const signature = profileSignature(profile)
+  await loadLearned(hooks.stateDir)
   const remembered = refusedFlagsByProfile.get(signature) ?? {}
   const adjustments: ArgvAdjustments = {
     placements: { ...(remembered.placements ?? {}) },
@@ -1080,7 +1190,9 @@ export async function runExternalAgent(
     result = await attempt(profile, options, hooks, binary, adjustments)
     if (result.aborted || result.timedOut) return result
   }
-  if (refused.length > 0) refusedFlagsByProfile.set(signature, adjustments)
+  // Awaited so the decision is on disk before the turn is reported: the next
+  // launch of the app is exactly the case this memory exists for.
+  if (refused.length > 0) await rememberFlags(hooks.stateDir, profile, signature, adjustments)
 
   const notes: string[] = []
   if (refused.length > 0) {
@@ -1094,7 +1206,7 @@ export async function runExternalAgent(
         ? 'e il turno è andato a buon fine'
         : `ma la CLI è ancora uscita con codice ${result.code}`
     notes.push(
-      `${profile.label} ha rifiutato ${flags} (uscita ${refusedCode}): ho ripetuto il turno ${how}, ${outcome}.${removed ? ' Togli il flag dal profilo per non ripetere la prova.' : ''}`
+      `${profile.label} ha rifiutato ${flags} (uscita ${refusedCode}): ho ripetuto il turno ${how}, ${outcome}.${removed ? ' La scelta resta memorizzata: i prossimi turni non riprovano il flag.' : ''}`
     )
   }
 

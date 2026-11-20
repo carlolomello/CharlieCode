@@ -1,7 +1,7 @@
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   buildCliArgs,
   extractActivity,
@@ -477,6 +477,48 @@ describe('runExternalAgent', () => {
     expect(result.code).toBe(0)
     expect(result.error).toBeUndefined()
     expect(result.warning).toMatch(/--yolo/)
+  })
+
+  it('ricorda il flag rifiutato anche dopo un riavvio', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'charliecode-learned-'))
+    const cli = node(
+      'if (process.argv.includes("--yolo")) { console.error("ERROR | Unknown flag: --yolo. | Try --help for usage."); process.exit(1) } process.stdout.write("ok\\n")'
+    )
+    const learned = profile({
+      ...cli,
+      args: [...cli.args, '--', 'run', '--yolo'],
+      output: 'text'
+    })
+
+    try {
+      vi.resetModules()
+      const first: typeof import('./external-agents') = await import('./external-agents')
+      const one = await first.runExternalAgent(
+        learned,
+        { prompt: 'ignorato', workspace: process.cwd() },
+        { stateDir: dir }
+      )
+      expect(one.text).toBe('ok')
+      expect(one.warning).toMatch(/--yolo/)
+
+      const saved = JSON.parse(await readFile(join(dir, 'cli-learned.json'), 'utf8'))
+      expect(saved[learned.id].refusedArgs).toEqual(['--yolo'])
+
+      // A fresh module is what the next launch of the app looks like: the file
+      // is the only memory left, and it has to be enough to skip the failure.
+      vi.resetModules()
+      const second: typeof import('./external-agents') = await import('./external-agents')
+      const two = await second.runExternalAgent(
+        learned,
+        { prompt: 'ignorato', workspace: process.cwd() },
+        { stateDir: dir }
+      )
+      expect(two.text).toBe('ok')
+      expect(two.code).toBe(0)
+      expect(two.warning).toBeUndefined()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 
   it('non ripete un turno che ha già prodotto testo', async () => {

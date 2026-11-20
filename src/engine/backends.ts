@@ -139,6 +139,8 @@ export interface CliTurnInput {
   attachments?: { name: string; path: string }[]
   workspace: string
   home: string
+  /** App config dir, so a flag a CLI refused is not retried after a restart. */
+  stateDir?: string
   signal?: AbortSignal
   /**
    * Split the turn across parallel CLI processes. The CLI itself plans the
@@ -308,6 +310,7 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
       },
       {
         home: input.home,
+        ...(input.stateDir ? { stateDir: input.stateDir } : {}),
         ...(input.signal ? { signal: input.signal } : {}),
         onText: (chunk) => {
           if (options.quiet) return

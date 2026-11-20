@@ -1332,6 +1332,7 @@ hanno priorità su queste.
                 system: cliSystem,
                 workspace: workspace ?? platform.homeDir,
                 home: platform.homeDir,
+                stateDir: platform.configDir,
                 signal: controller.signal,
                 emit
               })

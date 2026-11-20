@@ -402,6 +402,7 @@ export async function runAgent(
               },
               {
                 home: deps.platform.homeDir,
+                stateDir: deps.platform.configDir,
                 ...(request.signal ? { signal: request.signal } : {}),
                 onText: (chunk) => deps.emit({ type: 'delta', text: chunk, agentId })
               }
