@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
-import { buildSystemPrompt, runAgent } from '../engine/agent'
+import { buildSystemPrompt, nativeBackend } from '../engine/agent'
 import { applyConfigPatch, type AppConfigPatch } from '../engine/app-config'
 import { selfKnowledgePrompt } from '../engine/self-knowledge'
 import { globalAgentsPath, loadProjectContext } from '../engine/agents'
@@ -90,8 +90,10 @@ import {
   type SessionSummary
 } from '../engine/sessions'
 import { toolLogFromEvent } from '../engine/tools'
-import { cliModelEntries, runCliTurn } from '../engine/backends'
+import { cliBackend, cliModelEntries } from '../engine/backends'
 import { TurnCancellation } from '../engine/turn-cancellation'
+import { SubagentRetries } from '../engine/subagent-retry'
+import type { AgentBackendResult } from '../engine/agent-backend'
 import { readRouting, ensureRoutingFile } from '../engine/routing'
 import { parseCliModelKey } from '../shared/cli-key'
 import type {
@@ -130,6 +132,8 @@ const platform = createPlatform()
 const inFlight = new Map<string, AbortController>()
 /** One registry per running turn, so a card can stop a single worker. */
 const cancellations = new Map<string, TurnCancellation>()
+/** Retries of the failed workers of a running turn, per request. */
+const subagentRetries = new Map<string, SubagentRetries>()
 
 /** Permission prompts waiting for the renderer: permissionId → resolver. */
 const permissionResolvers = new Map<string, (decision: PermissionDecision) => void>()
@@ -1115,6 +1119,10 @@ hanno priorità su queste.
       inFlight.set(payload.requestId, controller)
       const cancellation = new TurnCancellation()
       cancellations.set(payload.requestId, cancellation)
+      // Retries of this turn's workers: dropped with the turn, because the
+      // parent has already integrated their results by then.
+      const retries = new SubagentRetries()
+      subagentRetries.set(payload.requestId, retries)
       const sender = event.sender
 
       const { config } = await loadConfig(platform)
@@ -1196,6 +1204,7 @@ hanno priorità su queste.
         let logs: ToolLog[] = []
         let fullHistory: import('ai').ModelMessage[] = []
         let newMessages: import('ai').ModelMessage[] | undefined
+        let outcome: AgentBackendResult | undefined
 
         // The answer is persisted while it streams, so a crash or a quit does
         // not lose ten minutes of work. Drafts and the final version share the
@@ -1326,39 +1335,35 @@ hanno priorità su queste.
                 .filter(Boolean)
                 .join('\n\n')
 
-              const result = await runCliTurn({
+              const result = await cliBackend({
                 profile,
                 ...(cliTarget.model ? { model: cliTarget.model } : {}),
                 ...(payload.effort ? { effort: payload.effort } : {}),
-                mode: payload.mode ?? 'build',
                 team: payload.team === true,
                 prompt: payload.text,
                 history,
                 system: cliSystem,
-                workspace: workspace ?? platform.homeDir,
                 home: platform.homeDir,
                 stateDir: platform.configDir,
-                signal: controller.signal,
                 // A team turn spawns several CLI processes: the user sees the
                 // plan and can stop it before any of them starts.
                 askPermission: (request) => askUser(sender, payload.requestId, request),
                 cancellation,
+                retries
+              }).run({
+                workspace: workspace ?? platform.homeDir,
+                mode: payload.mode ?? 'build',
+                signal: controller.signal,
                 emit
               })
 
-              text = result.text
-              aborted = result.aborted
-              if (result.error) {
-                const message = result.error
-                failure = message
-                emit({ type: 'error', message })
-              }
+              outcome = result
 
               // Import the CLI turn into the canonical context: the current
               // user message is already in `fullHistory`, so only the answer
               // is new.
               newMessages = [
-                { role: 'assistant' as const, content: text || '(nessuna risposta)' }
+                { role: 'assistant' as const, content: result.text || '(nessuna risposta)' }
               ]
             }
           } else {
@@ -1384,8 +1389,8 @@ hanno priorità su queste.
             const system = buildSystemPrompt(projectContext.system, workspace)
             const routing = await readRouting(workspace, platform.homeDir)
 
-            const result = await runAgent(
-              {
+            outcome = await nativeBackend({
+              request: {
                 modelKey,
                 messages: [],
                 system,
@@ -1395,7 +1400,7 @@ hanno priorità su queste.
                 mode: payload.mode ?? 'build',
                 ...(payload.team ? { team: true } : {})
               },
-              {
+              deps: {
                 platform,
                 config,
                 models,
@@ -1410,15 +1415,25 @@ hanno priorità su queste.
                 applyConfig: applyAgentConfig,
                 askPermission: (request) => askUser(sender, payload.requestId, request),
                 cancellation,
+                retries,
                 emit
               }
-            )
+            }).run({
+              workspace,
+              mode: payload.mode ?? 'build',
+              signal: controller.signal,
+              emit
+            })
+          }
 
-            text = result.text
-            usedModel = result.modelKey || usedModel
-            aborted = result.aborted
-            if (result.error) failure = result.error
-            if (result.newMessages.length > 0) newMessages = result.newMessages
+          // One result shape for both backends; the backend has already
+          // reported its own start/done/error in the stream.
+          if (outcome) {
+            text = outcome.text
+            usedModel = outcome.modelKey || usedModel
+            aborted = outcome.aborted
+            if (outcome.error) failure = outcome.error
+            if (outcome.newMessages?.length) newMessages = outcome.newMessages
           }
         } catch (error) {
           failure = error instanceof Error ? error.message : String(error)
@@ -1431,6 +1446,7 @@ hanno priorità su queste.
         } finally {
           inFlight.delete(payload.requestId)
           cancellations.delete(payload.requestId)
+          subagentRetries.delete(payload.requestId)
 
           // A stopped request must not leave the UI waiting for a permission.
           for (const [permissionId, requestId] of permissionRequests) {
@@ -1501,6 +1517,23 @@ hanno priorità su queste.
         return false
       }
       return cancellations.get(payload.requestId)?.cancel(payload.agentId) ?? false
+    }
+  )
+
+  /**
+   * Runs one failed subagent again while its turn is still going. Same agent
+   * id, so the card turns from red to running and back. False when the worker
+   * is unknown (a late click) or already running (a double click).
+   */
+  ipcMain.handle(
+    'charliecode:chat:retry-subagent',
+    async (_event, payload: { requestId?: unknown; agentId?: unknown }): Promise<boolean> => {
+      if (typeof payload?.requestId !== 'string' || typeof payload?.agentId !== 'string') {
+        return false
+      }
+      const retries = subagentRetries.get(payload.requestId)
+      if (!retries) return false
+      return retries.run(payload.agentId)
     }
   )
 

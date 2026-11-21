@@ -1,21 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { cliModelKey, parseCliModelKey } from '../../shared/cli-key'
-import type { IncomingAttachment } from '../../engine/types'
-import type { Session, SessionSummary, StoredMessage } from '../../engine/session-types'
 import type {
   AttachmentRef,
   CatalogError,
   ContextStats,
   EffortLevel,
-  ModelEntry,
-  PermissionDecision,
-  PermissionRequest,
-  ToolLog
+  ModelEntry
 } from '../../engine/types'
 import type {
   AppInfo,
-  ChatEventEnvelope,
-  PermissionEnvelope,
   PluginStatus,
   ProviderStatus,
   SkillInfo,
@@ -24,74 +17,17 @@ import type {
 } from '../../shared/ipc'
 import { Mascot, MascotDesk, MascotTeam, type MascotMood } from './components/Mascot'
 import { Sidebar } from './components/Sidebar'
-import { baseName } from './format'
+import { baseName, formatBytes } from './format'
+import { useChat } from './hooks/useChat'
 import { Markdown } from './components/Markdown'
 import { PermissionModal } from './components/PermissionModal'
 import { SetupWizard, type SetupPath } from './components/SetupWizard'
 import { ProjectWizard } from './components/ProjectWizard'
 import { ChangesPanel } from './components/ChangesPanel'
 import { WorkbenchPanel } from './components/WorkbenchPanel'
-import { ToolActivity, type SubagentRun } from './components/ToolActivity'
+import { ToolActivity } from './components/ToolActivity'
 import { ThinkingBlock } from './components/ThinkingBlock'
 import { ModelPicker } from './components/ModelPicker'
-
-type ChatItem = StoredMessage & {
-  pending?: boolean
-  requestId?: string
-  tools?: ToolLog[]
-  subagents?: SubagentRun[]
-  /** Reasoning streamed by a CLI: shown live, never stored. */
-  thinking?: string
-  /** Mode the turn ran in; drives the "esegui il piano" affordance. */
-  mode?: 'plan' | 'build'
-}
-
-interface PendingAttachment extends IncomingAttachment {
-  localId: string
-}
-
-const MAX_ATTACHMENTS = 8
-const MAX_IMAGE_BYTES = 6 * 1024 * 1024
-const MAX_TEXT_BYTES = 200 * 1024
-
-const TEXT_EXTENSIONS = new Set([
-  'txt', 'md', 'markdown', 'json', 'jsonc', 'yaml', 'yml', 'toml', 'ini', 'csv', 'tsv', 'log',
-  'xml', 'html', 'htm', 'css', 'scss', 'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'py', 'rb', 'go',
-  'rs', 'java', 'kt', 'c', 'h', 'cpp', 'hpp', 'cs', 'php', 'swift', 'sh', 'bash', 'zsh', 'ps1',
-  'sql', 'graphql', 'proto', 'patch', 'diff'
-])
-
-function attachmentKind(name: string, mime: string): 'image' | 'text' | undefined {
-  if (/^image\/(png|jpe?g|webp|gif|bmp|avif)$/i.test(mime)) return 'image'
-  if (mime.startsWith('text/')) return 'text'
-  const extension = name.split('.').pop()?.toLowerCase() ?? ''
-  if (TEXT_EXTENSIONS.has(extension)) return 'text'
-  return undefined
-}
-
-function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result ?? ''))
-    reader.onerror = () => reject(reader.error ?? new Error('lettura fallita'))
-    reader.readAsDataURL(file)
-  })
-}
-
-function readFileAsText(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result ?? ''))
-    reader.onerror = () => reject(reader.error ?? new Error('lettura fallita'))
-    reader.readAsText(file)
-  })
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
 
 const EFFORT_LABEL: Record<EffortLevel, string> = {
   none: 'predefinito',
@@ -160,9 +96,6 @@ export default function App() {
   const [skillTarget, setSkillTarget] = useState<'global' | 'project'>('global')
   const [skillBusy, setSkillBusy] = useState(false)
   const [skillError, setSkillError] = useState<string | null>(null)
-  const [sessions, setSessions] = useState<SessionSummary[]>([])
-  const [sessionId, setSessionId] = useState<string | null>(null)
-  const [items, setItems] = useState<ChatItem[]>([])
   const [modelKey, setModelKey] = useState<string>('')
   /** Model passed to the selected CLI, when the backend is a CLI profile. */
   const [cliModel, setCliModel] = useState<string>('')
@@ -176,27 +109,17 @@ export default function App() {
   const [effort, setEffort] = useState<EffortLevel>('none')
   const [mode, setMode] = useState<'plan' | 'build'>('build')
   const [workspace, setWorkspace] = useState<string | undefined>(undefined)
-  const [input, setInput] = useState('')
-  const [streamingId, setStreamingId] = useState<string | null>(null)
   const [fatal, setFatal] = useState<string | null>(null)
-  /** Incremented whenever the visible conversation changes: stale async work
-   *  (a late `chat:session`, a slow `loadSession`) must not touch the new one. */
-  const viewEpoch = useRef(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
   /** Which drawer section is on screen; the drawer is tabbed, not scrolled. */
   const [drawerTab, setDrawerTab] = useState<DrawerSection>('models')
   const [keyDrafts, setKeyDrafts] = useState<Record<string, string>>({})
   const [newProvider, setNewProvider] = useState({ id: '', label: '', baseUrl: '' })
-  const [loadingSession, setLoadingSession] = useState(false)
-  const [attachments, setAttachments] = useState<PendingAttachment[]>([])
-  const [attachError, setAttachError] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
-  const [showJump, setShowJump] = useState(false)
   /** Tokens sent to the model, its budget and whether compaction is active. */
   const [context, setContext] = useState<ContextStats | null>(null)
   const [contextBusy, setContextBusy] = useState(false)
   const [contextNotice, setContextNotice] = useState<string | null>(null)
-  const [permission, setPermission] = useState<PermissionEnvelope | null>(null)
   const [wizardOpen, setWizardOpen] = useState(false)
   /** Section the setup wizard opens on; the drawer's CLI entry asks for `cli`. */
   const [wizardPath, setWizardPath] = useState<SetupPath | undefined>(undefined)
@@ -236,12 +159,63 @@ export default function App() {
   const drawerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const permissionQueue = useRef<PermissionEnvelope[]>([])
-  const permissionRef = useRef<PermissionEnvelope | null>(null)
 
-  const refreshSessions = useCallback(async (): Promise<void> => {
-    setSessions(await window.charliecode.listSessions())
-  }, [])
+  // What the model picker resolves to, needed by the conversation: the backend
+  // key carries the CLI model chosen for this turn, and "Squadra" has its own
+  // switch per backend.
+  const selectedModel = useMemo(
+    () => models.find((model) => model.key === modelKey),
+    [models, modelKey]
+  )
+
+  const cliBackend = selectedModel?.providerId === 'cli'
+  const teamActive = cliBackend ? cliTeam : teamMode
+
+  /** The key actually sent: a CLI can carry a model chosen for this turn. */
+  const backendKey =
+    selectedModel?.providerId === 'cli' && cliModel
+      ? cliModelKey(selectedModel.id, cliModel)
+      : modelKey
+
+  const {
+    sessions,
+    sessionId,
+    items,
+    input,
+    setInput,
+    streamingId,
+    loadingSession,
+    attachments,
+    attachError,
+    showJump,
+    setShowJump,
+    permission,
+    refreshSessions,
+    decidePermission,
+    startNewChat,
+    openSession,
+    removeSession,
+    renameSession,
+    addFiles,
+    removeAttachment,
+    send,
+    stop,
+    cancelSubagent,
+    retrySubagent
+  } = useChat({
+    workspace,
+    modelKey,
+    backendKey,
+    effort,
+    mode,
+    teamActive,
+    setWorkspace,
+    setInfo,
+    setModelKey,
+    setCliModel,
+    setEffort,
+    setFatal
+  })
 
   const refreshProviders = useCallback(async (): Promise<void> => {
     setProviders(await window.charliecode.providers())
@@ -370,168 +344,6 @@ export default function App() {
     refreshSkills
   ])
 
-  useEffect(() => {
-    const unsubscribe = window.charliecode.onChatEvent(({ requestId, event }: ChatEventEnvelope) => {
-      setItems((previous) =>
-        previous.map((item) => {
-          if (item.requestId !== requestId) return item
-
-          switch (event.type) {
-            case 'start':
-              return {
-                ...item,
-                modelKey: event.modelKey,
-                meta: event.fallbackFrom ? `fallback da ${event.fallbackFrom}` : item.meta
-              }
-            case 'delta':
-              // Subagent text belongs to its own card, not to the main answer.
-              if (event.agentId) {
-                return {
-                  ...item,
-                  subagents: (item.subagents ?? []).map((run) =>
-                    run.agentId === event.agentId
-                      ? { ...run, text: `${run.text ?? ''}${event.text}` }
-                      : run
-                  )
-                }
-              }
-              return { ...item, content: item.content + event.text }
-            case 'thinking':
-              // Subagent reasoning has no card of its own yet: it stays out of
-              // the main answer instead of appearing under the wrong name.
-              if (event.agentId) return item
-              return { ...item, thinking: `${item.thinking ?? ''}${event.text}` }
-            case 'tool-call':
-              return {
-                ...item,
-                tools: [
-                  ...(item.tools ?? []),
-                  {
-                    id: event.id,
-                    name: event.name,
-                    title: event.title,
-                    input: event.input,
-                    status: 'running',
-                    ...(event.agentId ? { agentId: event.agentId } : {}),
-                    ...(event.agentName ? { agentName: event.agentName } : {})
-                  }
-                ]
-              }
-            case 'tool-result':
-              return {
-                ...item,
-                tools: (item.tools ?? []).map((log) =>
-                  log.id === event.id
-                    ? {
-                        ...log,
-                        status: event.denied ? 'denied' : event.ok ? 'ok' : 'error',
-                        summary: event.summary,
-                        ...(event.output ? { output: event.output } : {}),
-                        ...(event.diff ? { diff: event.diff } : {}),
-                        ms: event.ms
-                      }
-                    : log
-                )
-              }
-            case 'subagent-start':
-              return {
-                ...item,
-                subagents: [
-                  ...(item.subagents ?? []),
-                  {
-                    agentId: event.agentId,
-                    name: event.name,
-                    description: event.description,
-                    modelKey: event.modelKey,
-                    status: 'running'
-                  }
-                ]
-              }
-            case 'subagent-end':
-              return {
-                ...item,
-                subagents: (item.subagents ?? []).map((run) =>
-                  run.agentId === event.agentId
-                    ? {
-                        ...run,
-                        status: event.ok ? 'ok' : 'error',
-                        summary: event.summary,
-                        ms: event.ms,
-                        ...(event.usage ? { usage: event.usage } : {}),
-                        ...(event.steps !== undefined ? { steps: event.steps } : {})
-                      }
-                    : run
-                )
-              }
-            case 'done':
-              return {
-                ...item,
-                pending: false,
-                meta: [
-                  item.meta,
-                  event.steps ? `${event.steps} step` : undefined,
-                  event.toolCalls ? `${event.toolCalls} tool` : undefined,
-                  `primo token ${event.ttftMs}ms`,
-                  `totale ${event.ms}ms`,
-                  event.usage?.outputTokens ? `${event.usage.outputTokens} token` : undefined,
-                  event.aborted ? 'interrotto' : undefined
-                ]
-                  .filter(Boolean)
-                  .join(' · ')
-              }
-            case 'error':
-              return { ...item, pending: false, error: event.message }
-            default:
-              return item
-          }
-        })
-      )
-
-      if (event.type === 'done' || event.type === 'error') {
-        setStreamingId((current) => (current === requestId ? null : current))
-        // A finished request cannot answer a permission prompt any more.
-        if (permissionRef.current?.requestId === requestId) {
-          const next = permissionQueue.current.shift() ?? null
-          permissionRef.current = next
-          setPermission(next)
-        }
-      }
-    })
-
-    const unsubscribePermission = window.charliecode.onPermission((envelope: PermissionEnvelope) => {
-      // Keep one prompt on screen at a time; the rest wait their turn.
-      if (permissionRef.current) {
-        permissionQueue.current.push(envelope)
-        return
-      }
-      permissionRef.current = envelope
-      setPermission(envelope)
-    })
-
-    const unsubscribeSession = window.charliecode.onChatSession(({ sessionId: id, title }) => {
-      // The result of `startChat` already set the id. A late event for an old
-      // request must not attach the new chat to the old session.
-      setSessions((previous) => {
-        const existing = previous.find((session) => session.id === id)
-        if (!existing) return previous
-        return previous
-          .map((session) =>
-            session.id === id
-              ? { ...session, title, updatedAt: new Date().toISOString() }
-              : session
-          )
-          .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-      })
-      void refreshSessions()
-    })
-
-    return () => {
-      unsubscribe()
-      unsubscribePermission()
-      unsubscribeSession()
-    }
-  }, [refreshSessions])
-
   // Saving or deleting a CLI profile changes the picker without a reload.
   useEffect(
     () => window.charliecode.onModelsChanged(() => void refreshModels()),
@@ -552,48 +364,6 @@ export default function App() {
       }),
     [refreshProviders, refreshModels, refreshPlugins, refreshRouting, refreshAutoApprove]
   )
-
-  /**
-   * One composer draft per conversation. Switching chats used to throw away
-   * half-written prompts; now the text follows the chat, and the unsent text of
-   * a new chat survives a reload too.
-   */
-  const draftKey = `charliecode.draft.${sessionId ?? 'new'}`
-  const draftRef = useRef<{ key: string; value: string }>({ key: draftKey, value: '' })
-
-  useEffect(() => {
-    const previous = draftRef.current
-    if (previous.key !== draftKey) {
-      try {
-        if (previous.value) window.localStorage.setItem(previous.key, previous.value)
-        else window.localStorage.removeItem(previous.key)
-      } catch {
-        // Storage can be blocked; the draft is a convenience, not state.
-      }
-    }
-
-    let loaded = ''
-    try {
-      loaded = window.localStorage.getItem(draftKey) ?? ''
-    } catch {
-      loaded = ''
-    }
-    draftRef.current = { key: draftKey, value: loaded }
-    setInput(loaded)
-  }, [draftKey])
-
-  useEffect(() => {
-    draftRef.current = { key: draftKey, value: input }
-    const timer = window.setTimeout(() => {
-      try {
-        if (input) window.localStorage.setItem(draftKey, input)
-        else window.localStorage.removeItem(draftKey)
-      } catch {
-        // Same: losing a draft is better than breaking the composer.
-      }
-    }, 400)
-    return () => window.clearTimeout(timer)
-  }, [draftKey, input])
 
   // Only follow the stream when the user is already at the bottom; otherwise
   // reading scrollback would be yanked away on every token.
@@ -709,14 +479,6 @@ export default function App() {
     }
   }, [cliTeam])
 
-  const selectedModel = useMemo(
-    () => models.find((model) => model.key === modelKey),
-    [models, modelKey]
-  )
-
-  const cliBackend = selectedModel?.providerId === 'cli'
-  const teamActive = cliBackend ? cliTeam : teamMode
-
   /**
    * Where the backend changed mid-conversation. The canonical context lives in
    * the session, so the switch is safe; the chip says so instead of leaving the
@@ -778,12 +540,6 @@ export default function App() {
     }
   }, [selectedModel?.providerId, selectedModel?.id, cliModelsNonce])
 
-  /** The key actually sent: a CLI can carry a model chosen for this turn. */
-  const backendKey =
-    selectedModel?.providerId === 'cli' && cliModel
-      ? cliModelKey(selectedModel.id, cliModel)
-      : modelKey
-
   // The picker only offers levels the model actually accepts.
   const effortOptions = useMemo<EffortLevel[]>(
     () => (selectedModel?.efforts?.length ? selectedModel.efforts : ['none']),
@@ -793,18 +549,6 @@ export default function App() {
   useEffect(() => {
     if (!effortOptions.includes(effort)) setEffort(effortOptions[0] ?? 'none')
   }, [effortOptions, effort])
-
-  const decidePermission = useCallback(
-    async (decision: PermissionDecision): Promise<void> => {
-      const current = permissionRef.current
-      if (!current) return
-      await window.charliecode.respondPermission(current.request.id, decision)
-      const next = permissionQueue.current.shift() ?? null
-      permissionRef.current = next
-      setPermission(next)
-    },
-    []
-  )
 
   const mood: MascotMood = permission
     ? 'worried'
@@ -839,23 +583,6 @@ export default function App() {
       ),
     [groupedModels]
   )
-
-  const startNewChat = useCallback((): void => {
-    viewEpoch.current += 1
-    // Leaving a running turn in the background would keep burning tokens (and
-    // writing) in a chat the user can no longer see.
-    if (streamingId) void window.charliecode.stopChat(streamingId)
-    setSessionId(null)
-    setItems([])
-    setInput('')
-    setAttachments([])
-    setAttachError(null)
-    setStreamingId(null)
-    setShowJump(false)
-    permissionRef.current = null
-    permissionQueue.current = []
-    setPermission(null)
-  }, [streamingId])
 
   // Three shortcuts cover how the app is actually driven: a new chat, finding
   // an old one, and the settings drawer. Enter already sends.
@@ -925,257 +652,6 @@ export default function App() {
     )
     await refreshSessions()
   }, [refreshSessions, startNewChat])
-
-  const openSession = useCallback(async (id: string): Promise<void> => {
-    const epoch = ++viewEpoch.current
-    // One conversation at a time: stop the previous turn before swapping the
-    // transcript, otherwise its events would land in the wrong chat.
-    if (streamingId) {
-      await window.charliecode.stopChat(streamingId)
-      setStreamingId(null)
-    }
-    // Attachments belong to the chat, not to the window. The draft text is
-    // restored by the per-session draft effect.
-    setAttachments([])
-    setAttachError(null)
-    setShowJump(false)
-    permissionRef.current = null
-    permissionQueue.current = []
-    setPermission(null)
-
-    setLoadingSession(true)
-    try {
-      const session: Session | null = await window.charliecode.loadSession(id)
-      if (!session || epoch !== viewEpoch.current) return
-
-      // A saved chat can belong to another project: open that project too, or
-      // the drawer, skills, routing and memory keep pointing at the old one.
-      if (session.workspacePath && session.workspacePath !== workspace) {
-        const result = await window.charliecode.useWorkspace(session.workspacePath)
-        if (epoch !== viewEpoch.current) return
-        if (result.path) {
-          setWorkspace(result.path)
-          setInfo(await window.charliecode.info())
-        }
-      }
-
-      setSessionId(session.id)
-      setItems(session.messages.map((message) => ({ ...message, pending: false })))
-      if (session.modelKey) {
-        const cli = parseCliModelKey(session.modelKey)
-        if (cli) {
-          // The picker holds the profile; the model is the secondary choice.
-          setModelKey(cliModelKey(cli.profileId))
-          setCliModel(cli.model ?? '')
-        } else {
-          setModelKey(session.modelKey)
-          setCliModel('')
-        }
-      }
-      setEffort(session.effort)
-    } catch (cause) {
-      // A saved chat can point at a folder the user moved or deleted. Say so
-      // instead of leaving an unhandled rejection from the click handler.
-      if (epoch === viewEpoch.current) {
-        setFatal(cause instanceof Error ? cause.message : String(cause))
-      }
-    } finally {
-      if (epoch === viewEpoch.current) setLoadingSession(false)
-    }
-  }, [streamingId, workspace])
-
-  const removeSession = useCallback(
-    async (id: string): Promise<void> => {
-      await window.charliecode.deleteSession(id)
-      if (sessionId === id) startNewChat()
-      await refreshSessions()
-    },
-    [refreshSessions, sessionId, startNewChat]
-  )
-
-  const renameSession = useCallback(
-    async (id: string, title: string): Promise<void> => {
-      const trimmed = title.trim()
-      if (!trimmed) return
-      await window.charliecode.renameSession(id, trimmed)
-      await refreshSessions()
-    },
-    [refreshSessions]
-  )
-
-  const addFiles = useCallback(async (files: File[]): Promise<void> => {
-    if (files.length === 0) return
-    setAttachError(null)
-
-    const accepted: PendingAttachment[] = []
-    for (const file of files) {
-      if (attachments.length + accepted.length >= MAX_ATTACHMENTS) {
-        setAttachError(`Massimo ${MAX_ATTACHMENTS} allegati per messaggio.`)
-        break
-      }
-
-      const mime = file.type || 'application/octet-stream'
-      const kind = attachmentKind(file.name, mime)
-      if (!kind) {
-        setAttachError(`Formato non supportato: ${file.name}`)
-        continue
-      }
-      if (kind === 'image' && file.size > MAX_IMAGE_BYTES) {
-        setAttachError(`Immagine troppo grande: ${file.name} (max 6 MB).`)
-        continue
-      }
-      if (kind === 'text' && file.size > MAX_TEXT_BYTES) {
-        setAttachError(`Documento troppo grande: ${file.name} (max 200 KB).`)
-        continue
-      }
-
-      try {
-        const data =
-          kind === 'image' ? await readFileAsDataUrl(file) : await readFileAsText(file)
-        accepted.push({
-          localId: crypto.randomUUID(),
-          name: file.name,
-          mime: mime || (kind === 'image' ? 'image/png' : 'text/plain'),
-          kind,
-          size: file.size,
-          data
-        })
-      } catch {
-        setAttachError(`Impossibile leggere ${file.name}.`)
-      }
-    }
-
-    if (accepted.length > 0) setAttachments((previous) => [...previous, ...accepted])
-  }, [attachments.length])
-
-  const removeAttachment = useCallback((localId: string): void => {
-    setAttachments((previous) => previous.filter((item) => item.localId !== localId))
-  }, [])
-
-  const send = useCallback(
-    async (overrideText?: string, overrideMode?: 'plan' | 'build'): Promise<void> => {
-      const text = (overrideText ?? input).trim()
-      // A "▶ Esegui il piano" click sends only its own prompt and leaves the
-      // composer (draft text and attachments) untouched.
-      const isOverride = overrideText !== undefined
-      const sentAttachments = isOverride ? [] : attachments
-      if ((!text && sentAttachments.length === 0) || streamingId || !modelKey) return
-      if (!workspace) {
-        setFatal('Apri un progetto prima di inviare un messaggio.')
-        return
-      }
-      const activeMode = overrideMode ?? mode
-      const epoch = viewEpoch.current
-
-      const requestId = crypto.randomUUID()
-      const userMessageId = crypto.randomUUID()
-      const assistantMessageId = crypto.randomUUID()
-      const createdAt = new Date().toISOString()
-
-      setItems((previous) => [
-        ...previous,
-        {
-          id: userMessageId,
-          role: 'user',
-          content: text,
-          createdAt,
-          ...(sentAttachments.length > 0
-            ? {
-                attachments: sentAttachments.map((item) => ({
-                  id: item.localId,
-                  name: item.name,
-                  mime: item.mime,
-                  size: item.size,
-                  kind: item.kind
-                }))
-              }
-            : {})
-        },
-        {
-          id: assistantMessageId,
-          role: 'assistant',
-          content: '',
-          createdAt,
-          pending: true,
-          requestId,
-          mode: activeMode
-        }
-      ])
-      if (!isOverride) {
-        setInput('')
-        setAttachments([])
-      }
-      setAttachError(null)
-      setStreamingId(requestId)
-      setFatal(null)
-
-    try {
-      const result = await window.charliecode.startChat({
-        requestId,
-        sessionId: sessionId ?? undefined,
-        userMessageId,
-        assistantMessageId,
-        modelKey: backendKey,
-        text,
-        effort,
-        mode: activeMode,
-        team: teamActive,
-        workspacePath: workspace,
-        // Always an array: the main process rejects a missing list, and a
-        // message without files is the normal case.
-        attachments: sentAttachments.map((item) => ({
-          name: item.name,
-          mime: item.mime,
-          kind: item.kind,
-          size: item.size,
-          data: item.data
-        }))
-      })
-
-      if (epoch !== viewEpoch.current) return
-      if (!result.ok) {
-        setItems((previous) =>
-          previous.map((item) =>
-            item.id === assistantMessageId
-              ? { ...item, pending: false, error: result.error ?? 'avvio fallito' }
-              : item
-          )
-        )
-        setStreamingId(null)
-        return
-      }
-
-      if (result.sessionId) setSessionId(result.sessionId)
-    } catch (error) {
-      if (epoch !== viewEpoch.current) return
-      const message = error instanceof Error ? error.message : String(error)
-      setItems((previous) =>
-        previous.map((item) =>
-          item.id === assistantMessageId ? { ...item, pending: false, error: message } : item
-        )
-      )
-      setStreamingId(null)
-    }
-  }, [
-    attachments,
-    backendKey,
-    effort,
-    input,
-    mode,
-    modelKey,
-    sessionId,
-    streamingId,
-    teamActive,
-    workspace
-  ])
-
-  const stop = useCallback(async (): Promise<void> => {
-    if (!streamingId) return
-    await window.charliecode.stopChat(streamingId)
-    permissionRef.current = null
-    permissionQueue.current = []
-    setPermission(null)
-  }, [streamingId])
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -1693,10 +1169,12 @@ export default function App() {
                       logs={item.tools ?? []}
                       subagents={item.subagents ?? []}
                       busy={Boolean(item.pending)}
-                      onCancel={(agentId) => {
-                        if (!item.requestId) return
-                        void window.charliecode.cancelSubagent(item.requestId, agentId)
-                      }}
+                      onCancel={(agentId) => cancelSubagent(item.requestId, agentId)}
+                      onRetry={
+                        item.pending
+                          ? (agentId) => retrySubagent(item.requestId, agentId)
+                          : undefined
+                      }
                     />
                   )}
                   {item.role === 'assistant' &&

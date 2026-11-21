@@ -25,6 +25,8 @@ interface ToolActivityProps {
   busy?: boolean
   /** Stops one worker without stopping the turn. */
   onCancel?: (agentId: string) => void
+  /** Runs a failed worker again, without repeating the whole request. */
+  onRetry?: (agentId: string) => void
 }
 
 function formatTokens(tokens: number): string {
@@ -92,11 +94,13 @@ function ToolRow({ log }: { log: ToolLog }): React.JSX.Element {
 function SubagentCard({
   run,
   logs,
-  onCancel
+  onCancel,
+  onRetry
 }: {
   run: SubagentRun
   logs: ToolLog[]
   onCancel?: (agentId: string) => void
+  onRetry?: (agentId: string) => void
 }): React.JSX.Element {
   const [open, setOpen] = useState(true)
   const outputTokens = run.usage?.outputTokens
@@ -130,6 +134,16 @@ function SubagentCard({
             ■
           </button>
         )}
+        {run.status === 'error' && onRetry && (
+          <button
+            className="subagent-retry"
+            title="Riprova questo subagente: gli altri restano come sono"
+            aria-label={`Riprova ${run.name}`}
+            onClick={() => onRetry(run.agentId)}
+          >
+            ↻
+          </button>
+        )}
       </div>
       {open && (
         <div className="subagent-content">
@@ -157,7 +171,8 @@ export function ToolActivity({
   logs,
   subagents,
   busy,
-  onCancel
+  onCancel,
+  onRetry
 }: ToolActivityProps): React.JSX.Element | null {
   const mainLogs = useMemo(() => logs.filter((log) => !log.agentId), [logs])
   const byAgent = useMemo(() => {
@@ -181,6 +196,7 @@ export function ToolActivity({
           run={run}
           logs={byAgent.get(run.agentId) ?? []}
           {...(onCancel ? { onCancel } : {})}
+          {...(onRetry ? { onRetry } : {})}
         />
       ))}
       {mainLogs.length > 0 && (

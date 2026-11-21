@@ -73,6 +73,24 @@ export class TurnEmitter {
     return this.activities >= this.maxActivity
   }
 
+  /**
+   * The turn began: the transcript labels the answer with the model that
+   * actually produced it, and a fallback says where it came from.
+   */
+  start(input: { modelKey: string; label: string; fallbackFrom?: string }): void {
+    this.emit({
+      type: 'start',
+      modelKey: input.modelKey,
+      label: input.label,
+      ...(input.fallbackFrom ? { fallbackFrom: input.fallbackFrom } : {})
+    })
+  }
+
+  /** A turn that failed. The card stops waiting and shows the reason. */
+  error(message: string, modelKey?: string): void {
+    this.emit({ type: 'error', message, ...(modelKey ? { modelKey } : {}) })
+  }
+
   delta(text: string, agent?: AgentRef): void {
     if (!text) return
     this.emit({ type: 'delta', text, ...(agent ? { agentId: agent.id } : {}) })

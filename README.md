@@ -354,6 +354,9 @@ src/
     turn-cancellation  one stop signal per worker, combined with the turn's
     turn-emitter   the events of a turn (attribution, activity cap, worker cards;
                    a nested turn cannot close its parent)
+    agent-backend  the turn contract a native model and a CLI both implement:
+                   same result shape, each backend reports its own lifecycle
+    subagent-retry  a failed worker runs again while its turn keeps going
     app-config validated patches to the app's own configuration
     self-knowledge architecture map + exact state for the agent
     backends   CLI as a conversation backend: briefing out, text/tools/diff back in
@@ -369,6 +372,7 @@ src/
   preload/    typed contextBridge
   shared/     IPC types
   renderer/   React 19 + Vite (chat, markdown renderer, tool cards, diff viewer, mascot)
+              hooks/useChat keeps the conversation state out of App.tsx
 scripts/      mock OpenAI-compatible router (tests, CI), mascot preview
 ```
 

@@ -89,6 +89,8 @@ const api: CharlieCodeApi = {
     ipcRenderer.invoke('charliecode:chat:stop', requestId) as Promise<void>,
   cancelSubagent: (requestId: string, agentId: string) =>
     ipcRenderer.invoke('charliecode:chat:cancel-subagent', { requestId, agentId }) as Promise<boolean>,
+  retrySubagent: (requestId: string, agentId: string) =>
+    ipcRenderer.invoke('charliecode:chat:retry-subagent', { requestId, agentId }) as Promise<boolean>,
 
   onChatEvent: (callback: (envelope: ChatEventEnvelope) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, envelope: ChatEventEnvelope): void => {

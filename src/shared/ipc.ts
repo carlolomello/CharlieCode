@@ -170,6 +170,11 @@ export interface CharlieCodeApi {
    * the worker already ended, which is a late click, not an error.
    */
   cancelSubagent(requestId: string, agentId: string): Promise<boolean>
+  /**
+   * Runs a failed subagent again while its turn is still running. Same agent
+   * id, so the card is reused. False when the worker is unknown or busy.
+   */
+  retrySubagent(requestId: string, agentId: string): Promise<boolean>
   onChatEvent(callback: (envelope: ChatEventEnvelope) => void): () => void
   onChatSession(callback: (envelope: ChatSessionEnvelope) => void): () => void
   onPermission(callback: (envelope: PermissionEnvelope) => void): () => void

@@ -6,6 +6,13 @@ export function baseName(path: string): string {
   return parts[parts.length - 1] ?? path
 }
 
+/** File size for an attachment chip: 823 B, 12 KB, 1.4 MB. */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
 /** Compact "how long ago", in Italian. */
 export function relativeTime(iso: string): string {
   const then = new Date(iso).getTime()

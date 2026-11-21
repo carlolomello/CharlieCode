@@ -2005,6 +2005,26 @@ button.ghost:hover,
   color: #ff9a9a;
 }
 
+.subagent-retry {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #3a4d6b;
+  border-radius: 5px;
+  background: #0e1722;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.subagent-retry:hover {
+  border-color: #4b8a5e;
+  color: #9be8b0;
+}
+
 .subagent-caret {
   color: var(--muted);
   font-size: 10px;

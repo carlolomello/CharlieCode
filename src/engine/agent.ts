@@ -7,6 +7,8 @@ import { runExternalAgent } from './external-agents'
 import { SubagentPool } from './subagent-pool'
 import { TurnCancellation } from './turn-cancellation'
 import { nestedTurnEmit, TurnEmitter } from './turn-emitter'
+import { SubagentRetries } from './subagent-retry'
+import type { AgentBackend, AgentBackendResult } from './agent-backend'
 import { parseCliModelKey } from '../shared/cli-key'
 import { selfKnowledgePrompt } from './self-knowledge'
 import type { AppConfigPatch } from './app-config'
@@ -51,6 +53,11 @@ export interface AgentDeps {
    * keep working. Created once per turn when absent.
    */
   cancellation?: TurnCancellation
+  /**
+   * Per-turn retries of failed subagents, so the UI can run one worker again
+   * without repeating the whole request. Created once per turn when absent.
+   */
+  retries?: SubagentRetries
   /** Optional per-role routing read from `.charliecode/routing.yaml`. */
   routing?: RoutingConfig
   /** Version shown by the self-knowledge tool. */
@@ -63,18 +70,11 @@ export interface AgentDeps {
   }>
 }
 
-export interface AgentResult {
-  text: string
-  modelKey: string
+export interface AgentResult extends AgentBackendResult {
   /** Full context after this turn (input + new assistant/tool messages). */
   messages: ModelMessage[]
   /** Only the messages produced by this turn, for appending to a sidecar. */
   newMessages: ModelMessage[]
-  steps: number
-  toolCalls: number
-  usage?: TokenUsage
-  aborted: boolean
-  error?: string
 }
 
 const SUBAGENT_PROMPTS: Record<string, string> = {
@@ -181,11 +181,14 @@ export async function runAgent(
   // A nested turn reports through its own card. Forwarding its lifecycle closed
   // the main turn while the other workers were still running.
   const emitTurn = depth > 0 ? nestedTurnEmit(deps.emit) : deps.emit
+  // The lifecycle of the turn is built in one place, like a CLI turn: same
+  // shapes, same ids, and a nested turn still cannot close its parent.
+  const lifecycle = new TurnEmitter({ emit: emitTurn, idPrefix: 'agent' })
   if (!deps.workspace) {
     // Falling back to `process.cwd()` made the agent operate on the Electron
     // app directory (or the CLI's home) without telling anyone.
     const message = 'Nessun progetto aperto: scegli una cartella prima di usare l’agente.'
-    emitTurn({ type: 'error', message })
+    lifecycle.error(message)
     return {
       text: '',
       modelKey,
@@ -255,7 +258,7 @@ export async function runAgent(
 
   if (error || candidates.length === 0) {
     const message = error ?? 'Nessun modello disponibile.'
-    emitTurn({ type: 'error', message })
+    lifecycle.error(message)
     return { text: '', modelKey, messages: [], newMessages: [], steps: 0, toolCalls: 0, aborted: false, error: message }
   }
 
@@ -287,6 +290,7 @@ export async function runAgent(
    */
   const pool = deps.pool ?? new SubagentPool(deps.config.agents.maxParallelSubagents)
   const cancellation = deps.cancellation ?? new TurnCancellation()
+  const retries = deps.retries ?? new SubagentRetries()
   // Worker events go straight to the session: they stay visible even when this
   // candidate fails and the next one takes over.
   const workers = new TurnEmitter({ emit: deps.emit, idPrefix: 'agent' })
@@ -395,79 +399,28 @@ export async function runAgent(
           // A route can pin the effort; otherwise the turn's effort carries.
           const subEffort = route?.effort ?? request.effort
 
-          workers.subagentStart({
-            agentId,
-            name,
-            description: sub.prompt.slice(0, 200),
-            modelKey:
-              target.kind === 'cli'
-                ? `${target.profile.label}${target.model ? ` · ${target.model}` : ''}`
-                : target.modelKey
-          })
+          const workerModelKey =
+            target.kind === 'cli'
+              ? `${target.profile.label}${target.model ? ` · ${target.model}` : ''}`
+              : target.modelKey
 
           const allow =
             role === 'explorer' || role === 'reviewer'
               ? ['read', 'ls', 'glob', 'grep', 'skill']
               : undefined
 
-          const started = Date.now()
-
-          if (target.kind === 'cli') {
-            // The model calls happen inside the CLI, with its auth, quota and
-            // logs. We only orchestrate.
-            try {
-              // Its own signal: the card's stop button kills this worker only.
-              const result = await cancellation.run(agentId, request.signal, (signal) =>
-                runExternalAgent(
-                  target.profile,
-                  {
-                    prompt: sub.prompt,
-                    ...(target.model ? { model: target.model } : {}),
-                    ...(subEffort ? { effort: subEffort } : {}),
-                    // Reading is always allowed; writing only for an implementer.
-                    ...(planMode || role !== 'implementer' ? { plan: true } : {}),
-                    auto: target.auto && !planMode && role === 'implementer',
-                    workspace
-                  },
-                  {
-                    home: deps.platform.homeDir,
-                    stateDir: deps.platform.configDir,
-                    signal,
-                    onText: (chunk) => deps.emit({ type: 'delta', text: chunk, agentId })
-                  }
-                )
-              )
-              const text = result.text || result.error || 'La CLI non ha prodotto output.'
-              const ok = result.code === 0 && !result.aborted && !result.timedOut
-              workers.subagentEnd({
-                agentId,
-                name,
-                ok,
-                summary: result.aborted ? 'fermato dall’utente' : text.slice(0, 200),
-                ms: Date.now() - started
-              })
-              return { ok, text, summary: text.slice(0, 200) }
-            } catch (caught) {
-              const message = caught instanceof Error ? caught.message : String(caught)
-              workers.subagentEnd({
-                agentId,
-                name,
-                ok: false,
-                summary: message,
-                ms: Date.now() - started
-              })
-              return { ok: false, text: `Subagente fallito: ${message}`, summary: message }
-            }
-          }
-
           const subSystem = `${SUBAGENT_PROMPTS[role] ?? SUBAGENT_PROMPTS.explorer!}\n\nProgetto: ${
             workspace
           }${deps.projectContext ? `\n\n${deps.projectContext}` : ''}`
 
+          // The nested loop only runs for a native target: a CLI one is handled
+          // by the branch inside `attempt`.
+          const nestedModelKey = target.kind === 'native' ? target.modelKey : modelKey
+
           const runNested = (prompt: string, signal: AbortSignal): Promise<AgentResult> =>
             runAgent(
               {
-                modelKey: target.modelKey,
+                modelKey: nestedModelKey,
                 messages: [{ role: 'user', content: prompt }],
                 ...(subEffort ? { effort: subEffort } : {}),
                 signal,
@@ -477,6 +430,7 @@ export async function runAgent(
               {
                 ...deps,
                 pool,
+                retries,
                 maxSteps: deps.subagentMaxSteps ?? deps.config.agents.subagentMaxSteps,
                 // The subagent starts from a clean context: that is the whole point.
                 modelMessages: undefined
@@ -490,57 +444,132 @@ export async function runAgent(
               }
             )
 
-          try {
-            let result = await cancellation.run(agentId, request.signal, (signal) =>
-              runNested(sub.prompt, signal)
-            )
-            // A subagent that died before doing anything (rate limit, a 5xx,
-            // a timeout on the first call) is worth one retry: otherwise the
-            // delegated work is simply lost. One that already wrote files is
-            // never repeated behind the user's back.
-            if (
-              result.error &&
-              !result.aborted &&
-              result.toolCalls === 0 &&
-              !result.text.trim()
-            ) {
-              result = await cancellation.run(agentId, request.signal, (signal) =>
-                runNested(
-                  `${sub.prompt}\n\nIl tentativo precedente è fallito prima di fare qualsiasi cosa: ${result.error}\nRiprova, evitando l'errore.`,
-                  signal
+          /**
+           * One attempt of this worker, start to end. A retry runs it again with
+           * the same agent id, so the card is reused instead of duplicated.
+           */
+          const attempt = async (): Promise<{ ok: boolean; text: string; summary: string }> => {
+            const started = Date.now()
+            workers.subagentStart({
+              agentId,
+              name,
+              description: sub.prompt.slice(0, 200),
+              modelKey: workerModelKey
+            })
+
+            if (target.kind === 'cli') {
+              // The model calls happen inside the CLI, with its auth, quota and
+              // logs. We only orchestrate.
+              try {
+                // Its own signal: the card's stop button kills this worker only.
+                const result = await cancellation.run(agentId, request.signal, (signal) =>
+                  runExternalAgent(
+                    target.profile,
+                    {
+                      prompt: sub.prompt,
+                      ...(target.model ? { model: target.model } : {}),
+                      ...(subEffort ? { effort: subEffort } : {}),
+                      // Reading is always allowed; writing only for an implementer.
+                      ...(planMode || role !== 'implementer' ? { plan: true } : {}),
+                      auto: target.auto && !planMode && role === 'implementer',
+                      workspace
+                    },
+                    {
+                      home: deps.platform.homeDir,
+                      stateDir: deps.platform.configDir,
+                      signal,
+                      onText: (chunk) => deps.emit({ type: 'delta', text: chunk, agentId })
+                    }
+                  )
                 )
+                const text = result.text || result.error || 'La CLI non ha prodotto output.'
+                const ok = result.code === 0 && !result.aborted && !result.timedOut
+                workers.subagentEnd({
+                  agentId,
+                  name,
+                  ok,
+                  summary: result.aborted ? 'fermato dall’utente' : text.slice(0, 200),
+                  ms: Date.now() - started
+                })
+                return { ok, text, summary: text.slice(0, 200) }
+              } catch (caught) {
+                const message = caught instanceof Error ? caught.message : String(caught)
+                workers.subagentEnd({
+                  agentId,
+                  name,
+                  ok: false,
+                  summary: message,
+                  ms: Date.now() - started
+                })
+                return { ok: false, text: `Subagente fallito: ${message}`, summary: message }
+              }
+            }
+
+            try {
+              let result = await cancellation.run(agentId, request.signal, (signal) =>
+                runNested(sub.prompt, signal)
               )
-            }
+              // A subagent that died before doing anything (rate limit, a 5xx,
+              // a timeout on the first call) is worth one retry: otherwise the
+              // delegated work is simply lost. One that already wrote files is
+              // never repeated behind the user's back.
+              if (
+                result.error &&
+                !result.aborted &&
+                result.toolCalls === 0 &&
+                !result.text.trim()
+              ) {
+                result = await cancellation.run(agentId, request.signal, (signal) =>
+                  runNested(
+                    `${sub.prompt}\n\nIl tentativo precedente è fallito prima di fare qualsiasi cosa: ${result.error}\nRiprova, evitando l'errore.`,
+                    signal
+                  )
+                )
+              }
 
-            const stopped = result.aborted
-            workers.subagentEnd({
-              agentId,
-              name,
-              ok: !result.error && !stopped,
-              summary: stopped
-                ? 'fermato dall’utente'
-                : result.text.slice(0, 400) || result.error || 'nessun output',
-              ms: Date.now() - started,
-              ...(result.usage ? { usage: result.usage } : {}),
-              ...(result.steps !== undefined ? { steps: result.steps } : {})
-            })
+              const stopped = result.aborted
+              workers.subagentEnd({
+                agentId,
+                name,
+                ok: !result.error && !stopped,
+                summary: stopped
+                  ? 'fermato dall’utente'
+                  : result.text.slice(0, 400) || result.error || 'nessun output',
+                ms: Date.now() - started,
+                ...(result.usage ? { usage: result.usage } : {}),
+                ...(result.steps !== undefined ? { steps: result.steps } : {})
+              })
 
-            return {
-              ok: !result.error && !stopped,
-              text: result.text || result.error || 'Il subagente non ha prodotto output.',
-              summary: result.text.slice(0, 200)
+              return {
+                ok: !result.error && !stopped,
+                text: result.text || result.error || 'Il subagente non ha prodotto output.',
+                summary: result.text.slice(0, 200)
+              }
+            } catch (caught) {
+              const message = caught instanceof Error ? caught.message : String(caught)
+              workers.subagentEnd({
+                agentId,
+                name,
+                ok: false,
+                summary: message,
+                ms: Date.now() - started
+              })
+              return { ok: false, text: `Subagente fallito: ${message}`, summary: message }
             }
-          } catch (caught) {
-            const message = caught instanceof Error ? caught.message : String(caught)
-            workers.subagentEnd({
-              agentId,
-              name,
-              ok: false,
-              summary: message,
-              ms: Date.now() - started
-            })
-            return { ok: false, text: `Subagente fallito: ${message}`, summary: message }
           }
+
+          const result = await attempt()
+          // A failed worker can be run again from its card while the turn runs;
+          // it keeps its agent id, so the same card turns green or red again.
+          if (result.ok) retries.release(agentId)
+          else {
+            retries.register(agentId, () =>
+              request.signal?.aborted
+                ? Promise.resolve()
+                : pool.run(sub.files ?? [], attempt).then(() => undefined)
+            )
+          }
+          return result
         })
     }
 
@@ -580,12 +609,7 @@ export async function runAgent(
               if (!part.text) break
               if (!firstTokenAt) {
                 firstTokenAt = Date.now()
-                emitTurn({
-                  type: 'start',
-                  modelKey: model.key,
-                  label: model.label,
-                  ...(depth > 0 ? { fallbackFrom: undefined } : {})
-                })
+                lifecycle.start({ modelKey: model.key, label: model.label })
               }
               text += part.text
               emit({ type: 'delta', text: part.text, ...(options.agentId ? { agentId: options.agentId } : {}) })
@@ -630,8 +654,7 @@ export async function runAgent(
         )
         const messages: ModelMessage[] = [...inputMessages, ...newMessages]
 
-        emitTurn({
-          type: 'done',
+        lifecycle.done({
           modelKey: model.key,
           ms: Date.now() - startedAt,
           ttftMs: firstTokenAt ? firstTokenAt - startedAt : Date.now() - startedAt,
@@ -655,8 +678,7 @@ export async function runAgent(
         }
       } catch (caught) {
         if (isAbort(streamError ?? caught)) {
-          emitTurn({
-            type: 'done',
+          lifecycle.done({
             modelKey: model.key,
             ms: Date.now() - startedAt,
             ttftMs: 0,
@@ -676,7 +698,7 @@ export async function runAgent(
         // behind the user's back.
         if (produced) {
           const message = caught instanceof Error ? caught.message : String(caught)
-          emitTurn({ type: 'error', message, modelKey: model.key })
+          lifecycle.error(message, model.key)
           return {
             text,
             modelKey: model.key,
@@ -701,7 +723,7 @@ export async function runAgent(
   const message = lastError
     ? `Tutti i modelli hanno fallito. Ultimo errore: ${lastError}`
     : 'Nessun modello ha prodotto una risposta.'
-  emitTurn({ type: 'error', message })
+  lifecycle.error(message)
   return { text: '', modelKey, messages: [], newMessages: [], steps: 0, toolCalls: 0, aborted: false, error: message }
 }
 
@@ -738,6 +760,33 @@ export function buildSystemPrompt(projectContext: string, workspace?: string): s
   ]
     .filter(Boolean)
     .join('\n')
+}
+
+/**
+ * A native model loop as an `AgentBackend`. The request and the deps carry the
+ * conversation; workspace, mode, signal and stream come from the turn, so a
+ * caller can run this backend exactly like a CLI one.
+ */
+export function nativeBackend(input: {
+  request: StreamRequest
+  deps: AgentDeps
+}): AgentBackend {
+  const label =
+    input.deps.models.find((model) => model.key === input.request.modelKey)?.label ??
+    input.request.modelKey
+  return {
+    kind: 'native',
+    label,
+    run: (context) =>
+      runAgent(
+        {
+          ...input.request,
+          mode: context.mode,
+          ...(context.signal ? { signal: context.signal } : {})
+        },
+        { ...input.deps, workspace: context.workspace, emit: context.emit }
+      )
+  }
 }
 
 export { toolTitle, findModel }

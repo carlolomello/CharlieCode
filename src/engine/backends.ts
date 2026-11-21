@@ -23,6 +23,8 @@ import {
 import { clearCliSession, hasCliSession, markCliSession } from './cli-sessions'
 import { TurnCancellation } from './turn-cancellation'
 import { TurnEmitter, type AgentRef } from './turn-emitter'
+import type { AgentBackend, AgentBackendResult } from './agent-backend'
+import type { SubagentRetries } from './subagent-retry'
 import { cliModelKey } from '../shared/cli-key'
 import {
   integrationPrompt,
@@ -194,15 +196,16 @@ export interface CliTurnInput {
    * here when absent, so a CLI turn stays usable on its own (CLI, tests).
    */
   cancellation?: TurnCancellation
+  /**
+   * Lets the UI run one failed team worker again, with the same agent id so the
+   * card is reused instead of duplicated.
+   */
+  retries?: SubagentRetries
   emit: (event: EngineEvent) => void
 }
 
-export interface CliTurnResult {
-  text: string
-  error?: string
-  aborted: boolean
-  toolCalls: number
-}
+/** A CLI turn answers the same questions as a native one. */
+export type CliTurnResult = AgentBackendResult
 
 function changeSignature(change: {
   status: string
@@ -281,25 +284,20 @@ async function snapshotWorkspace(root: string): Promise<Map<string, SnapshotEntr
  * computed around the run, so the user still sees what changed.
  */
 export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
+  const modelKey = cliModelKey(input.profile.id, input.model)
+  const turn = new TurnEmitter({ emit: input.emit, idPrefix: 'cli' })
+
   // A profile without a read-only flag cannot honour plan mode. Saying so is
   // better than running it in build mode after the user chose "Piano".
   if (input.mode === 'plan' && !input.profile.planArgs?.length) {
     const message = `${input.profile.label} non ha un flag di sola lettura configurato: aggiungi \`planArgs\` al profilo o usa un modello nativo per la modalità piano.`
-    input.emit({ type: 'error', message })
-    input.emit({
-      type: 'done',
-      modelKey: cliModelKey(input.profile.id, input.model),
-      ms: 0,
-      ttftMs: 0,
-      steps: 0,
-      toolCalls: 0
-    })
-    return { text: '', error: message, aborted: false, toolCalls: 0 }
+    turn.error(message, modelKey)
+    turn.done({ modelKey, ms: 0, ttftMs: 0, steps: 0, toolCalls: 0 })
+    return { text: '', modelKey, error: message, aborted: false, steps: 0, toolCalls: 0 }
   }
 
   const started = Date.now()
   let firstTextAt: number | undefined
-  const turn = new TurnEmitter({ emit: input.emit, idPrefix: 'cli' })
   const cancellation = input.cancellation ?? new TurnCancellation()
 
   const before: WorkspaceChanges | undefined =
@@ -309,11 +307,7 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
       ? await snapshotWorkspace(input.workspace).catch(() => new Map<string, SnapshotEntry>())
       : undefined
 
-  input.emit({
-    type: 'start',
-    modelKey: cliModelKey(input.profile.id, input.model),
-    label: input.profile.label
-  })
+  turn.start({ modelKey, label: input.profile.label })
 
   const projectContext = (input.system ?? '').slice(0, 4_000)
 
@@ -495,58 +489,75 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
     })
 
     const waves = scheduleWaves(plan.items, maxWorkers)
-    const reports: { item: (typeof plan.items)[number]; text: string; error?: string }[] = []
+    type TeamItem = (typeof plan.items)[number]
+    const reports: { item: TeamItem; text: string; error?: string }[] = []
     let workerIndex = 0
+    const workerModel = `${input.profile.label}${input.model ? ` · ${input.model}` : ''}`
+
+    /**
+     * One team worker, start to end. A failed one registers its own retry: the
+     * card can run it again while the other workers keep going.
+     */
+    const runWorker = async (
+      item: TeamItem,
+      agentId: string,
+      index: number
+    ): Promise<{ item: TeamItem; text: string; error?: string }> => {
+      const startedAt = Date.now()
+      turn.subagentStart({
+        agentId,
+        name: item.title,
+        description: item.instructions.slice(0, 200),
+        modelKey: workerModel
+      })
+      // Each worker has its own signal: stopping one leaves the wave alive.
+      const lease = cancellation.register(agentId, input.signal)
+      try {
+        const result = await runOnce(
+          workerPrompt({
+            item,
+            index,
+            total: plan.items.length,
+            workspace: input.workspace,
+            ...(projectContext ? { context: projectContext } : {})
+          }),
+          {
+            mode: 'build',
+            quiet: true,
+            agent: { id: agentId, name: item.title },
+            signal: lease.signal
+          }
+        )
+        const failed =
+          result.error ??
+          (result.aborted ? 'fermato dall’utente' : result.timedOut ? 'timeout' : undefined)
+        turn.subagentEnd({
+          agentId,
+          name: item.title,
+          ok: !failed,
+          summary:
+            failed ?? ((result.text.trim().split('\n')[0] ?? '').slice(0, 200) || 'fatto'),
+          ms: Date.now() - startedAt
+        })
+        // Same agent id on retry: the card is reused, not duplicated.
+        if (failed) input.retries?.register(agentId, () => runWorker(item, agentId, index).then(() => undefined))
+        else input.retries?.release(agentId)
+        return {
+          item,
+          text: result.text,
+          ...(failed ? { error: failed } : {})
+        }
+      } finally {
+        lease.release()
+      }
+    }
 
     for (const wave of waves) {
       if (input.signal?.aborted) break
       const results = await Promise.all(
-        wave.map(async (item) => {
-          const agentId = `cli-worker-${++workerIndex}`
-          const startedAt = Date.now()
-          turn.subagentStart({
-            agentId,
-            name: item.title,
-            description: item.instructions.slice(0, 200),
-            modelKey: `${input.profile.label}${input.model ? ` · ${input.model}` : ''}`
-          })
-          // Each worker has its own signal: stopping one leaves the wave alive.
-          const lease = cancellation.register(agentId, input.signal)
-          try {
-            const result = await runOnce(
-              workerPrompt({
-                item,
-                index: workerIndex,
-                total: plan.items.length,
-                workspace: input.workspace,
-                ...(projectContext ? { context: projectContext } : {})
-              }),
-              {
-                mode: 'build',
-                quiet: true,
-                agent: { id: agentId, name: item.title },
-                signal: lease.signal
-              }
-            )
-            const failed =
-              result.error ??
-              (result.aborted ? 'fermato dall’utente' : result.timedOut ? 'timeout' : undefined)
-            turn.subagentEnd({
-              agentId,
-              name: item.title,
-              ok: !failed,
-              summary:
-                failed ?? ((result.text.trim().split('\n')[0] ?? '').slice(0, 200) || 'fatto'),
-              ms: Date.now() - startedAt
-            })
-            return {
-              item,
-              text: result.text,
-              ...(failed ? { error: failed } : {})
-            }
-          } finally {
-            lease.release()
-          }
+        wave.map((item) => {
+          const index = ++workerIndex
+          return runWorker(item, `cli-worker-${index}`, index)
         })
       )
       reports.push(...results)
@@ -649,8 +660,11 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
 
   const ms = Date.now() - started
   const aborted = outcome.aborted
+  // The backend owns its stream: the failure is reported before the turn
+  // closes, so the caller only records it.
+  if (outcome.error) turn.error(outcome.error, modelKey)
   turn.done({
-    modelKey: cliModelKey(input.profile.id, input.model),
+    modelKey,
     ms,
     ttftMs: Math.max(0, (firstTextAt ?? started) - started),
     steps: 1,
@@ -660,8 +674,32 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
 
   return {
     text: outcome.text,
+    modelKey,
     ...(outcome.error ? { error: outcome.error } : {}),
     aborted,
+    steps: 1,
     toolCalls: turn.toolCalls
+  }
+}
+
+/** Everything a CLI backend needs except the per-turn fields of the contract. */
+export type CliBackendInput = Omit<CliTurnInput, 'emit' | 'mode' | 'workspace' | 'signal'>
+
+/**
+ * A CLI as an `AgentBackend`. The turn's workspace, mode, signal and stream
+ * come from the caller; the profile, model and prompt belong to this backend.
+ */
+export function cliBackend(input: CliBackendInput): AgentBackend {
+  return {
+    kind: 'cli',
+    label: input.profile.label,
+    run: (context) =>
+      runCliTurn({
+        ...input,
+        mode: context.mode,
+        workspace: context.workspace,
+        ...(context.signal ? { signal: context.signal } : {}),
+        emit: context.emit
+      })
   }
 }

@@ -22,6 +22,7 @@ No Apple Developer ID and no code signing certificate, so both platforms warn on
 
 ## Changes in this build
 
+- **Retry one worker:** a failed subagent card now has its own ↻. It runs that worker again, with the same card, while the others keep working — no need to resend the whole request and pay for the workers that already succeeded. It only appears while the turn is running, because after the integration the parent answer would not know about the new work.
 - **A subagent no longer ends the turn:** its completion reached the parent stream, so the transcript stopped saying the answer was still being written, the message was stamped with the worker's model and timings, and a worker error marked the whole turn as failed. A nested turn now reports only through its own card.
 - **One worker at a time:** each subagent card has its own stop button, so a worker that is stuck no longer forces you to kill the whole turn (and the other workers with it). Stopping the turn still stops everything.
 - **What a worker cost:** a card now reports its time and, when its backend says so, the tokens it spent, instead of a bare "ok".
