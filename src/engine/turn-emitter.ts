@@ -19,6 +19,9 @@ export interface TurnEmitterOptions {
 
 const DEFAULT_MAX_ACTIVITY = 50
 
+/** A CLI that loops can report hundreds of calls: the transcript keeps a page. */
+const MAX_TOOL_ROWS = 200
+
 /** Events that describe a turn, not a worker inside it. */
 const TURN_LIFECYCLE: ReadonlySet<EngineEvent['type']> = new Set(['start', 'done', 'error'])
 
@@ -56,6 +59,10 @@ export class TurnEmitter {
   private generated = 0
   private activities = 0
   private writes = 0
+  /** Ids already in the transcript, with the name the row was built with. */
+  private readonly tools = new Map<string, { name: string }>()
+  /** Ids whose result was already reported: a CLI can repeat an event. */
+  private readonly closed = new Set<string>()
 
   constructor(options: TurnEmitterOptions) {
     this.emit = options.emit
@@ -63,9 +70,9 @@ export class TurnEmitter {
     this.idPrefix = options.idPrefix ?? 'turn'
   }
 
-  /** Tool rows this turn produced: progress lines plus files written. */
+  /** Tool rows this turn produced: calls, progress lines and files written. */
   get toolCalls(): number {
-    return this.activities + this.writes
+    return this.activities + this.writes + this.tools.size
   }
 
   /** The transcript already shows all the progress it accepts. */
@@ -111,6 +118,66 @@ export class TurnEmitter {
     this.activities += 1
     this.pair(this.nextId('activity'), 'cli', title, 'attività riportata dalla CLI', agent)
     return true
+  }
+
+  /**
+   * One tool call a CLI reported.
+   *
+   * The row is created on the first event for its id and closed by the first
+   * terminal one: a CLI can print a call once when it starts and again when it
+   * ends, or — like opencode — a single event with the finished state. Both
+   * produce one row, with the command, the path and the output on it.
+   */
+  tool(
+    input: {
+      id: string
+      name: string
+      title: string
+      status: 'running' | 'ok' | 'error'
+      input?: Record<string, unknown>
+      output?: string
+      summary?: string
+      ms?: number
+    },
+    agent?: AgentRef
+  ): void {
+    const attribution = agent ? { agentId: agent.id, agentName: agent.name } : {}
+    const known = this.tools.get(input.id)
+
+    if (!known) {
+      // A result line without its call has no name and no title to show.
+      if (!input.name) return
+      if (this.tools.size >= MAX_TOOL_ROWS) return
+      this.tools.set(input.id, { name: input.name })
+      this.emit({
+        type: 'tool-call',
+        id: input.id,
+        name: input.name,
+        title: input.title,
+        ...(input.input ? { input: input.input } : {}),
+        ...attribution
+      })
+    }
+
+    if (input.status === 'running' || this.closed.has(input.id)) return
+    this.closed.add(input.id)
+
+    const output = input.output?.trim().slice(0, 4_000)
+    const firstLine = output
+      ?.split('\n')
+      .map((line) => line.trim())
+      .find(Boolean)
+      ?.slice(0, 200)
+    this.emit({
+      type: 'tool-result',
+      id: input.id,
+      name: known?.name ?? input.name,
+      ok: input.status === 'ok',
+      summary: input.summary?.trim() || firstLine || (input.status === 'ok' ? 'fatto' : 'errore'),
+      ...(output ? { output } : {}),
+      ms: input.ms ?? 0,
+      ...attribution
+    })
   }
 
   /**

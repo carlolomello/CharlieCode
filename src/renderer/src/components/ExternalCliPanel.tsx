@@ -33,6 +33,7 @@ interface Draft {
   effortValuesText: string
   planArgsText: string
   autoArgsText: string
+  outputArgsText: string
   continueArgsText: string
   modelsArgsText: string
   modelsFormat: 'lines' | 'json'
@@ -56,6 +57,7 @@ const EMPTY_DRAFT: Draft = {
   effortValuesText: '',
   planArgsText: '',
   autoArgsText: '',
+  outputArgsText: '',
   continueArgsText: '',
   modelsArgsText: '',
   modelsFormat: 'lines',
@@ -100,6 +102,7 @@ function draftFromProfile(profile: CliProfile): Draft {
     effortValuesText: (profile.effortValues ?? []).join(', '),
     planArgsText: joinLines(profile.planArgs),
     autoArgsText: joinLines(profile.autoArgs),
+    outputArgsText: joinLines(profile.outputArgs),
     continueArgsText: joinLines(profile.continueArgs),
     modelsArgsText: joinLines(profile.modelsArgs),
     modelsFormat: profile.modelsFormat ?? 'lines',
@@ -140,6 +143,9 @@ function profileFromDraft(draft: Draft): Record<string, unknown> {
       : {}),
     ...(splitLines(draft.planArgsText).length ? { planArgs: splitLines(draft.planArgsText) } : {}),
     ...(splitLines(draft.autoArgsText).length ? { autoArgs: splitLines(draft.autoArgsText) } : {}),
+    ...(splitLines(draft.outputArgsText).length
+      ? { outputArgs: splitLines(draft.outputArgsText) }
+      : {}),
     ...(splitLines(draft.continueArgsText).length
       ? { continueArgs: splitLines(draft.continueArgsText) }
       : {}),
@@ -358,6 +364,7 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
             : {}),
           ...(proposal.planArgs ? { planArgsText: joinLines(proposal.planArgs) } : {}),
           ...(proposal.autoArgs ? { autoArgsText: joinLines(proposal.autoArgs) } : {}),
+          ...(proposal.outputArgs ? { outputArgsText: joinLines(proposal.outputArgs) } : {}),
           ...(proposal.continueArgs
             ? { continueArgsText: joinLines(proposal.continueArgs) }
             : {}),
@@ -1104,6 +1111,21 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
                 value={draft.autoArgsText}
                 placeholder={'--yes'}
                 onChange={(event) => setDraft({ ...draft, autoArgsText: event.target.value })}
+              />
+            </label>
+
+            <label className="cli-field">
+              <span>
+                Output strutturato{' '}
+                <span className="muted small">
+                  — la CLI racconta cosa fa: comandi, file, worker
+                </span>
+              </span>
+              <textarea
+                rows={2}
+                value={draft.outputArgsText}
+                placeholder={'--format\njson'}
+                onChange={(event) => setDraft({ ...draft, outputArgsText: event.target.value })}
               />
             </label>
 

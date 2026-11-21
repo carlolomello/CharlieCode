@@ -121,6 +121,62 @@ describe('TurnEmitter', () => {
     expect(events.map((event) => event.type)).toEqual(['delta', 'tool-call', 'subagent-start'])
   })
 
+  it('una chiamata della CLI diventa una riga sola, con comando e output', () => {
+    const { events, turn } = setup()
+
+    turn.tool({
+      id: 'cli-tool-1',
+      name: 'bash',
+      title: 'ls -1 .',
+      status: 'ok',
+      input: { command: 'ls -1 .' },
+      output: 'a.txt\nb.txt',
+      ms: 12
+    })
+
+    expect(turn.toolCalls).toBe(1)
+    expect(events[0]).toMatchObject({
+      type: 'tool-call',
+      id: 'cli-tool-1',
+      name: 'bash',
+      title: 'ls -1 .',
+      input: { command: 'ls -1 .' }
+    })
+    expect(events[1]).toMatchObject({
+      type: 'tool-result',
+      ok: true,
+      summary: 'a.txt',
+      output: 'a.txt\nb.txt',
+      ms: 12
+    })
+  })
+
+  it('una chiamata in corso resta aperta e si chiude una volta sola', () => {
+    const { events, turn } = setup()
+
+    turn.tool({ id: 't1', name: 'bash', title: 'sleep 3', status: 'running' })
+    turn.tool({ id: 't1', name: 'bash', title: 'sleep 3', status: 'ok', output: 'fatto' })
+    turn.tool({ id: 't1', name: 'bash', title: 'sleep 3', status: 'ok', output: 'fatto' })
+
+    expect(events.filter((event) => event.type === 'tool-call')).toHaveLength(1)
+    expect(events.filter((event) => event.type === 'tool-result')).toHaveLength(1)
+    expect(turn.toolCalls).toBe(1)
+  })
+
+  it('un risultato senza nome usa quello della chiamata', () => {
+    const { events, turn } = setup()
+
+    turn.tool({ id: 't1', name: 'read', title: 'a.txt', status: 'running' })
+    turn.tool({ id: 't1', name: '', title: '', status: 'error', output: 'permesso negato' })
+
+    expect(events[1]).toMatchObject({
+      type: 'tool-result',
+      name: 'read',
+      ok: false,
+      summary: 'permesso negato'
+    })
+  })
+
   it('marca il turno interrotto solo quando lo è', () => {
     const { events, turn } = setup()
 

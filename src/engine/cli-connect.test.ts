@@ -5,11 +5,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   connectCli,
   discoverModelCommand,
+  ensureCliArgs,
   modelNamesFromOutput,
   parseModelHint
 } from './cli-connect'
 import { readCliProfile, saveCliProfile } from './cli-profiles'
 import { createPlatform, type Platform } from './platform'
+import type { CliProfile } from './types'
 
 describe('modelNamesFromOutput', () => {
   it('tiene gli id e scarta intestazioni, prosa ed errori', () => {
@@ -239,6 +241,83 @@ exit 1
       connectCli(platform, { command: 'comando-che-non-esiste-xyz' })
     ).rejects.toThrow(/non trovato/i)
   })
+})
+
+describe('ensureCliArgs', () => {
+  let dir: string
+  let platform: Platform
+  let binary: string
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'charliecode-repair-'))
+    platform = createPlatform({ id: 'darwin', env: { HOME: dir } })
+    binary = join(dir, 'agent-one')
+  })
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  it.runIf(process.platform !== 'win32')(
+    'aggiunge il formato strutturato a un profilo che stampa per umani',
+    async () => {
+      await writeFile(
+        binary,
+        `#!/bin/sh
+case "$1" in
+  --help)
+    cat <<'EOF'
+Usage: agent-one run [flags] [message...]
+
+Commands:
+  run [message..]   Run one turn without the interface
+
+FLAGS
+  --format choice   Output format (choices: default, json)
+EOF
+    exit 0 ;;
+esac
+exit 0
+`
+      )
+      await chmod(binary, 0o755)
+
+      const saved: CliProfile = {
+        id: 'agent-one',
+        label: 'Agent One',
+        command: binary,
+        args: ['run']
+      }
+      await saveCliProfile(platform, saved)
+
+      const repaired = await ensureCliArgs(platform, saved, dir)
+
+      expect(repaired.outputArgs).toEqual(['--format', 'json'])
+      expect(repaired.args).toEqual(['run'])
+      expect((await readCliProfile(platform, 'agent-one'))?.outputArgs).toEqual([
+        '--format',
+        'json'
+      ])
+    }
+  )
+
+  it.runIf(process.platform !== 'win32')(
+    'lascia stare un profilo che ha scelto il testo semplice',
+    async () => {
+      await writeFile(binary, '#!/bin/sh\nexit 0\n')
+      await chmod(binary, 0o755)
+
+      const saved: CliProfile = {
+        id: 'agent-one',
+        label: 'Agent One',
+        command: binary,
+        args: ['run'],
+        output: 'text'
+      }
+
+      expect(await ensureCliArgs(platform, saved, dir)).toBe(saved)
+    }
+  )
 })
 
 describe('discoverModelCommand', () => {

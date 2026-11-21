@@ -266,6 +266,72 @@ describe('runCliTurn', () => {
       summary: 'file modificato (progetto senza git)'
     })
   })
+
+  it('mostra i tool che la CLI riporta in formato strutturato', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'charliecode-backend-'))
+    const events: EngineEvent[] = []
+    // The shape opencode prints with `--format json`: one event per line.
+    const script = `
+const lines = [
+  { type: 'tool_use', part: { id: 'p1', type: 'tool', tool: 'shell', state: { status: 'completed', input: { command: 'ls -1' }, output: 'a.txt', time: { start: 1, end: 5 } } } },
+  { type: 'tool_use', part: { id: 'p2', type: 'tool', tool: 'write', state: { status: 'completed', input: { path: 'nota.txt' }, output: 'ok' } } },
+  { type: 'text', part: { type: 'text', text: 'fatto' } }
+]
+process.stdout.write(lines.map((line) => JSON.stringify(line)).join('\\n'))
+`
+
+    const result = await runCliTurn({
+      profile: { ...profile, args: ['-e', script] },
+      mode: 'build',
+      prompt: 'elenca i file',
+      history: [],
+      workspace: dir,
+      home: dir,
+      emit: (event) => events.push(event)
+    })
+
+    expect(result.text).toBe('fatto')
+    const calls = events.filter((event) => event.type === 'tool-call')
+    expect(calls).toHaveLength(2)
+    expect(calls[0]).toMatchObject({ name: 'bash', title: 'ls -1' })
+    expect(calls[1]).toMatchObject({ name: 'write', title: 'nota.txt' })
+    expect(events.find((event) => event.type === 'tool-result')).toMatchObject({
+      ok: true,
+      output: 'a.txt'
+    })
+    expect(result.toolCalls).toBe(2)
+  })
+
+  it('apre una card per il worker che la CLI delega e la chiude col turno', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'charliecode-backend-'))
+    const events: EngineEvent[] = []
+    const script = `
+const lines = [
+  { type: 'tool_use', part: { id: 's1', type: 'tool', tool: 'subagent', state: { status: 'completed', input: { agent: 'general', description: 'Crea nota', prompt: 'crea nota.txt' }, output: 'working in the background' } } },
+  { type: 'text', part: { type: 'text', text: 'delegato' } }
+]
+process.stdout.write(lines.map((line) => JSON.stringify(line)).join('\\n'))
+`
+
+    const result = await runCliTurn({
+      profile: { ...profile, args: ['-e', script] },
+      mode: 'build',
+      prompt: 'delega il lavoro',
+      history: [],
+      workspace: dir,
+      home: dir,
+      emit: (event) => events.push(event)
+    })
+
+    expect(result.text).toBe('delegato')
+    expect(events.find((event) => event.type === 'subagent-start')).toMatchObject({
+      name: 'Crea nota',
+      description: 'crea nota.txt'
+    })
+    expect(events.find((event) => event.type === 'subagent-end')).toMatchObject({ ok: true })
+    // The worker has its own card: it is not also a row in the tool list.
+    expect(events.some((event) => event.type === 'tool-call' && event.name === 'task')).toBe(false)
+  })
 })
 
 /** A CLI that plans two items, works on one per prompt, then integrates. */

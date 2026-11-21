@@ -436,29 +436,54 @@ export function proposalFromHelp(
 
   /* ------------------------------- output ------------------------------ */
 
+  // The flag is kept out of `args` on purpose: it belongs to the structured
+  // output, and a profile that keeps it there cannot turn the format off
+  // without losing the argv the user wrote. It also carries what a plain text
+  // stream can never give the transcript — the commands, the files and the
+  // workers the CLI is using.
+  const alreadyAsksForFormat = (flag: string): boolean =>
+    args.some((arg) => arg === flag || arg.startsWith(`${flag}=`))
+
+  /**
+   * The values of a format flag, read from its help line as well as its enum:
+   * `Output format (choices: default, json)` loses `default` in the enum parse
+   * (it is filtered as noise), which used to hide the only value that matters.
+   */
+  const formatValues = (flag: HelpFlag): string[] => {
+    const found = new Set(flag.values.map((value) => value.toLowerCase()))
+    for (const match of `${flag.name} ${flag.description}`.matchAll(
+      /\b(stream-json|jsonl|json-lines|json)\b/gi
+    )) {
+      const value = (match[1] ?? '').toLowerCase()
+      if (value) found.add(value)
+    }
+    return [...found]
+  }
+
   const output = pickFlag(flags, ['--output-format', '--output', '--format'])
   if (output?.takesValue) {
-    if (output.values.includes('stream-json')) {
-      if (addArgs([output.name, 'stream-json'])) {
-        proposal.output = 'stream-json'
-        findings.push({
-          field: 'output',
-          label: 'output',
-          evidence: `${output.name} stream-json`
-        })
-      }
-    } else if (output.values.includes('json')) {
-      if (addArgs([output.name, 'json'])) {
-        proposal.output = 'auto'
-        findings.push({ field: 'output', label: 'output', evidence: `${output.name} json` })
-        warnings.push(
-          'La CLI stampa JSON: se l’output è su più righe, indica il percorso del testo nelle opzioni avanzate.'
-        )
-      }
+    const values = formatValues(output)
+    const value = values.includes('stream-json')
+      ? 'stream-json'
+      : values.some((entry) => entry.startsWith('json'))
+        ? 'json'
+        : undefined
+    if (value && !alreadyAsksForFormat(output.name)) {
+      proposal.outputArgs = [output.name, value]
+      proposal.output = value === 'stream-json' ? 'stream-json' : 'auto'
+      findings.push({
+        field: 'output',
+        label: 'output',
+        evidence: `${output.name} ${value}`
+      })
+      warnings.push(
+        'La CLI stampa JSON: se l’output è su più righe, indica il percorso del testo nelle opzioni avanzate.'
+      )
     }
   } else {
     const json = pickFlag(flags, ['--json'])
-    if (json && !json.takesValue && addArgs([json.name])) {
+    if (json && !json.takesValue && !alreadyAsksForFormat(json.name)) {
+      proposal.outputArgs = [json.name]
       proposal.output = 'auto'
       findings.push({ field: 'output', label: 'output', evidence: json.name })
       warnings.push(
@@ -513,8 +538,22 @@ async function versionOf(binary: string, home?: string): Promise<string | undefi
   return undefined
 }
 
-async function helpText(binary: string, timeout: number, home?: string): Promise<string> {
-  for (const args of [['--help'], ['-h'], ['help']]) {
+/**
+ * Reads a help screen, of the CLI itself or of one of its subcommands.
+ *
+ * A CLI that runs its turns through a subcommand documents the flags there:
+ * `tool --help` lists the global ones, `tool run --help` lists the format, the
+ * model and the mode. Reading only the first screen is how a structured output
+ * flag stays invisible.
+ */
+async function helpText(
+  binary: string,
+  timeout: number,
+  home?: string,
+  prefix: string[] = []
+): Promise<string> {
+  const attempts = prefix.length > 0 ? [[...prefix, '--help'], [...prefix, '-h']] : [['--help'], ['-h'], ['help']]
+  for (const args of attempts) {
     const result = await capture(binary, args, timeout, home)
     const output = stripAnsi([result.stdout, result.stderr].filter(Boolean).join('\n')).trim()
     if (output.length < 20) continue
@@ -554,10 +593,15 @@ export async function introspectCli(
     }
   }
 
-  const [version, help] = await Promise.all([
+  const timeout = options.timeoutMs ?? 4_000
+  // The first bare word of the argv is the subcommand that runs a turn.
+  const sub = (options.args ?? []).find((arg) => /^[a-z][\w-]*$/i.test(arg))
+  const [version, topHelp, subHelp] = await Promise.all([
     versionOf(binary, options.home),
-    helpText(binary, options.timeoutMs ?? 4_000, options.home)
+    helpText(binary, timeout, options.home),
+    sub ? helpText(binary, timeout, options.home, [sub]) : Promise.resolve('')
   ])
+  const help = [topHelp, subHelp].filter(Boolean).join('\n\n')
 
   if (!help) {
     return {

@@ -365,14 +365,17 @@ export async function connectCli(
     )
   }
 
-  const introspection = await introspectCli(binary, {
-    home: platform.homeDir,
-    ...(input.workspace ? { workspace: input.workspace } : {})
-  })
-
   const label = input.label?.trim() || commandLabel(binary)
   const id = slugifyProfileId(label) || slugifyProfileId(commandLabel(binary)) || 'cli'
   const saved = await readCliProfile(platform, id)
+
+  const introspection = await introspectCli(binary, {
+    home: platform.homeDir,
+    // Reconnecting an existing profile reads the help of the subcommand it
+    // already uses: that is where its format and model flags are documented.
+    ...(saved?.args.length ? { args: saved.args } : {}),
+    ...(input.workspace ? { workspace: input.workspace } : {})
+  })
 
   const proposal = introspection.proposal
   const warnings = [...introspection.warnings]
@@ -493,6 +496,11 @@ export async function connectCli(
     ? {
         ...saved,
         ...(argsChanged ? { args } : {}),
+        // A saved profile gets the structured format the first time its help
+        // advertises one: without it the transcript only ever sees prose.
+        ...(proposal.outputArgs && !saved.outputArgs?.length
+          ? { outputArgs: proposal.outputArgs, output: proposal.output ?? saved.output }
+          : {}),
         ...(modelsArgs && !sameModelsArgs ? { modelsArgs } : {}),
         ...(modelsFormat ? { modelsFormat } : {}),
         ...(modelsPath ? { modelsPath } : {}),
@@ -507,6 +515,7 @@ export async function connectCli(
         args,
         ...(proposal.promptMode ? { promptMode: proposal.promptMode } : {}),
         ...(proposal.output ? { output: proposal.output } : {}),
+        ...(proposal.outputArgs ? { outputArgs: proposal.outputArgs } : {}),
         // A CLI that can list models but does not advertise the flag still
         // takes one: store the usual spelling so the panel shows it and the
         // user can correct it, instead of hiding the model picker.
@@ -546,12 +555,28 @@ export async function connectCli(
  * subcommand — applied to a profile that already exists, so the user does not
  * have to delete and recreate it.
  */
+/**
+ * True when the profile still prints for humans: no format flag was chosen and
+ * the output was not pinned to plain text by the user. Without a structured
+ * format the app can only show the CLI's prose — no commands, no files, no
+ * workers — which is exactly the turn that looks stuck.
+ */
+function wantsStructuredOutput(profile: CliProfile): boolean {
+  if (profile.output === 'text') return false
+  if (profile.outputArgs?.length) return false
+  return !profile.args.some((arg) =>
+    /^--?(format|output-format|output|json|jsonl|json-lines|stream-json)$/i.test(arg)
+  )
+}
+
 export async function ensureCliArgs(
   platform: Platform,
   profile: CliProfile,
   workspace?: string
 ): Promise<CliProfile> {
-  if (hasPromptMechanism(profile.args)) return profile
+  const needsArgs = !hasPromptMechanism(profile.args)
+  const needsOutput = wantsStructuredOutput(profile)
+  if (!needsArgs && !needsOutput) return profile
 
   const binary =
     findBinary(profile.command, platform.homeDir, workspace) ??
@@ -563,11 +588,29 @@ export async function ensureCliArgs(
 
   const introspection = await introspectCli(binary, {
     home: platform.homeDir,
+    // The argv names the subcommand that runs a turn: its help is the one
+    // that documents the format flag.
+    args: profile.args,
     ...(workspace ? { workspace } : {})
   }).catch(() => undefined)
-  const proposed = introspection?.proposal.args ?? []
-  if (!hasPromptMechanism(proposed)) return profile
 
-  const repaired: CliProfile = { ...profile, args: proposed }
+  const repaired: CliProfile = { ...profile }
+  let changed = false
+
+  if (needsArgs) {
+    const proposed = introspection?.proposal.args ?? []
+    if (hasPromptMechanism(proposed)) {
+      repaired.args = proposed
+      changed = true
+    }
+  }
+
+  if (needsOutput && introspection?.proposal.outputArgs?.length) {
+    repaired.outputArgs = introspection.proposal.outputArgs
+    if (introspection.proposal.output) repaired.output = introspection.proposal.output
+    changed = true
+  }
+
+  if (!changed) return profile
   return saveCliProfile(platform, repaired).catch(() => repaired)
 }

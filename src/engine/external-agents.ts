@@ -181,7 +181,7 @@ export function profileEfforts(profile: CliProfile): EffortLevel[] {
 }
 
 /** The optional argv groups a profile adds to a turn. */
-export type FlagGroup = 'model' | 'effort' | 'plan' | 'auto' | 'continue'
+export type FlagGroup = 'model' | 'effort' | 'plan' | 'auto' | 'continue' | 'output'
 
 /**
  * Where a group sits in the argv. `after` is the default, after the profile's
@@ -258,6 +258,12 @@ export function buildCliArgs(
   }
   if (options.auto && profile.autoArgs?.length) {
     place('auto', expandAll(profile.autoArgs, options))
+  }
+
+  // The structured format belongs to the turn that prints it, so it is added
+  // even when the user did not choose a model or a mode.
+  if (profile.outputArgs?.length) {
+    place('output', expandAll(profile.outputArgs, options))
   }
 
   const argv = [...before, ...base, ...after]
@@ -337,7 +343,8 @@ function groupFlags(profile: CliProfile, options: AgentRunOptions): [FlagGroup, 
     ['effort', profile.effortArgs ?? []],
     ['continue', profile.continueArgs ?? []],
     ['plan', profile.planArgs ?? []],
-    ['auto', profile.autoArgs ?? []]
+    ['auto', profile.autoArgs ?? []],
+    ['output', profile.outputArgs ?? []]
   ]
 }
 
@@ -1062,6 +1069,255 @@ export function extractActivity(
   return undefined
 }
 
+/* ----------------------------- tool events ------------------------------ */
+
+/**
+ * One tool call a CLI reported, already normalised.
+ *
+ * A CLI that prints structured events says what it is doing — a shell command,
+ * a file it reads or writes, a worker it delegated to. Turned into a row, that
+ * is the difference between "sta scrivendo" for two minutes and a transcript
+ * that shows the work as it happens.
+ */
+export interface CliToolEvent {
+  /** Stable id of the call inside the CLI's stream. */
+  id: string
+  /** Canonical name, so the row gets its icon (`shell` → `bash`). */
+  name: string
+  title: string
+  status: 'running' | 'ok' | 'error'
+  input?: Record<string, unknown>
+  output?: string
+  summary?: string
+  ms?: number
+  /** A delegated worker, when the tool is a subagent rather than a command. */
+  subagent?: { name: string; description: string }
+}
+
+/** The names different CLIs give the same tool. */
+const TOOL_ALIASES: Record<string, string> = {
+  shell: 'bash',
+  bash: 'bash',
+  exec: 'bash',
+  execute: 'bash',
+  terminal: 'bash',
+  command: 'bash',
+  read: 'read',
+  readfile: 'read',
+  read_file: 'read',
+  view: 'read',
+  write: 'write',
+  writefile: 'write',
+  write_file: 'write',
+  create: 'write',
+  edit: 'edit',
+  patch: 'edit',
+  multiedit: 'edit',
+  multi_edit: 'edit',
+  apply_patch: 'edit',
+  replace: 'edit',
+  grep: 'grep',
+  search: 'grep',
+  ripgrep: 'grep',
+  glob: 'glob',
+  find: 'glob',
+  list: 'ls',
+  ls: 'ls',
+  listdir: 'ls',
+  webfetch: 'webfetch',
+  fetch: 'webfetch',
+  task: 'task',
+  subagent: 'task',
+  agent: 'task',
+  delegate: 'task'
+}
+
+function canonicalTool(name: string): string {
+  const cleaned = name.trim().toLowerCase()
+  return TOOL_ALIASES[cleaned] ?? cleaned
+}
+
+function oneLine(value: string, max = 120): string {
+  const text = value.replace(/\s+/g, ' ').trim()
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text
+}
+
+/** The text of a tool result, whatever shape the CLI used for it. */
+function textOfOutput(value: unknown): string | undefined {
+  if (typeof value === 'string') return value || undefined
+  if (Array.isArray(value)) {
+    const pieces = value
+      .map((entry) => textOfOutput(entry))
+      .filter((entry): entry is string => Boolean(entry))
+    return pieces.length > 0 ? pieces.join('\n') : undefined
+  }
+  const record = asRecord(value)
+  if (!record) return undefined
+  for (const key of ['text', 'content', 'output', 'message', 'result']) {
+    const inner = record[key]
+    if (typeof inner === 'string' && inner) return inner
+    const nested = Array.isArray(inner) ? textOfOutput(inner) : undefined
+    if (nested) return nested
+  }
+  return undefined
+}
+
+/** Arguments a CLI printed as a JSON string instead of an object. */
+function parseArguments(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'string' ? parseJson(value) : undefined
+}
+
+function toolStatus(value: unknown): 'running' | 'ok' | 'error' {
+  const status = typeof value === 'string' ? value.toLowerCase() : ''
+  if (/^(completed|complete|ok|success|succeeded|done)$/.test(status)) return 'ok'
+  if (/^(error|failed|failure|denied|cancelled|canceled)$/.test(status)) return 'error'
+  return 'running'
+}
+
+/**
+ * The one line that says what a tool is doing: the command for a shell, the
+ * path for a read or a write, the pattern for a search. Anything else falls
+ * back to the CLI's own title instead of an empty row.
+ */
+function toolTitle(
+  name: string,
+  input: Record<string, unknown> | undefined,
+  fallback?: string
+): string {
+  const pick = (...keys: string[]): string | undefined => {
+    for (const key of keys) {
+      const value = input?.[key]
+      if (typeof value === 'string' && value.trim()) return value.trim()
+    }
+    return undefined
+  }
+
+  const command = pick('command', 'cmd', 'script')
+  if (command) return oneLine(command)
+  const path = pick('path', 'file_path', 'filePath', 'file', 'filename', 'notebook_path')
+  const pattern = pick('pattern', 'query', 'regex')
+  if (pattern) return oneLine(path ? `${pattern} in ${path}` : pattern)
+  if (path) return oneLine(path)
+  const description = pick('description', 'title', 'summary')
+  if (description) return oneLine(description)
+  const prompt = pick('prompt', 'instructions')
+  if (prompt) return oneLine(prompt)
+  const url = pick('url', 'uri')
+  if (url) return oneLine(url)
+  return fallback && fallback.trim() && fallback.trim() !== name ? oneLine(fallback) : name
+}
+
+/**
+ * A delegated worker, recognised by its shape: it carries what it must do.
+ * The name alone is not enough, because a CLI can call the tool `task`, `agent`
+ * or `subagent` — and a tool named `agent` could also be a plain command.
+ */
+function subagentOf(
+  name: string,
+  input: Record<string, unknown> | undefined
+): CliToolEvent['subagent'] {
+  if (!input) return undefined
+  const description = typeof input.description === 'string' ? input.description.trim() : ''
+  const prompt = typeof input.prompt === 'string' ? input.prompt.trim() : ''
+  const agent =
+    typeof input.agent === 'string'
+      ? input.agent
+      : typeof input.subagent_type === 'string'
+        ? input.subagent_type
+        : ''
+  if (!description && !prompt) return undefined
+  if (!agent && !/^(task|subagent|agent|delegate)$/i.test(name)) return undefined
+  return {
+    name: oneLine(description || agent || prompt, 80),
+    description: oneLine(prompt || description, 240)
+  }
+}
+
+function callEvent(record: Record<string, unknown>): CliToolEvent | undefined {
+  const fn = asRecord(record.function)
+  const raw = record.tool ?? record.name ?? fn?.name
+  if (typeof raw !== 'string' || !raw.trim()) return undefined
+
+  const state = asRecord(record.state)
+  const rawInput = record.input ?? record.arguments ?? record.args ?? fn?.arguments ?? state?.input
+  const input = asRecord(rawInput) ?? parseArguments(rawInput)
+  const output = textOfOutput(state?.output ?? record.output ?? record.result)
+  const time = asRecord(state?.time)
+  const start = typeof time?.start === 'number' ? time.start : undefined
+  const end = typeof time?.end === 'number' ? time.end : undefined
+  const subagent = subagentOf(raw, input)
+
+  return {
+    id:
+      typeof record.id === 'string' && record.id
+        ? record.id
+        : `${raw}-${start ?? '1'}`,
+    name: canonicalTool(raw),
+    title: toolTitle(raw, input, typeof state?.title === 'string' ? state.title : undefined),
+    status: toolStatus(record.status ?? state?.status),
+    ...(input ? { input } : {}),
+    ...(output ? { output } : {}),
+    ...(start !== undefined && end !== undefined ? { ms: Math.max(0, end - start) } : {}),
+    ...(subagent ? { subagent } : {})
+  }
+}
+
+/**
+ * A result on its own line, keyed by the id of the call it closes. The name is
+ * often missing here; the emitter already knows it from the call.
+ */
+function resultEvent(record: Record<string, unknown>): CliToolEvent | undefined {
+  const id = record.tool_use_id ?? record.toolUseId ?? record.id ?? record.call_id
+  if (typeof id !== 'string' || !id) return undefined
+
+  const output = textOfOutput(record.output ?? record.content ?? record.result)
+  const raw = record.name ?? record.tool
+  const failed =
+    record.is_error === true || record.ok === false || toolStatus(record.status) === 'error'
+
+  return {
+    id,
+    name: typeof raw === 'string' ? canonicalTool(raw) : '',
+    title: '',
+    status: failed ? 'error' : 'ok',
+    ...(output ? { output } : {})
+  }
+}
+
+/**
+ * Pulls a tool call out of one parsed line, across the shapes agent CLIs use:
+ * a `part` with a `tool` and its `state`, assistant messages with `tool_use`
+ * parts, and flat `tool_call`/`tool_result` events.
+ */
+export function extractToolEvent(
+  event: Record<string, unknown>
+): CliToolEvent | undefined {
+  const part = asRecord(event.part)
+  if (part && (typeof part.tool === 'string' || part.type === 'tool')) {
+    return callEvent(part)
+  }
+
+  const message = asRecord(event.message)
+  const content = message?.content
+  if (Array.isArray(content)) {
+    for (const entry of content) {
+      const record = asRecord(entry)
+      if (!record || typeof record.type !== 'string') continue
+      if (/^(tool_use|tool_call|function_call)$/i.test(record.type)) return callEvent(record)
+      if (/^(tool_result|function_result|tool_response)$/i.test(record.type)) {
+        return resultEvent(record)
+      }
+    }
+  }
+
+  const type = typeof event.type === 'string' ? event.type : ''
+  if (/^(tool_call|tool_use|function_call|tool_start|tool)$/i.test(type)) return callEvent(event)
+  if (/^(tool_result|function_result|tool_end|tool_response)$/i.test(type)) {
+    return resultEvent(event)
+  }
+  return undefined
+}
+
 /** One line of output, interpreted according to the profile. */
 function lineText(profile: CliProfile, line: string): string | undefined {
   const format = profile.output ?? 'auto'
@@ -1100,6 +1356,12 @@ function lineActivity(profile: CliProfile, line: string): string | undefined {
   if ((profile.output ?? 'auto') === 'text') return undefined
   const event = parseJson(line)
   return event ? extractActivity(event, profile.activityPath) : undefined
+}
+
+function lineTool(profile: CliProfile, line: string): CliToolEvent | undefined {
+  if ((profile.output ?? 'auto') === 'text') return undefined
+  const event = parseJson(line)
+  return event ? extractToolEvent(event) : undefined
 }
 
 /* ------------------------------- models --------------------------------- */
@@ -1241,6 +1503,8 @@ export interface RunHooks {
   /** Reasoning the CLI streamed, in order, before its answer. */
   onThinking?: (text: string) => void
   onActivity?: (activity: string) => void
+  /** A tool call the CLI reported, with its own status, input and output. */
+  onTool?: (tool: CliToolEvent) => void
   onStderr?: (line: string) => void
   signal?: AbortSignal
   timeoutMs?: number
@@ -1490,6 +1754,14 @@ function attempt(
         return
       }
 
+      // A tool call is a row of its own: read as an activity line it would
+      // lose the command, the path and the output the user came to see.
+      const tool = lineTool(profile, line)
+      if (tool) {
+        hooks.onTool?.(tool)
+        return
+      }
+
       const activity = lineActivity(profile, line)
       if (activity) hooks.onActivity?.(activity)
 
@@ -1538,6 +1810,21 @@ function attempt(
       clearTimeout(timer)
       hooks.signal?.removeEventListener('abort', stop)
       if (buffer.trim()) consume(buffer)
+
+      // A CLI may print one pretty-printed JSON document instead of one event
+      // per line: the whole stdout is then the event.
+      if (!text.trim() && (profile.output ?? 'auto') !== 'text' && raw.trim()) {
+        const whole = parseJson(raw)
+        if (whole) {
+          const tool = extractToolEvent(whole)
+          if (tool) hooks.onTool?.(tool)
+          const piece = extractText(whole, profile.textPath)
+          if (piece) {
+            text = piece
+            hooks.onText?.(piece)
+          }
+        }
+      }
 
       const exitCode = code ?? -1
       // The CLI's own words are the only useful diagnosis: without them the

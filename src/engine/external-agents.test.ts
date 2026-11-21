@@ -7,6 +7,7 @@ import {
   extractActivity,
   extractText,
   extractThinking,
+  extractToolEvent,
   findBinary,
   formatCommand,
   profileEfforts,
@@ -656,4 +657,100 @@ exit 1\n`
       }
     }
   )
+})
+
+describe('extractToolEvent', () => {
+  it('legge il tool di un evento a parti, con comando, stato e output', () => {
+    const event = {
+      type: 'tool_use',
+      part: {
+        id: 'prt_1',
+        type: 'tool',
+        tool: 'shell',
+        state: {
+          status: 'completed',
+          input: { command: 'ls -1 .' },
+          output: 'a.txt\nb.txt\n',
+          title: 'shell',
+          time: { start: 1000, end: 1042 }
+        }
+      }
+    }
+
+    expect(extractToolEvent(event)).toEqual({
+      id: 'prt_1',
+      name: 'bash',
+      title: 'ls -1 .',
+      status: 'ok',
+      input: { command: 'ls -1 .' },
+      output: 'a.txt\nb.txt\n',
+      ms: 42
+    })
+  })
+
+  it('usa il percorso come titolo per una lettura o una scrittura', () => {
+    expect(
+      extractToolEvent({
+        type: 'tool_use',
+        part: {
+          id: 'p2',
+          tool: 'read',
+          state: { status: 'running', input: { path: 'src/app.ts' } }
+        }
+      })
+    ).toMatchObject({ name: 'read', title: 'src/app.ts', status: 'running' })
+  })
+
+  it('riconosce un worker delegato dalla forma del suo input', () => {
+    const event = {
+      type: 'tool_use',
+      part: {
+        id: 'p3',
+        tool: 'subagent',
+        state: {
+          status: 'completed',
+          input: {
+            agent: 'general',
+            description: 'Crea nota.txt',
+            prompt: 'crea il file nota.txt'
+          },
+          output: 'working in the background'
+        }
+      }
+    }
+
+    expect(extractToolEvent(event)?.subagent).toEqual({
+      name: 'Crea nota.txt',
+      description: 'crea il file nota.txt'
+    })
+  })
+
+  it('legge i tool e i risultati dei messaggi in stile stream-json', () => {
+    expect(
+      extractToolEvent({
+        type: 'assistant',
+        message: {
+          content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'pwd' } }]
+        }
+      })
+    ).toMatchObject({ id: 't1', name: 'bash', title: 'pwd', status: 'running' })
+
+    expect(
+      extractToolEvent({
+        type: 'user',
+        message: {
+          content: [
+            { type: 'tool_result', tool_use_id: 't1', content: [{ type: 'text', text: '/tmp' }] }
+          ]
+        }
+      })
+    ).toEqual({ id: 't1', name: '', title: '', status: 'ok', output: '/tmp' })
+  })
+
+  it('non scambia il testo per un tool', () => {
+    expect(extractToolEvent({ type: 'text', part: { type: 'text', text: 'ciao' } })).toBeUndefined()
+    expect(
+      extractToolEvent({ type: 'step_start', part: { type: 'step-start' } })
+    ).toBeUndefined()
+  })
 })

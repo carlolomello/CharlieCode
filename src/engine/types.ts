@@ -150,6 +150,12 @@ export interface CliProfile {
   promptMode?: 'arg' | 'stdin'
   /** Output shape; defaults to `auto`. */
   output?: CliOutputFormat
+  /**
+   * Extra argv that asks the CLI for the `output` shape (`--format json`).
+   * Without it a CLI prints for humans and the transcript can only show prose:
+   * no tool rows, no commands, no files.
+   */
+  outputArgs?: string[]
   /** Extra argv when a model is selected. */
   modelArgs?: string[]
   /** Extra argv when an effort level is selected; `{effort}` is replaced. */

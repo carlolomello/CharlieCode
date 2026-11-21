@@ -65,12 +65,9 @@ describe('proposalFromHelp', () => {
     expect(proposal.planArgs).toEqual(['--read-only'])
     expect(proposal.autoArgs).toEqual(['--yes'])
     expect(proposal.output).toBe('stream-json')
-    expect(proposal.args).toEqual([
-      '--print',
-      '{prompt}',
-      '--output-format',
-      'stream-json'
-    ])
+    // The format is its own argv: `args` keeps only what makes the CLI answer.
+    expect(proposal.outputArgs).toEqual(['--output-format', 'stream-json'])
+    expect(proposal.args).toEqual(['--print', '{prompt}'])
     expect(proposal.modelsArgs).toEqual(['--list-models'])
 
     expect(findings.map((finding) => finding.field).sort()).toEqual([

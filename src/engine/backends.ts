@@ -317,6 +317,29 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
     turn.activity(activity, agent)
   }
 
+  /**
+   * Workers the CLI delegated to.
+   *
+   * The card opens at the first tool event and closes when the turn ends: a
+   * CLI like opencode answers the tool immediately ("working in the
+   * background") and resumes later, so the event itself never says when the
+   * worker is done. Keeping the card open is what shows the team at work.
+   */
+  const delegated = new Map<string, { name: string }>()
+
+  const closeDelegated = (): void => {
+    for (const [agentId, entry] of delegated) {
+      turn.subagentEnd({
+        agentId,
+        name: entry.name,
+        ok: true,
+        summary: 'lavoro delegato concluso con il turno',
+        ms: 0
+      })
+    }
+    delegated.clear()
+  }
+
   /** One CLI process. `quiet` keeps the output out of the transcript. */
   const runOnce = async (
     prompt: string,
@@ -359,7 +382,52 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
           if (options.quiet || options.agent) return
           turn.thinking(chunk)
         },
-        onActivity: (activity) => emitActivity(activity, options.agent)
+        onActivity: (activity) => emitActivity(activity, options.agent),
+        onTool: (tool) => {
+          // A planning call stays out of the transcript: its rows would land on
+          // the turn instead of on a card nobody asked to open.
+          if (options.quiet && !options.agent) return
+
+          if (tool.subagent) {
+            const agentId = `cli-agent-${tool.id}`
+            if (!delegated.has(agentId)) {
+              delegated.set(agentId, { name: tool.subagent.name })
+              turn.subagentStart({
+                agentId,
+                name: tool.subagent.name,
+                description: tool.subagent.description,
+                modelKey
+              })
+            }
+            // A worker that failed says so at once; the ones still running are
+            // closed with the turn, because the CLI reports no end for them.
+            if (tool.status === 'error') {
+              turn.subagentEnd({
+                agentId,
+                name: tool.subagent.name,
+                ok: false,
+                summary: tool.output?.slice(0, 200) || 'errore del subagente',
+                ms: tool.ms ?? 0
+              })
+              delegated.delete(agentId)
+            }
+            return
+          }
+
+          turn.tool(
+            {
+              id: `cli-tool-${tool.id}`,
+              name: tool.name,
+              title: tool.title,
+              status: tool.status,
+              ...(tool.input ? { input: tool.input } : {}),
+              ...(tool.output ? { output: tool.output } : {}),
+              ...(tool.summary ? { summary: tool.summary } : {}),
+              ...(tool.ms !== undefined ? { ms: tool.ms } : {})
+            },
+            options.agent
+          )
+        }
       }
     )
 
@@ -453,9 +521,10 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
       { mode: 'plan', quiet: true }
     )
 
-    // The plan is structured output: read the raw stdout, not the chat text a
-    // JSON output format may have emptied.
-    const plan = parseCliPlan(planCall.raw || planCall.text)
+    // The plan is structured output. With a JSON stream the answer lives in the
+    // extracted text and the raw stdout is the event list, so the text is read
+    // first and the raw output is the fallback for a CLI that printed prose.
+    const plan = parseCliPlan(planCall.text) ?? parseCliPlan(planCall.raw)
     if (!plan || plan.items.length < 2) {
       return runSingle(false)
     }
@@ -657,6 +726,10 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
       })
     }
   }
+
+  // The turn is over: every worker the CLI delegated to is done by now, and a
+  // card left open would keep the workshop on screen forever.
+  closeDelegated()
 
   const ms = Date.now() - started
   const aborted = outcome.aborted
