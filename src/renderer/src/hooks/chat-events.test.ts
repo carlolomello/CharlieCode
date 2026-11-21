@@ -26,6 +26,7 @@ describe('applyChatEvent', () => {
     const failed = applyChatEvent(first, {
       type: 'subagent-end',
       agentId: 'w1',
+      name: 'Worker',
       ok: false,
       summary: 'rate limit',
       ms: 1200
@@ -73,6 +74,7 @@ describe('applyChatEvent', () => {
     const ended = applyChatEvent(started, {
       type: 'subagent-end',
       agentId: 'w1',
+      name: 'A',
       ok: true,
       summary: 'fatto',
       ms: 900,
