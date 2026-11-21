@@ -5,6 +5,8 @@ import { buildTools, toolTitle, type ToolRuntime } from './tools'
 import { sanitizeMessages } from './context-store'
 import { runExternalAgent } from './external-agents'
 import { SubagentPool } from './subagent-pool'
+import { TurnCancellation } from './turn-cancellation'
+import { TurnEmitter } from './turn-emitter'
 import { parseCliModelKey } from '../shared/cli-key'
 import { selfKnowledgePrompt } from './self-knowledge'
 import type { AppConfigPatch } from './app-config'
@@ -44,6 +46,11 @@ export interface AgentDeps {
    * and keeps two of them off the same file. Created once per turn when absent.
    */
   pool?: SubagentPool
+  /**
+   * Per-turn worker controllers: the UI can stop one subagent while the others
+   * keep working. Created once per turn when absent.
+   */
+  cancellation?: TurnCancellation
   /** Optional per-role routing read from `.charliecode/routing.yaml`. */
   routing?: RoutingConfig
   /** Version shown by the self-knowledge tool. */
@@ -276,6 +283,10 @@ export async function runAgent(
    * never write the same file at the same time.
    */
   const pool = deps.pool ?? new SubagentPool(deps.config.agents.maxParallelSubagents)
+  const cancellation = deps.cancellation ?? new TurnCancellation()
+  // Worker events go straight to the session: they stay visible even when this
+  // candidate fails and the next one takes over.
+  const workers = new TurnEmitter({ emit: deps.emit, idPrefix: 'agent' })
 
   for (const candidate of candidates) {
     const { provider, model } = candidate
@@ -381,8 +392,7 @@ export async function runAgent(
           // A route can pin the effort; otherwise the turn's effort carries.
           const subEffort = route?.effort ?? request.effort
 
-          deps.emit({
-            type: 'subagent-start',
+          workers.subagentStart({
             agentId,
             name,
             description: sub.prompt.slice(0, 200),
@@ -403,39 +413,40 @@ export async function runAgent(
             // The model calls happen inside the CLI, with its auth, quota and
             // logs. We only orchestrate.
             try {
-              const result = await runExternalAgent(
-                target.profile,
-                {
-                  prompt: sub.prompt,
-                  ...(target.model ? { model: target.model } : {}),
-                  ...(subEffort ? { effort: subEffort } : {}),
-                  // Reading is always allowed; writing only for an implementer.
-                  ...(planMode || role !== 'implementer' ? { plan: true } : {}),
-                  auto: target.auto && !planMode && role === 'implementer',
-                  workspace
-                },
-                {
-                  home: deps.platform.homeDir,
-                  stateDir: deps.platform.configDir,
-                  ...(request.signal ? { signal: request.signal } : {}),
-                  onText: (chunk) => deps.emit({ type: 'delta', text: chunk, agentId })
-                }
+              // Its own signal: the card's stop button kills this worker only.
+              const result = await cancellation.run(agentId, request.signal, (signal) =>
+                runExternalAgent(
+                  target.profile,
+                  {
+                    prompt: sub.prompt,
+                    ...(target.model ? { model: target.model } : {}),
+                    ...(subEffort ? { effort: subEffort } : {}),
+                    // Reading is always allowed; writing only for an implementer.
+                    ...(planMode || role !== 'implementer' ? { plan: true } : {}),
+                    auto: target.auto && !planMode && role === 'implementer',
+                    workspace
+                  },
+                  {
+                    home: deps.platform.homeDir,
+                    stateDir: deps.platform.configDir,
+                    signal,
+                    onText: (chunk) => deps.emit({ type: 'delta', text: chunk, agentId })
+                  }
+                )
               )
               const text = result.text || result.error || 'La CLI non ha prodotto output.'
               const ok = result.code === 0 && !result.aborted && !result.timedOut
-              deps.emit({
-                type: 'subagent-end',
+              workers.subagentEnd({
                 agentId,
                 name,
                 ok,
-                summary: text.slice(0, 200),
+                summary: result.aborted ? 'fermato dall’utente' : text.slice(0, 200),
                 ms: Date.now() - started
               })
               return { ok, text, summary: text.slice(0, 200) }
             } catch (caught) {
               const message = caught instanceof Error ? caught.message : String(caught)
-              deps.emit({
-                type: 'subagent-end',
+              workers.subagentEnd({
                 agentId,
                 name,
                 ok: false,
@@ -450,13 +461,13 @@ export async function runAgent(
             workspace
           }${deps.projectContext ? `\n\n${deps.projectContext}` : ''}`
 
-          const runNested = (prompt: string): Promise<AgentResult> =>
+          const runNested = (prompt: string, signal: AbortSignal): Promise<AgentResult> =>
             runAgent(
               {
                 modelKey: target.modelKey,
                 messages: [{ role: 'user', content: prompt }],
                 ...(subEffort ? { effort: subEffort } : {}),
-                signal: request.signal,
+                signal,
                 // Plan mode propagates: a subagent can never write either.
                 ...(planMode ? { mode: 'plan' as const } : {})
               },
@@ -477,7 +488,9 @@ export async function runAgent(
             )
 
           try {
-            let result = await runNested(sub.prompt)
+            let result = await cancellation.run(agentId, request.signal, (signal) =>
+              runNested(sub.prompt, signal)
+            )
             // A subagent that died before doing anything (rate limit, a 5xx,
             // a timeout on the first call) is worth one retry: otherwise the
             // delegated work is simply lost. One that already wrote files is
@@ -488,29 +501,35 @@ export async function runAgent(
               result.toolCalls === 0 &&
               !result.text.trim()
             ) {
-              result = await runNested(
-                `${sub.prompt}\n\nIl tentativo precedente è fallito prima di fare qualsiasi cosa: ${result.error}\nRiprova, evitando l'errore.`
+              result = await cancellation.run(agentId, request.signal, (signal) =>
+                runNested(
+                  `${sub.prompt}\n\nIl tentativo precedente è fallito prima di fare qualsiasi cosa: ${result.error}\nRiprova, evitando l'errore.`,
+                  signal
+                )
               )
             }
 
-            deps.emit({
-              type: 'subagent-end',
+            const stopped = result.aborted
+            workers.subagentEnd({
               agentId,
               name,
-              ok: !result.error,
-              summary: result.text.slice(0, 400) || result.error || 'nessun output',
-              ms: Date.now() - started
+              ok: !result.error && !stopped,
+              summary: stopped
+                ? 'fermato dall’utente'
+                : result.text.slice(0, 400) || result.error || 'nessun output',
+              ms: Date.now() - started,
+              ...(result.usage ? { usage: result.usage } : {}),
+              ...(result.steps !== undefined ? { steps: result.steps } : {})
             })
 
             return {
-              ok: !result.error,
+              ok: !result.error && !stopped,
               text: result.text || result.error || 'Il subagente non ha prodotto output.',
               summary: result.text.slice(0, 200)
             }
           } catch (caught) {
             const message = caught instanceof Error ? caught.message : String(caught)
-            deps.emit({
-              type: 'subagent-end',
+            workers.subagentEnd({
               agentId,
               name,
               ok: false,

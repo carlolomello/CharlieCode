@@ -43,7 +43,7 @@ pnpm dev           # app with HMR
 
 - **Plans before it writes.** Flip the topbar switch to **Piano**: the agent explores the project read-only and comes back with a concrete plan (files, steps, risks). One click on **▶ Esegui il piano** switches to **Build** and implements it.
 - **Shows the code it changes.** Every `write`/`edit` produces a unified diff in the chat — you see the change *before* it lands on disk.
-- **Multi-agent by design.** The `task` tool spawns isolated subagents with their own context (`explorer` read-only, `reviewer`, `implementer`), several in parallel, each with its own live activity card. The main agent gets a compact report back.
+- **Multi-agent by design.** The `task` tool spawns isolated subagents with their own context (`explorer` read-only, `reviewer`, `implementer`), several in parallel, each with its own live activity card. The main agent gets a compact report back. Each card reports the worker's time and tokens, and a worker that is stuck can be stopped on its own without killing the others.
 - **Ask before it acts.** Destructive tools hit a permission gate: *allow once*, *allow always* (per tool, or per command prefix for `bash`), *deny*. Revocable from the settings drawer.
 - **Remembers the project.** Every chat is a saved session tied to a folder; the full model context (tool calls included) is persisted, so resuming actually continues instead of replaying a transcript.
 - **Knows your rules.** `AGENTS.md` — plus `CHARLIECODE.md` and `CLAUDE.md` — in the project root and globally in `~/.charliecode/` are injected into the system prompt.
@@ -176,7 +176,7 @@ What that means in practice:
 - a save never fails because Windows holds the file: the temporary file is renamed with retries and, if a virus scanner or the search indexer keeps the destination locked, written in place — a locked session file used to abort the whole turn with `EPERM: operation not permitted, rename`;
 - a CLI that fails the test is reported as failed, not retried silently.
 
-**Squadra CLI.** A CLI normally works one item at a time, which is slow when the items are independent (ten Salesforce fields, ten metadata files). With **Squadra auto** — on by default for a CLI backend — the split happens outside the CLI: the turn starts with a read-only call that must answer with a JSON plan of independent items, the app shows that plan and waits for your ok (denying it runs the turn as a single process), then runs the items as parallel processes of the same CLI (never two on the same file, at most `maxWorkers`, default 3, 2–6 in the profile), and finally the CLI integrates and verifies once and its answer is the turn's answer. A plan with a single item, or no parsable plan, falls back to a normal turn, so unsplittable work only pays the planning call. Deploy, validate, publish and push stay in the final turn, never in a worker; the workshop shows each worker, its file scope and its result, and stopping the turn stops them all.
+**Squadra CLI.** A CLI normally works one item at a time, which is slow when the items are independent (ten Salesforce fields, ten metadata files). With **Squadra auto** — on by default for a CLI backend — the split happens outside the CLI: the turn starts with a read-only call that must answer with a JSON plan of independent items, the app shows that plan and waits for your ok (denying it runs the turn as a single process), then runs the items as parallel processes of the same CLI (never two on the same file, at most `maxWorkers`, default 3, 2–6 in the profile), and finally the CLI integrates and verifies once and its answer is the turn's answer. A plan with a single item, or no parsable plan, falls back to a normal turn, so unsplittable work only pays the planning call. Deploy, validate, publish and push stay in the final turn, never in a worker; the workshop shows each worker, its file scope and its result; a worker that is stuck can be stopped from its own card while the rest of the wave keeps working, and stopping the turn stops them all.
 
 ### Routing per ruolo (opzionale)
 
@@ -351,6 +351,8 @@ src/
     local      Ollama / LM Studio / vLLM presets and probing
     agent      agent loop, plan/build modes, system prompt, subagents
     subagent-pool  concurrency limit and file leases for parallel subagents
+    turn-cancellation  one stop signal per worker, combined with the turn's
+    turn-emitter   the events of a turn (attribution, activity cap, worker cards)
     app-config validated patches to the app's own configuration
     self-knowledge architecture map + exact state for the agent
     backends   CLI as a conversation backend: briefing out, text/tools/diff back in

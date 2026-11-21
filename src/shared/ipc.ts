@@ -165,6 +165,11 @@ export interface CharlieCodeApi {
 
   startChat(payload: ChatStartPayload): Promise<ChatStartResult>
   stopChat(requestId: string): Promise<void>
+  /**
+   * Stops one running subagent, leaving the rest of the turn alive. False when
+   * the worker already ended, which is a late click, not an error.
+   */
+  cancelSubagent(requestId: string, agentId: string): Promise<boolean>
   onChatEvent(callback: (envelope: ChatEventEnvelope) => void): () => void
   onChatSession(callback: (envelope: ChatSessionEnvelope) => void): () => void
   onPermission(callback: (envelope: PermissionEnvelope) => void): () => void

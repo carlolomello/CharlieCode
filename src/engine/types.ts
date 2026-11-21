@@ -392,6 +392,10 @@ export type EngineEvent =
       ok: boolean
       summary: string
       ms: number
+      /** Tokens the worker spent, when its backend reports them. */
+      usage?: TokenUsage
+      /** Steps of its own loop, when its backend reports them. */
+      steps?: number
     }
   | {
       type: 'done'

@@ -91,6 +91,7 @@ import {
 } from '../engine/sessions'
 import { toolLogFromEvent } from '../engine/tools'
 import { cliModelEntries, runCliTurn } from '../engine/backends'
+import { TurnCancellation } from '../engine/turn-cancellation'
 import { readRouting, ensureRoutingFile } from '../engine/routing'
 import { parseCliModelKey } from '../shared/cli-key'
 import type {
@@ -127,6 +128,8 @@ import type {
 
 const platform = createPlatform()
 const inFlight = new Map<string, AbortController>()
+/** One registry per running turn, so a card can stop a single worker. */
+const cancellations = new Map<string, TurnCancellation>()
 
 /** Permission prompts waiting for the renderer: permissionId → resolver. */
 const permissionResolvers = new Map<string, (decision: PermissionDecision) => void>()
@@ -1110,6 +1113,8 @@ hanno priorità su queste.
 
       const controller = new AbortController()
       inFlight.set(payload.requestId, controller)
+      const cancellation = new TurnCancellation()
+      cancellations.set(payload.requestId, cancellation)
       const sender = event.sender
 
       const { config } = await loadConfig(platform)
@@ -1337,6 +1342,7 @@ hanno priorità su queste.
                 // A team turn spawns several CLI processes: the user sees the
                 // plan and can stop it before any of them starts.
                 askPermission: (request) => askUser(sender, payload.requestId, request),
+                cancellation,
                 emit
               })
 
@@ -1403,6 +1409,7 @@ hanno priorità su queste.
                 appVersion: app.getVersion(),
                 applyConfig: applyAgentConfig,
                 askPermission: (request) => askUser(sender, payload.requestId, request),
+                cancellation,
                 emit
               }
             )
@@ -1423,6 +1430,7 @@ hanno priorità su queste.
           }
         } finally {
           inFlight.delete(payload.requestId)
+          cancellations.delete(payload.requestId)
 
           // A stopped request must not leave the UI waiting for a permission.
           for (const [permissionId, requestId] of permissionRequests) {
@@ -1480,6 +1488,21 @@ hanno priorità su queste.
       permissionResolvers.get(permissionId)?.('deny')
     }
   })
+
+  /**
+   * Stops one subagent of a running turn. The renderer is untrusted: the ids
+   * only address a registry this process created, so an unknown or stale id is
+   * simply a late click and answers false.
+   */
+  ipcMain.handle(
+    'charliecode:chat:cancel-subagent',
+    (_event, payload: { requestId?: unknown; agentId?: unknown }): boolean => {
+      if (typeof payload?.requestId !== 'string' || typeof payload?.agentId !== 'string') {
+        return false
+      }
+      return cancellations.get(payload.requestId)?.cancel(payload.agentId) ?? false
+    }
+  )
 
   ipcMain.handle('charliecode:open-config', async (): Promise<void> => {
     await shell.openPath(platform.configDir)

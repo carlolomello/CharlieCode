@@ -13,6 +13,9 @@ export interface SubagentRun {
   /** Text streamed by the worker while it runs. */
   text?: string
   ms?: number
+  /** Tokens the worker spent, when its backend reports them. */
+  usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number }
+  steps?: number
 }
 
 interface ToolActivityProps {
@@ -20,6 +23,12 @@ interface ToolActivityProps {
   subagents: SubagentRun[]
   /** A permission is pending: keep the activity visible even if empty. */
   busy?: boolean
+  /** Stops one worker without stopping the turn. */
+  onCancel?: (agentId: string) => void
+}
+
+function formatTokens(tokens: number): string {
+  return tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens)
 }
 
 const TOOL_ICONS: Record<string, string> = {
@@ -82,26 +91,46 @@ function ToolRow({ log }: { log: ToolLog }): React.JSX.Element {
 
 function SubagentCard({
   run,
-  logs
+  logs,
+  onCancel
 }: {
   run: SubagentRun
   logs: ToolLog[]
+  onCancel?: (agentId: string) => void
 }): React.JSX.Element {
   const [open, setOpen] = useState(true)
+  const outputTokens = run.usage?.outputTokens
   return (
     <div className={`subagent ${run.status}`}>
-      <button className="subagent-head" onClick={() => setOpen((value) => !value)}>
-        <span className="subagent-caret">{open ? '▾' : '▸'}</span>
-        <span className="subagent-glyph">❖</span>
-        <span className="subagent-body">
-          <span className="subagent-name">{run.name}</span>
-          <span className="subagent-model">{run.modelKey.split('::').pop()}</span>
-        </span>
-        <span className={`tool-dot ${run.status}`} />
-        {typeof run.ms === 'number' && (
-          <span className="tool-ms">{run.ms < 1000 ? `${run.ms}ms` : `${(run.ms / 1000).toFixed(1)}s`}</span>
+      <div className="subagent-head">
+        <button className="subagent-toggle" onClick={() => setOpen((value) => !value)}>
+          <span className="subagent-caret">{open ? '▾' : '▸'}</span>
+          <span className="subagent-glyph">❖</span>
+          <span className="subagent-body">
+            <span className="subagent-name">{run.name}</span>
+            <span className="subagent-model">{run.modelKey.split('::').pop()}</span>
+          </span>
+          <span className={`tool-dot ${run.status}`} />
+          {typeof run.ms === 'number' && (
+            <span className="tool-ms">
+              {run.ms < 1000 ? `${run.ms}ms` : `${(run.ms / 1000).toFixed(1)}s`}
+            </span>
+          )}
+          {typeof outputTokens === 'number' && (
+            <span className="tool-ms">{formatTokens(outputTokens)} tok</span>
+          )}
+        </button>
+        {run.status === 'running' && onCancel && (
+          <button
+            className="subagent-stop"
+            title="Ferma questo subagente"
+            aria-label={`Ferma ${run.name}`}
+            onClick={() => onCancel(run.agentId)}
+          >
+            ■
+          </button>
         )}
-      </button>
+      </div>
       {open && (
         <div className="subagent-content">
           <p className="subagent-task">{run.description}</p>
@@ -124,7 +153,12 @@ function SubagentCard({
   )
 }
 
-export function ToolActivity({ logs, subagents, busy }: ToolActivityProps): React.JSX.Element | null {
+export function ToolActivity({
+  logs,
+  subagents,
+  busy,
+  onCancel
+}: ToolActivityProps): React.JSX.Element | null {
   const mainLogs = useMemo(() => logs.filter((log) => !log.agentId), [logs])
   const byAgent = useMemo(() => {
     const map = new Map<string, ToolLog[]>()
@@ -142,7 +176,12 @@ export function ToolActivity({ logs, subagents, busy }: ToolActivityProps): Reac
   return (
     <div className="activity">
       {subagents.map((run) => (
-        <SubagentCard key={run.agentId} run={run} logs={byAgent.get(run.agentId) ?? []} />
+        <SubagentCard
+          key={run.agentId}
+          run={run}
+          logs={byAgent.get(run.agentId) ?? []}
+          {...(onCancel ? { onCancel } : {})}
+        />
       ))}
       {mainLogs.length > 0 && (
         <div className="tool-list">

@@ -21,6 +21,8 @@ import {
   type ExternalRunResult
 } from './external-agents'
 import { clearCliSession, hasCliSession, markCliSession } from './cli-sessions'
+import { TurnCancellation } from './turn-cancellation'
+import { TurnEmitter, type AgentRef } from './turn-emitter'
 import { cliModelKey } from '../shared/cli-key'
 import {
   integrationPrompt,
@@ -187,6 +189,11 @@ export interface CliTurnInput {
    * user's behalf without showing what they are.
    */
   askPermission?: (request: PermissionRequest) => Promise<PermissionDecision>
+  /**
+   * Lets the UI stop one team worker while the others keep working. Created
+   * here when absent, so a CLI turn stays usable on its own (CLI, tests).
+   */
+  cancellation?: TurnCancellation
   emit: (event: EngineEvent) => void
 }
 
@@ -292,8 +299,8 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
 
   const started = Date.now()
   let firstTextAt: number | undefined
-  let toolCalls = 0
-  let activityId = 0
+  const turn = new TurnEmitter({ emit: input.emit, idPrefix: 'cli' })
+  const cancellation = input.cancellation ?? new TurnCancellation()
 
   const before: WorkspaceChanges | undefined =
     input.mode === 'build' ? await listChanges(input.workspace).catch(() => undefined) : undefined
@@ -310,23 +317,10 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
 
   const projectContext = (input.system ?? '').slice(0, 4_000)
 
-  const emitActivity = (activity: string, agent?: { id: string; name: string }): void => {
-    // A CLI can print hundreds of progress lines. The transcript is not a log
-    // viewer: the first fifty are enough to show that work happened.
-    if (toolCalls >= 50) return
-    const id = `cli-activity-${++activityId}`
-    toolCalls++
-    const attribution = agent ? { agentId: agent.id, agentName: agent.name } : {}
-    input.emit({ type: 'tool-call', id, name: 'cli', title: activity, ...attribution })
-    input.emit({
-      type: 'tool-result',
-      id,
-      name: 'cli',
-      ok: true,
-      summary: 'attività riportata dalla CLI',
-      ms: 0,
-      ...attribution
-    })
+  const emitActivity = (activity: string, agent?: AgentRef): void => {
+    // The cap and the shape live in the emitter: a CLI can print hundreds of
+    // progress lines and the transcript is not a log viewer.
+    turn.activity(activity, agent)
   }
 
   /** One CLI process. `quiet` keeps the output out of the transcript. */
@@ -335,10 +329,13 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
     options: {
       mode: AgentMode
       quiet?: boolean
-      agent?: { id: string; name: string }
+      agent?: AgentRef
       continueSession?: boolean
+      /** A worker's own signal, so stopping it does not stop the wave. */
+      signal?: AbortSignal
     }
   ): Promise<ExternalRunResult> => {
+    const signal = options.signal ?? input.signal
     const result = await runExternalAgent(
       input.profile,
       {
@@ -353,24 +350,20 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
       {
         home: input.home,
         ...(input.stateDir ? { stateDir: input.stateDir } : {}),
-        ...(input.signal ? { signal: input.signal } : {}),
+        ...(signal ? { signal } : {}),
         onText: (chunk) => {
           // A worker's text belongs to its own card: a quiet turn used to drop
           // it entirely, so the card sat on "in corso" until the worker ended.
           if (options.quiet && !options.agent) return
           if (!options.agent && firstTextAt === undefined) firstTextAt = Date.now()
-          input.emit({
-            type: 'delta',
-            text: chunk,
-            ...(options.agent ? { agentId: options.agent.id } : {})
-          })
+          turn.delta(chunk, options.agent)
         },
         // Reasoning is shown while the turn runs, like every agent CLI does.
         // A planning call and a subagent stay quiet: their reasoning belongs to
         // a card the user did not open.
         onThinking: (chunk) => {
           if (options.quiet || options.agent) return
-          input.emit({ type: 'thinking', text: chunk })
+          turn.thinking(chunk)
         },
         onActivity: (activity) => emitActivity(activity, options.agent)
       }
@@ -379,28 +372,7 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
     // The turn ran without the model, or without a flag the CLI refused: saying
     // it in the transcript is the difference between a silent downgrade and a
     // visible one.
-    if (result.warning) {
-      const id = `cli-warning-${++activityId}`
-      const attribution = options.agent
-        ? { agentId: options.agent.id, agentName: options.agent.name }
-        : {}
-      input.emit({
-        type: 'tool-call',
-        id,
-        name: 'cli-warning',
-        title: 'Nota della CLI',
-        ...attribution
-      })
-      input.emit({
-        type: 'tool-result',
-        id,
-        name: 'cli-warning',
-        ok: true,
-        summary: result.warning,
-        ms: 0,
-        ...attribution
-      })
-    }
+    if (result.warning) turn.warning(result.warning, options.agent)
 
     return result
   }
@@ -532,37 +504,48 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
         wave.map(async (item) => {
           const agentId = `cli-worker-${++workerIndex}`
           const startedAt = Date.now()
-          input.emit({
-            type: 'subagent-start',
+          turn.subagentStart({
             agentId,
             name: item.title,
             description: item.instructions.slice(0, 200),
             modelKey: `${input.profile.label}${input.model ? ` · ${input.model}` : ''}`
           })
-          const result = await runOnce(
-            workerPrompt({
+          // Each worker has its own signal: stopping one leaves the wave alive.
+          const lease = cancellation.register(agentId, input.signal)
+          try {
+            const result = await runOnce(
+              workerPrompt({
+                item,
+                index: workerIndex,
+                total: plan.items.length,
+                workspace: input.workspace,
+                ...(projectContext ? { context: projectContext } : {})
+              }),
+              {
+                mode: 'build',
+                quiet: true,
+                agent: { id: agentId, name: item.title },
+                signal: lease.signal
+              }
+            )
+            const failed =
+              result.error ??
+              (result.aborted ? 'fermato dall’utente' : result.timedOut ? 'timeout' : undefined)
+            turn.subagentEnd({
+              agentId,
+              name: item.title,
+              ok: !failed,
+              summary:
+                failed ?? ((result.text.trim().split('\n')[0] ?? '').slice(0, 200) || 'fatto'),
+              ms: Date.now() - startedAt
+            })
+            return {
               item,
-              index: workerIndex,
-              total: plan.items.length,
-              workspace: input.workspace,
-              ...(projectContext ? { context: projectContext } : {})
-            }),
-            { mode: 'build', quiet: true, agent: { id: agentId, name: item.title } }
-          )
-          const failed = result.error ?? (result.timedOut ? 'timeout' : undefined)
-          input.emit({
-            type: 'subagent-end',
-            agentId,
-            name: item.title,
-            ok: !failed,
-            summary:
-              failed ?? ((result.text.trim().split('\n')[0] ?? '').slice(0, 200) || 'fatto'),
-            ms: Date.now() - startedAt
-          })
-          return {
-            item,
-            text: result.text,
-            ...(failed ? { error: failed } : {})
+              text: result.text,
+              ...(failed ? { error: failed } : {})
+            }
+          } finally {
+            lease.release()
           }
         })
       )
@@ -631,25 +614,13 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
         } catch {
           diff = undefined
         }
-        const id = `cli-write-${change.path}`
-        toolCalls++
-        input.emit({
-          type: 'tool-call',
-          id,
-          name: 'cli-write',
+        turn.fileWrite({
+          path: change.path,
           title: `Scrittura tramite CLI: ${change.displayPath}`,
-          input: { path: change.path }
-        })
-        input.emit({
-          type: 'tool-result',
-          id,
-          name: 'cli-write',
-          ok: true,
           summary: diff
             ? `${diff.added} aggiunte, ${diff.removed} rimosse`
             : 'file modificato',
-          ...(diff ? { diff } : {}),
-          ms: 0
+          ...(diff ? { diff } : {})
         })
       }
     }
@@ -666,37 +637,24 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
     const removed = [...beforeSnapshot.keys()].filter((path) => !afterSnapshot.has(path))
 
     for (const path of [...changed, ...removed].slice(0, 20)) {
-      const id = `cli-write-${path}`
-      toolCalls++
-      input.emit({
-        type: 'tool-call',
-        id,
-        name: 'cli-write',
+      turn.fileWrite({
+        path,
         title: `Scrittura tramite CLI: ${path}`,
-        input: { path }
-      })
-      input.emit({
-        type: 'tool-result',
-        id,
-        name: 'cli-write',
-        ok: true,
         summary: removed.includes(path)
           ? 'file rimosso (progetto senza git)'
-          : 'file modificato (progetto senza git)',
-        ms: 0
+          : 'file modificato (progetto senza git)'
       })
     }
   }
 
   const ms = Date.now() - started
   const aborted = outcome.aborted
-  input.emit({
-    type: 'done',
+  turn.done({
     modelKey: cliModelKey(input.profile.id, input.model),
     ms,
     ttftMs: Math.max(0, (firstTextAt ?? started) - started),
     steps: 1,
-    toolCalls,
+    toolCalls: turn.toolCalls,
     ...(aborted ? { aborted: true } : {})
   })
 
@@ -704,6 +662,6 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
     text: outcome.text,
     ...(outcome.error ? { error: outcome.error } : {}),
     aborted,
-    toolCalls
+    toolCalls: turn.toolCalls
   }
 }

@@ -456,7 +456,9 @@ export default function App() {
                         ...run,
                         status: event.ok ? 'ok' : 'error',
                         summary: event.summary,
-                        ms: event.ms
+                        ms: event.ms,
+                        ...(event.usage ? { usage: event.usage } : {}),
+                        ...(event.steps !== undefined ? { steps: event.steps } : {})
                       }
                     : run
                 )
@@ -1691,6 +1693,10 @@ export default function App() {
                       logs={item.tools ?? []}
                       subagents={item.subagents ?? []}
                       busy={Boolean(item.pending)}
+                      onCancel={(agentId) => {
+                        if (!item.requestId) return
+                        void window.charliecode.cancelSubagent(item.requestId, agentId)
+                      }}
                     />
                   )}
                   {item.role === 'assistant' &&

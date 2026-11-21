@@ -1965,13 +1965,44 @@ button.ghost:hover,
   width: 100%;
   padding: 8px 10px;
   background: #14202f;
-  border: none;
   color: var(--text);
-  text-align: left;
 }
 
 .subagent-head:hover {
   background: #172535;
+}
+
+.subagent-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  text-align: left;
+}
+
+.subagent-stop {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #3a4d6b;
+  border-radius: 5px;
+  background: #0e1722;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1;
+}
+
+.subagent-stop:hover {
+  border-color: #a24b52;
+  color: #ff9a9a;
 }
 
 .subagent-caret {
