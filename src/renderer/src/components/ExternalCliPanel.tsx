@@ -994,7 +994,8 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
           <p className="muted small">
             Segnaposto: <code>{'{prompt}'}</code>, <code>{'{workspace}'}</code>,{' '}
             <code>{'{model}'}</code>, <code>{'{effort}'}</code>. Senza <code>{'{prompt}'}</code> il
-            prompt viene aggiunto come ultimo argomento.
+            prompt viene aggiunto come ultimo argomento. L’effort può stare anche nel modello, come{' '}
+            <code>{'--model {model}#{effort}'}</code>: con «nessuno» resta solo il modello.
           </p>
 
           <div className="cli-grid">

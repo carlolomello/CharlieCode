@@ -61,6 +61,21 @@ describe('cliModelEntries', () => {
     ])
     expect(entries[0]?.providerLabel).toBe('CLI esterne')
   })
+
+  it('offre i livelli di effort quando la CLI li porta nel modello', () => {
+    const entries = cliModelEntries([
+      info({
+        profile: {
+          ...profile,
+          id: 'variant',
+          label: 'Variant',
+          modelArgs: ['--model', '{model}#{effort}']
+        }
+      })
+    ])
+
+    expect(entries[0]?.efforts).toEqual(['none', 'low', 'high', 'max'])
+  })
 })
 
 describe('buildCliBriefing', () => {

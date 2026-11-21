@@ -93,8 +93,17 @@ interface ExpandOptions extends AgentRunOptions {
   effortValue?: string
 }
 
+/** Separators a variant is joined with: `provider/model#high`, `model:high`. */
+const EFFORT_JOINERS = /[#:@/,]+$/
+
 function expand(value: string, options: ExpandOptions): string | undefined {
   let missing = false
+  let emptiedEffort = false
+  // `{effort}` alone is the value of the effort flag: with no effort the flag
+  // goes away with it. Inside a larger argument it is a suffix on something
+  // else (`{model}#{effort}`), so it disappears on its own and the model the
+  // user picked still reaches the CLI.
+  const wholeArgument = value.trim() === '{effort}'
   const expanded = value.replace(PLACEHOLDER, (_match, name: string) => {
     if (name === 'prompt') return options.prompt
     if (name === 'workspace') return options.workspace
@@ -104,12 +113,19 @@ function expand(value: string, options: ExpandOptions): string | undefined {
       return ''
     }
     if (options.effortValue) return options.effortValue
-    missing = true
+    if (wholeArgument) {
+      missing = true
+      return ''
+    }
+    emptiedEffort = true
     return ''
   })
   // An argument that only makes sense with a model or an effort disappears
   // instead of being sent as an empty string the CLI would reject.
-  return missing ? undefined : expanded
+  if (missing) return undefined
+  // A joiner left behind by the absent variant (`acme/uno#`) would be a broken
+  // model name, not an empty suffix.
+  return emptiedEffort ? expanded.replace(EFFORT_JOINERS, '') : expanded
 }
 
 function expandAll(values: string[], options: ExpandOptions): string[] {
@@ -141,6 +157,21 @@ export function effortValue(profile: CliProfile, effort: EffortLevel): string {
   if (effort === 'max') return values[values.length - 1] ?? effort
   const high = values.find((value) => /high|strong|deep/i.test(value))
   return high ?? values[Math.max(0, values.length - 2)] ?? effort
+}
+
+/** True when `{effort}` is part of the model string (`provider/model#variant`). */
+export function effortInModel(profile: CliProfile): boolean {
+  return [...(profile.modelArgs ?? []), ...profile.args].some((arg) => arg.includes('{effort}'))
+}
+
+/** True when the profile can carry an effort at all: a flag or a variant. */
+export function usesEffort(profile: CliProfile): boolean {
+  return Boolean(profile.effortArgs?.length) || effortInModel(profile)
+}
+
+/** The effort levels the picker offers for this profile. */
+export function profileEfforts(profile: CliProfile): EffortLevel[] {
+  return usesEffort(profile) ? ['none', 'low', 'high', 'max'] : ['none']
 }
 
 /** The optional argv groups a profile adds to a turn. */
@@ -177,7 +208,12 @@ export function buildCliArgs(
   adjustments: ArgvAdjustments = {}
 ): string[] {
   const placements = adjustments.placements ?? {}
-  const base = withoutRefusedArgs(expandAll(profile.args, options), adjustments.refusedArgs ?? [])
+  // `{effort}` can sit here too, next to the model or in the model name.
+  const effort = options.effort ? effortValue(profile, options.effort) : ''
+  const base = withoutRefusedArgs(
+    expandAll(profile.args, { ...options, effortValue: effort }),
+    adjustments.refusedArgs ?? []
+  )
   const hasPrompt = profile.args.some((arg) => arg.includes('{prompt}'))
   const before: string[] = []
   const after: string[] = []
@@ -192,7 +228,9 @@ export function buildCliArgs(
   if (options.model) {
     const alreadyPlaced = profile.args.some((arg) => arg.includes('{model}'))
     if (profile.modelArgs?.length) {
-      place('model', expandAll(profile.modelArgs, options))
+      // The effort can live here instead of in a flag of its own:
+      // `--model provider/model#variant`.
+      place('model', expandAll(profile.modelArgs, { ...options, effortValue: effort }))
     } else if (!alreadyPlaced) {
       // Almost every coding CLI spells this flag the same way. The profile
       // editor overrides it when a CLI disagrees, so a missing `modelArgs`
@@ -201,7 +239,6 @@ export function buildCliArgs(
     }
   }
 
-  const effort = options.effort ? effortValue(profile, options.effort) : ''
   if (effort && profile.effortArgs?.length) {
     place('effort', expandAll(profile.effortArgs, { ...options, effortValue: effort }))
   }
@@ -1211,6 +1248,26 @@ function shouldRetryWithoutModel(
 }
 
 /**
+ * A variant is the effort written inside the model string
+ * (`provider/model#variant`). The CLI resolves it before any request and
+ * answers with its own message, which is specific enough to read on its own:
+ * the model the user picked must not be dropped because of the variant.
+ */
+const VARIANT_REJECTED: RegExp[] = [
+  /variant\s+(?:unavailable|unknown|invalid|unsupported|not\s+(?:available|supported|found))/i,
+  /(?:unknown|invalid|unsupported|unavailable)\s+variant/i,
+  /variant\s+["'`]?[\w.-]+["'`]?\s+(?:is\s+)?not\s+(?:available|supported|found)/i
+]
+
+export function variantRejected(result: ExternalRunResult): boolean {
+  if (result.aborted || result.timedOut) return false
+  if (result.code === 0 || !result.error) return false
+  if (result.text.trim()) return false
+  const output = `${result.stderr}\n${result.raw}`.slice(-4_000)
+  return VARIANT_REJECTED.some((pattern) => pattern.test(output))
+}
+
+/**
  * Runs one task through a CLI profile.
  *
  * Resolves with a result even on a non-zero exit, timeout or abort: the agent
@@ -1295,6 +1352,31 @@ export async function runExternalAgent(
     notes.push(
       `${profile.label} ha rifiutato ${flags} (uscita ${refusedCode}): ho ripetuto il turno ${how}, ${outcome}.${removed ? ' La scelta resta memorizzata: i prossimi turni non riprovano il flag.' : ''}`
     )
+  }
+
+  // A model the CLI cannot resolve with this variant fails before any request.
+  // Repeating the turn without the whole model would lose the choice the user
+  // made, so the same model is kept and only the variant is left out.
+  if (
+    options.effort &&
+    usesEffort(profile) &&
+    variantRejected(result) &&
+    (placements.effort ?? 'after') !== 'off' &&
+    (placements.model ?? 'after') !== 'off'
+  ) {
+    const retry = await attempt(
+      profile,
+      { ...options, effort: undefined },
+      hooks,
+      binary,
+      adjustments
+    )
+    if (!retry.error && !retry.aborted) {
+      notes.push(
+        `${profile.label} non ha accettato l'effort "${options.effort}" per "${options.model ?? 'il modello predefinito'}" (uscita ${result.code}): ho ripetuto il turno con lo stesso modello e la variant predefinita.`
+      )
+      return { ...retry, warning: notes.join(' ') }
+    }
   }
 
   if (shouldRetryWithoutModel(options, result) && (placements.model ?? 'after') !== 'off') {

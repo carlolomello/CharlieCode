@@ -12,7 +12,7 @@ import type {
 import type { CliProfileInfo, WorkspaceChanges } from '../shared/ipc'
 import { changeDiff, listChanges } from './changes'
 import { buildSummary } from './context'
-import { runExternalAgent, type ExternalRunResult } from './external-agents'
+import { profileEfforts, runExternalAgent, type ExternalRunResult } from './external-agents'
 import { cliModelKey } from '../shared/cli-key'
 import {
   integrationPrompt,
@@ -46,9 +46,9 @@ export function cliModelEntries(profiles: CliProfileInfo[]): ModelEntry[] {
       caps: { tools: true, vision: false, contextWindow: 32_000 },
       capsConfidence: 'guess' as const,
       effort: 'none' as const,
-      efforts: profile.effortArgs?.length
-        ? (['none', 'low', 'high', 'max'] as EffortLevel[])
-        : (['none'] as EffortLevel[])
+      // The effort can live in the model string (`provider/model#variant`)
+      // instead of a flag of its own: the picker offers the levels either way.
+      efforts: profileEfforts(profile)
     }))
     .sort((a, b) => a.label.localeCompare(b.label))
 }

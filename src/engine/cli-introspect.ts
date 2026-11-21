@@ -330,9 +330,17 @@ export function proposalFromHelp(
         !/message/i.test(flag.description)
     )
 
+  // Some CLIs have no effort flag: the effort is a variant on the model itself
+  // (`--model provider/model#variant`). Keeping `{effort}` in the model
+  // argument is what makes the level picker do something.
+  const variantInModel = Boolean(
+    model && /#\s*variant|model#variant/i.test(`${model.name} ${model.description}`)
+  )
+
   if (model?.takesValue) {
-    proposal.modelArgs = [model.name, '{model}']
-    findings.push({ field: 'model', label: 'modello', evidence: `${model.name} {model}` })
+    const modelValue = variantInModel ? '{model}#{effort}' : '{model}'
+    proposal.modelArgs = [model.name, modelValue]
+    findings.push({ field: 'model', label: 'modello', evidence: `${model.name} ${modelValue}` })
   } else if (model) {
     warnings.push(
       `${model.name} sembra non accettare un valore: il modello resterà quello predefinito della CLI.`
@@ -363,6 +371,11 @@ export function proposalFromHelp(
       label: 'effort',
       evidence: `${effort.name} {effort}${values.length ? ` (${values.join(', ')})` : ''}`
     })
+  } else if (variantInModel) {
+    findings.push({ field: 'effort', label: 'effort', evidence: 'variante nel nome del modello' })
+    warnings.push(
+      'L’effort viaggia nel nome del modello: elenca i nomi che accetta in "Valori effort", dal più basso al più alto.'
+    )
   }
 
   /* --------------------------- plan / auto ----------------------------- */

@@ -9,6 +9,7 @@ import {
   extractThinking,
   findBinary,
   formatCommand,
+  profileEfforts,
   profileModels,
   rejectedFlags,
   resolveBinaryViaShell,
@@ -102,6 +103,42 @@ describe('buildCliArgs', () => {
     expect(run('max')).toEqual(['run', '--effort', 'high', 'x'])
     expect(run('none')).toEqual(['run', 'x'])
     expect(run()).toEqual(['run', 'x'])
+  })
+
+  it('mette l’effort nel nome del modello e lo toglie quando è «nessuno»', () => {
+    const base = profile({
+      args: ['run'],
+      modelArgs: ['--model', '{model}#{effort}'],
+      effortValues: ['low', 'medium', 'high']
+    })
+    const run = (effort?: 'none' | 'low' | 'high' | 'max'): string[] =>
+      buildCliArgs(base, {
+        prompt: 'x',
+        workspace: '/p',
+        model: 'acme/uno',
+        ...(effort ? { effort } : {})
+      })
+
+    expect(run('high')).toEqual(['run', '--model', 'acme/uno#high', 'x'])
+    // No variant means the model alone: a leftover `#` would be a broken name.
+    expect(run('none')).toEqual(['run', '--model', 'acme/uno', 'x'])
+    expect(run()).toEqual(['run', '--model', 'acme/uno', 'x'])
+  })
+
+  it('accende i livelli di effort anche quando stanno nel modello', () => {
+    expect(profileEfforts(profile({ effortArgs: ['--effort', '{effort}'] }))).toEqual([
+      'none',
+      'low',
+      'high',
+      'max'
+    ])
+    expect(profileEfforts(profile({ modelArgs: ['--model', '{model}#{effort}'] }))).toEqual([
+      'none',
+      'low',
+      'high',
+      'max'
+    ])
+    expect(profileEfforts(profile())).toEqual(['none'])
   })
 
   it('sposta un flag rifiutato prima del sottocomando, oppure lo toglie', () => {
@@ -504,6 +541,28 @@ describe('runExternalAgent', () => {
     expect(result.code).toBe(0)
     expect(result.error).toBeUndefined()
     expect(result.warning).toMatch(/--yolo/)
+  })
+
+  it('ripete il turno senza variant quando la CLI rifiuta l’effort', async () => {
+    // opencode answers `Variant unavailable for provider/model: high` before any
+    // request: the model the user picked must survive, only the variant goes.
+    const cli = node(
+      'const args = process.argv.slice(1); if (args.some((arg) => arg.includes("#"))) { process.stderr.write("Variant unavailable for acme/uno: high\\n"); process.exit(1) } process.stdout.write("risposta\\n")'
+    )
+    const result = await runExternalAgent(
+      profile({
+        ...cli,
+        args: [...cli.args, '--', 'run'],
+        modelArgs: ['--model', '{model}#{effort}'],
+        output: 'text'
+      }),
+      { prompt: 'ignorato', model: 'acme/uno', effort: 'high', workspace: process.cwd() }
+    )
+
+    expect(result.text).toBe('risposta')
+    expect(result.warning).toMatch(/effort "high"/)
+    expect(result.command).toContain('--model acme/uno')
+    expect(result.command).not.toContain('acme/uno#')
   })
 
   it('ricorda il flag rifiutato anche dopo un riavvio', async () => {

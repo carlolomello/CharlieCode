@@ -84,6 +84,21 @@ describe('proposalFromHelp', () => {
     ])
   })
 
+  it('mette l’effort nel nome del modello quando la CLI usa #variant', () => {
+    const help = [
+      'Usage: agent run [flags] [<message...>]',
+      'FLAGS',
+      '  --model, -m string        Model to use in the format provider/model#variant',
+      '  --format choice           Output format (choices: default, json)'
+    ].join('\n')
+
+    const { proposal, findings } = proposalFromHelp(help)
+
+    expect(proposal.modelArgs).toEqual(['--model', '{model}#{effort}'])
+    expect(proposal.effortArgs).toBeUndefined()
+    expect(findings.map((finding) => finding.field)).toContain('effort')
+  })
+
   it('conserva gli argomenti già scritti e non duplica i flag', () => {
     const help = 'Options:\n  --output-format <f>   Output format: json, stream-json\n'
     const { proposal } = proposalFromHelp(help, ['run', '--output-format', 'json'])
