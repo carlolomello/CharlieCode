@@ -32,6 +32,12 @@ export interface AgentRunOptions {
   model?: string
   /** Reasoning effort the user picked for this turn. */
   effort?: EffortLevel
+  /**
+   * Continue the CLI's own previous session in this workspace instead of
+   * paying for the whole briefing again. Only used when the profile declares
+   * `continueArgs`.
+   */
+  continueSession?: boolean
   /** Let the CLI modify files and run commands. Off unless the user opts in. */
   auto?: boolean
   /** Read-only exploration. */
@@ -175,7 +181,7 @@ export function profileEfforts(profile: CliProfile): EffortLevel[] {
 }
 
 /** The optional argv groups a profile adds to a turn. */
-export type FlagGroup = 'model' | 'effort' | 'plan' | 'auto'
+export type FlagGroup = 'model' | 'effort' | 'plan' | 'auto' | 'continue'
 
 /**
  * Where a group sits in the argv. `after` is the default, after the profile's
@@ -243,6 +249,10 @@ export function buildCliArgs(
     place('effort', expandAll(profile.effortArgs, { ...options, effortValue: effort }))
   }
 
+  if (options.continueSession && profile.continueArgs?.length) {
+    place('continue', expandAll(profile.continueArgs, options))
+  }
+
   if (options.plan && profile.planArgs?.length) {
     place('plan', expandAll(profile.planArgs, options))
   }
@@ -308,7 +318,13 @@ export function rejectedFlags(output: string): string[] {
  * Only a fast failure that produced no answer reads as "the arguments were
  * rejected": a turn that ran for a minute did real work and is never repeated.
  */
-function fastFailure(result: ExternalRunResult): boolean {
+/**
+ * A failure that produced no answer and came back immediately: the arguments
+ * were rejected before the CLI did any work. Exported because the caller that
+ * built the prompt (a CLI turn) needs the same judgement to decide whether a
+ * lost session is worth retrying with the full briefing.
+ */
+export function failedFast(result: ExternalRunResult): boolean {
   if (result.aborted || result.timedOut) return false
   if (result.code === 0 || !result.error) return false
   if (result.text.trim()) return false
@@ -319,6 +335,7 @@ function groupFlags(profile: CliProfile, options: AgentRunOptions): [FlagGroup, 
   return [
     ['model', profile.modelArgs?.length ? profile.modelArgs : options.model ? ['--model'] : []],
     ['effort', profile.effortArgs ?? []],
+    ['continue', profile.continueArgs ?? []],
     ['plan', profile.planArgs ?? []],
     ['auto', profile.autoArgs ?? []]
   ]
@@ -363,7 +380,7 @@ export function rejectedGroups(
   result: ExternalRunResult,
   adjustments: ArgvAdjustments = {}
 ): RefusedFlag[] {
-  if (!fastFailure(result)) return []
+  if (!failedFast(result)) return []
   const output = `${result.stderr}\n${result.raw}`.slice(-4_000)
   const flags = rejectedFlags(output)
   if (flags.length === 0) return []
@@ -418,7 +435,7 @@ function readPlacements(value: unknown): FlagPlacements {
   const placements: FlagPlacements = {}
   if (typeof value !== 'object' || value === null) return placements
   for (const [group, where] of Object.entries(value as Record<string, unknown>)) {
-    if (!['model', 'effort', 'plan', 'auto'].includes(group)) continue
+    if (!['model', 'effort', 'plan', 'auto', 'continue'].includes(group)) continue
     if (where !== 'after' && where !== 'before' && where !== 'off') continue
     placements[group as FlagGroup] = where
   }
@@ -510,7 +527,8 @@ function profileSignature(profile: CliProfile): string {
     profile.modelArgs ?? [],
     profile.effortArgs ?? [],
     profile.planArgs ?? [],
-    profile.autoArgs ?? []
+    profile.autoArgs ?? [],
+    profile.continueArgs ?? []
   ])
 }
 
@@ -1241,10 +1259,7 @@ function shouldRetryWithoutModel(
   result: ExternalRunResult
 ): boolean {
   if (!options.model) return false
-  if (result.aborted || result.timedOut) return false
-  if (result.code === 0 || !result.error) return false
-  if (result.text.trim()) return false
-  return result.ms < FAST_FAILURE_WINDOW_MS
+  return failedFast(result)
 }
 
 /**

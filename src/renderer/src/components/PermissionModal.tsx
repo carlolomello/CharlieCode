@@ -21,6 +21,12 @@ export function PermissionModal({ request, onDecide }: PermissionModalProps): Re
           <h2>{request.title}</h2>
         </div>
 
+        {request.agentName && (
+          <p className="muted small">
+            Subagente: <strong>{request.agentName}</strong>
+          </p>
+        )}
+
         <p className="permission-detail">{request.detail}</p>
 
         {request.command && (

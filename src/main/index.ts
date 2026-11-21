@@ -1334,6 +1334,9 @@ hanno priorità su queste.
                 home: platform.homeDir,
                 stateDir: platform.configDir,
                 signal: controller.signal,
+                // A team turn spawns several CLI processes: the user sees the
+                // plan and can stop it before any of them starts.
+                askPermission: (request) => askUser(sender, payload.requestId, request),
                 emit
               })
 

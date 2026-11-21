@@ -70,6 +70,11 @@ export interface AgentSettings {
   /** Model used by subagents; defaults to the current model. */
   subagentModel?: string
   subagentMaxSteps: number
+  /**
+   * Subagents that may run at once. The rest wait in a queue, and two of them
+   * never work on the same file at the same time. Default 3.
+   */
+  maxParallelSubagents?: number
   /** Tools auto-approved without asking (read-only ones by default). */
   autoApprove: string[]
   /** Bash prefixes auto-approved, e.g. "git status". */
@@ -156,6 +161,13 @@ export interface CliProfile {
   /** Extra argv that lets the CLI write without asking. */
   autoArgs?: string[]
   /**
+   * Extra argv that continues the CLI's own previous session in this workspace
+   * (`--continue`). When set, the next turn sends only the new request instead
+   * of the whole conversation, which is the largest token saving on a long
+   * chat. A CLI that lost its session is retried with the full briefing.
+   */
+  continueArgs?: string[]
+  /**
    * CLI processes a team turn may run at once. Only disjoint file scopes are
    * parallelised; default 3.
    */
@@ -186,7 +198,7 @@ export interface CliProfile {
 
 /** One useful flag found in a CLI's own help. */
 export interface CliFinding {
-  field: 'args' | 'model' | 'effort' | 'plan' | 'auto' | 'output' | 'models' | 'prompt'
+  field: 'args' | 'model' | 'effort' | 'plan' | 'auto' | 'output' | 'models' | 'prompt' | 'continue'
   /** Short Italian label shown in the panel. */
   label: string
   /** The flag(s) that produced the proposal. */
@@ -312,6 +324,11 @@ export interface PermissionRequest {
   diff?: FileDiff
   /** Command shown verbatim to the user (bash). */
   command?: string
+  /**
+   * Subagent that asked, when it is not the main agent. With several workers
+   * running, "Scrivere app.tsx" alone does not say whose write it is.
+   */
+  agentName?: string
 }
 
 export type PermissionDecision = 'allow' | 'allow-always' | 'deny'

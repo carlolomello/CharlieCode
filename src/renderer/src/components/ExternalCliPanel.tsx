@@ -33,6 +33,7 @@ interface Draft {
   effortValuesText: string
   planArgsText: string
   autoArgsText: string
+  continueArgsText: string
   modelsArgsText: string
   modelsFormat: 'lines' | 'json'
   textPath: string
@@ -55,6 +56,7 @@ const EMPTY_DRAFT: Draft = {
   effortValuesText: '',
   planArgsText: '',
   autoArgsText: '',
+  continueArgsText: '',
   modelsArgsText: '',
   modelsFormat: 'lines',
   textPath: '',
@@ -98,6 +100,7 @@ function draftFromProfile(profile: CliProfile): Draft {
     effortValuesText: (profile.effortValues ?? []).join(', '),
     planArgsText: joinLines(profile.planArgs),
     autoArgsText: joinLines(profile.autoArgs),
+    continueArgsText: joinLines(profile.continueArgs),
     modelsArgsText: joinLines(profile.modelsArgs),
     modelsFormat: profile.modelsFormat ?? 'lines',
     textPath: profile.textPath ?? '',
@@ -137,6 +140,9 @@ function profileFromDraft(draft: Draft): Record<string, unknown> {
       : {}),
     ...(splitLines(draft.planArgsText).length ? { planArgs: splitLines(draft.planArgsText) } : {}),
     ...(splitLines(draft.autoArgsText).length ? { autoArgs: splitLines(draft.autoArgsText) } : {}),
+    ...(splitLines(draft.continueArgsText).length
+      ? { continueArgs: splitLines(draft.continueArgsText) }
+      : {}),
     ...(splitLines(draft.modelsArgsText).length
       ? { modelsArgs: splitLines(draft.modelsArgsText) }
       : {}),
@@ -352,6 +358,9 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
             : {}),
           ...(proposal.planArgs ? { planArgsText: joinLines(proposal.planArgs) } : {}),
           ...(proposal.autoArgs ? { autoArgsText: joinLines(proposal.autoArgs) } : {}),
+          ...(proposal.continueArgs
+            ? { continueArgsText: joinLines(proposal.continueArgs) }
+            : {}),
           ...(proposal.modelsArgs ? { modelsArgsText: joinLines(proposal.modelsArgs) } : {}),
           ...(proposal.modelsFormat ? { modelsFormat: proposal.modelsFormat } : {})
         }
@@ -1095,6 +1104,23 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
                 value={draft.autoArgsText}
                 placeholder={'--yes'}
                 onChange={(event) => setDraft({ ...draft, autoArgsText: event.target.value })}
+              />
+            </label>
+
+            <label className="cli-field">
+              <span>
+                Continua la sessione{' '}
+                <span className="muted small">
+                  — la CLI riprende la sua conversazione invece di rileggere tutto
+                </span>
+              </span>
+              <textarea
+                rows={2}
+                value={draft.continueArgsText}
+                placeholder={'--continue'}
+                onChange={(event) =>
+                  setDraft({ ...draft, continueArgsText: event.target.value })
+                }
               />
             </label>
 

@@ -163,6 +163,7 @@ What that means in practice:
 - the models it printed in the connect step are the ones the second selector offers — no manual list to maintain; the list is cached in the profile for ten minutes, so opening the picker does not spawn the CLI again, and **↻** forces a fresh read; notes and table columns (`(default)`, `[free]`, a description beside the id) are stripped, because the id is what reaches `--model`; a list printed on stderr, or printed and then followed by a non-zero exit over an unrelated warning, is still read, and a cold start has two minutes before the probe gives up; a CLI whose provider list is still loading answers `models` with an empty list and exit 0 (`opencode` does exactly that on a cold start), so the probe is repeated a couple of times before the picker accepts that there is nothing to show;
 - its own models appear in a second selector when the CLI is selected, and the effort levels come from the profile: a profile with an effort flag gets them, and so does one whose effort is a variant inside the model name (`--model provider/model#{effort}`, as `opencode` does) — the connect step reads `provider/model#variant` in the `--model` help and proposes exactly that argument, `none` sends the model alone without the leftover `#`, and the names the CLI accepts go in *Valori effort*; when a profile has no models command yet, CharlieCode looks for one the first time you open that list and remembers it; when a CLI cannot list its models at all, that same spot is a text field where you type the model name — the control is never hidden. A profile that does not advertise the model flag still gets `--model <name>`; edit `modelArgs` in the profile when the CLI spells it differently;
 - the model calls happen inside that CLI — its auth, its quota, its audit log;
+- a profile with *Continua la sessione* (`--continue`) keeps the conversation inside the CLI: after a turn that worked, the next one sends only the new request instead of the whole briefing, which is where most of the input tokens go on a long chat. The record is per profile and per workspace (`~/.charliecode/cli-sessions.json`); a CLI that lost its session fails at once and the turn is repeated with the full briefing, so nothing breaks after an update or a cleaned cache. A team turn never resumes, because its last session belongs to the integration step;
 - before each turn CharlieCode writes the recent conversation into a briefing, and after it imports the answer, the tool activity and the diff of the files it changed. Attached documents are inlined in that briefing, and images are declared as not visible: a CLI sandboxed to the project cannot open files under the app config dir, so no unreachable paths are handed over;
 - switching between a CLI and a native model keeps the same thread: the canonical context lives in the session, not in the backend;
 - **explorer** and **reviewer** subagents run with the profile's read-only flags;
@@ -175,7 +176,7 @@ What that means in practice:
 - a save never fails because Windows holds the file: the temporary file is renamed with retries and, if a virus scanner or the search indexer keeps the destination locked, written in place — a locked session file used to abort the whole turn with `EPERM: operation not permitted, rename`;
 - a CLI that fails the test is reported as failed, not retried silently.
 
-**Squadra CLI.** A CLI normally works one item at a time, which is slow when the items are independent (ten Salesforce fields, ten metadata files). With **Squadra auto** — on by default for a CLI backend — the split happens outside the CLI: the turn starts with a read-only call that must answer with a JSON plan of independent items, the app runs those items as parallel processes of the same CLI (never two on the same file, at most `maxWorkers`, default 3, 2–6 in the profile), then the CLI integrates and verifies once and its answer is the turn's answer. A plan with a single item, or no parsable plan, falls back to a normal turn, so unsplittable work only pays the planning call. Deploy, validate, publish and push stay in the final turn, never in a worker; the workshop shows each worker, its file scope and its result, and stopping the turn stops them all.
+**Squadra CLI.** A CLI normally works one item at a time, which is slow when the items are independent (ten Salesforce fields, ten metadata files). With **Squadra auto** — on by default for a CLI backend — the split happens outside the CLI: the turn starts with a read-only call that must answer with a JSON plan of independent items, the app shows that plan and waits for your ok (denying it runs the turn as a single process), then runs the items as parallel processes of the same CLI (never two on the same file, at most `maxWorkers`, default 3, 2–6 in the profile), and finally the CLI integrates and verifies once and its answer is the turn's answer. A plan with a single item, or no parsable plan, falls back to a normal turn, so unsplittable work only pays the planning call. Deploy, validate, publish and push stay in the final turn, never in a worker; the workshop shows each worker, its file scope and its result, and stopping the turn stops them all.
 
 ### Routing per ruolo (opzionale)
 
@@ -349,9 +350,11 @@ src/
     probe      real tool-calling detection
     local      Ollama / LM Studio / vLLM presets and probing
     agent      agent loop, plan/build modes, system prompt, subagents
+    subagent-pool  concurrency limit and file leases for parallel subagents
     app-config validated patches to the app's own configuration
     self-knowledge architecture map + exact state for the agent
     backends   CLI as a conversation backend: briefing out, text/tools/diff back in
+    cli-sessions   whether a CLI still holds the conversation for a workspace
     routing    optional per-role models/effort for subagents
     tools      read/ls/glob/grep/write/edit/bash/task + permission helpers
     diff       unified diff generation
@@ -408,6 +411,8 @@ The goal is a GUI equivalent of a terminal coding agent, with multi-agent work m
 - [x] `task` tool: the main agent delegates a scoped job to a subagent
 - [x] Isolated subagents with a role (`explorer`, `reviewer`, `implementer`), depth limit 2
 - [x] Parallel subagents with their own activity cards
+- [x] A bounded pool: at most `maxParallelSubagents` (default 3), and never two workers on the same file
+- [x] One retry for a subagent that failed before doing anything, so a rate limit does not lose the work
 - [x] Plan mode propagates: subagents cannot write either
 - [x] Per-role model and effort for subagents, opt-in via `.charliecode/routing.yaml`
 - [ ] Git worktree isolation for parallel writers
@@ -419,6 +424,8 @@ The goal is a GUI equivalent of a terminal coding agent, with multi-agent work m
 - [x] Several CLIs in the picker at once, each with its own model and effort selector
 - [x] One conversation across backends: briefing out, text/tools/diff back in, canonical context in the session
 - [x] Profile-driven `task` subagents, read-only by default
+- [x] Session resume (`continueArgs`): a CLI that can continue its own conversation receives only the new request
+- [x] The team plan is shown and approved before any worker process starts
 
 **Phase 4 — extensibility**
 

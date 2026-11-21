@@ -4,6 +4,7 @@ import { providerFor, resolveCandidates } from './client'
 import { buildTools, toolTitle, type ToolRuntime } from './tools'
 import { sanitizeMessages } from './context-store'
 import { runExternalAgent } from './external-agents'
+import { SubagentPool } from './subagent-pool'
 import { parseCliModelKey } from '../shared/cli-key'
 import { selfKnowledgePrompt } from './self-knowledge'
 import type { AppConfigPatch } from './app-config'
@@ -38,6 +39,11 @@ export interface AgentDeps {
   emit: (event: EngineEvent) => void
   maxSteps?: number
   subagentMaxSteps?: number
+  /**
+   * Shared by a turn and its nested subagents: it caps how many run at once
+   * and keeps two of them off the same file. Created once per turn when absent.
+   */
+  pool?: SubagentPool
   /** Optional per-role routing read from `.charliecode/routing.yaml`. */
   routing?: RoutingConfig
   /** Version shown by the self-knowledge tool. */
@@ -264,6 +270,13 @@ export async function runAgent(
   /** Files this turn wrote or edited, for the project memory plugin. */
   const touched = new Set<string>()
 
+  /**
+   * One pool per turn. Nested agents reuse it through `deps`, so a subagent
+   * that spawns its own children cannot double the limit, and two workers
+   * never write the same file at the same time.
+   */
+  const pool = deps.pool ?? new SubagentPool(deps.config.agents.maxParallelSubagents)
+
   for (const candidate of candidates) {
     const { provider, model } = candidate
     let produced = false
@@ -302,122 +315,198 @@ export async function runAgent(
       ...(planMode ? { readOnly: true } : {}),
       askPermission: deps.askPermission,
       emit,
-      runSubagent: async (sub) => {
-        const agentId = `agent-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
-        const name = sub.description.slice(0, 60)
-        const role = (sub.agent ?? 'explorer') as SubagentRole
-        const profiles = deps.cliProfiles ?? []
-        const profileOf = (id: string): CliProfile | undefined =>
-          profiles.find((entry) => entry.profile.id === id)?.profile
-        const worker = deps.config.external
-        const workerProfile = worker?.id ? profileOf(worker.id) : undefined
+      runSubagent: async (sub) =>
+        pool.run(sub.files ?? [], async () => {
+          const agentId = `agent-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+          const name = sub.description.slice(0, 60)
+          const role = (sub.agent ?? 'explorer') as SubagentRole
+          const profiles = deps.cliProfiles ?? []
+          const profileOf = (id: string): CliProfile | undefined =>
+            profiles.find((entry) => entry.profile.id === id)?.profile
+          const worker = deps.config.external
+          const workerProfile = worker?.id ? profileOf(worker.id) : undefined
 
-        // Backend precedence: an explicit model on the task, then the role
-        // route, then the configured CLI worker, then the default subagent
-        // model. A route that points at a missing model is ignored.
-        const route = deps.routing?.enabled ? deps.routing.roles[role] : undefined
-        const explicit = sub.model?.trim()
-        const explicitCli = explicit ? parseCliModelKey(explicit) : undefined
-        const explicitProfile = explicitCli ? profileOf(explicitCli.profileId) : undefined
-        const explicitNative =
-          explicit && !explicitCli && deps.models.some((model) => model.key === explicit)
-            ? explicit
-            : undefined
+          // Backend precedence: an explicit model on the task, then the role
+          // route, then the configured CLI worker, then the default subagent
+          // model. A route that points at a missing model is ignored.
+          const route = deps.routing?.enabled ? deps.routing.roles[role] : undefined
+          const explicit = sub.model?.trim()
+          const explicitCli = explicit ? parseCliModelKey(explicit) : undefined
+          const explicitProfile = explicitCli ? profileOf(explicitCli.profileId) : undefined
+          const explicitNative =
+            explicit && !explicitCli && deps.models.some((model) => model.key === explicit)
+              ? explicit
+              : undefined
 
-        const routeCli = route ? parseCliModelKey(route.modelKey) : undefined
-        const routeProfile = routeCli ? profileOf(routeCli.profileId) : undefined
-        const routeNative =
-          route && !routeCli && deps.models.some((model) => model.key === route.modelKey)
-            ? route.modelKey
-            : undefined
+          const routeCli = route ? parseCliModelKey(route.modelKey) : undefined
+          const routeProfile = routeCli ? profileOf(routeCli.profileId) : undefined
+          const routeNative =
+            route && !routeCli && deps.models.some((model) => model.key === route.modelKey)
+              ? route.modelKey
+              : undefined
 
-        const target:
-          | { kind: 'cli'; profile: CliProfile; model?: string; auto: boolean }
-          | { kind: 'native'; modelKey: string } =
-          explicitCli && explicitProfile
-            ? {
-                kind: 'cli',
-                profile: explicitProfile,
-                ...(explicitCli.model ? { model: explicitCli.model } : {}),
-                auto: false
-              }
-            : explicitNative
-              ? { kind: 'native', modelKey: explicitNative }
-              : routeProfile
-                ? {
-                    kind: 'cli',
-                    profile: routeProfile,
-                    ...(routeCli?.model ? { model: routeCli.model } : {}),
-                    auto: worker?.id === routeProfile.id && worker.auto === true
-                  }
-                : routeNative
-                  ? { kind: 'native', modelKey: routeNative }
-                  : workerProfile
-                    ? {
-                        kind: 'cli',
-                        profile: workerProfile,
-                        ...(worker?.model ? { model: worker.model } : {}),
-                        auto: worker?.auto === true
-                      }
-                    : {
-                        kind: 'native',
-                        modelKey: deps.config.agents.subagentModel ?? modelKey
-                      }
+          const target:
+            | { kind: 'cli'; profile: CliProfile; model?: string; auto: boolean }
+            | { kind: 'native'; modelKey: string } =
+            explicitCli && explicitProfile
+              ? {
+                  kind: 'cli',
+                  profile: explicitProfile,
+                  ...(explicitCli.model ? { model: explicitCli.model } : {}),
+                  auto: false
+                }
+              : explicitNative
+                ? { kind: 'native', modelKey: explicitNative }
+                : routeProfile
+                  ? {
+                      kind: 'cli',
+                      profile: routeProfile,
+                      ...(routeCli?.model ? { model: routeCli.model } : {}),
+                      auto: worker?.id === routeProfile.id && worker.auto === true
+                    }
+                  : routeNative
+                    ? { kind: 'native', modelKey: routeNative }
+                    : workerProfile
+                      ? {
+                          kind: 'cli',
+                          profile: workerProfile,
+                          ...(worker?.model ? { model: worker.model } : {}),
+                          auto: worker?.auto === true
+                        }
+                      : {
+                          kind: 'native',
+                          modelKey: deps.config.agents.subagentModel ?? modelKey
+                        }
 
-        // A route can pin the effort; otherwise the turn's effort carries.
-        const subEffort = route?.effort ?? request.effort
+          // A route can pin the effort; otherwise the turn's effort carries.
+          const subEffort = route?.effort ?? request.effort
 
-        deps.emit({
-          type: 'subagent-start',
-          agentId,
-          name,
-          description: sub.prompt.slice(0, 200),
-          modelKey:
-            target.kind === 'cli'
-              ? `${target.profile.label}${target.model ? ` · ${target.model}` : ''}`
-              : target.modelKey
-        })
+          deps.emit({
+            type: 'subagent-start',
+            agentId,
+            name,
+            description: sub.prompt.slice(0, 200),
+            modelKey:
+              target.kind === 'cli'
+                ? `${target.profile.label}${target.model ? ` · ${target.model}` : ''}`
+                : target.modelKey
+          })
 
-        const allow =
-          role === 'explorer' || role === 'reviewer'
-            ? ['read', 'ls', 'glob', 'grep', 'skill']
-            : undefined
+          const allow =
+            role === 'explorer' || role === 'reviewer'
+              ? ['read', 'ls', 'glob', 'grep', 'skill']
+              : undefined
 
-        const started = Date.now()
+          const started = Date.now()
 
-        if (target.kind === 'cli') {
-          // The model calls happen inside the CLI, with its auth, quota and
-          // logs. We only orchestrate.
-          try {
-            const result = await runExternalAgent(
-              target.profile,
+          if (target.kind === 'cli') {
+            // The model calls happen inside the CLI, with its auth, quota and
+            // logs. We only orchestrate.
+            try {
+              const result = await runExternalAgent(
+                target.profile,
+                {
+                  prompt: sub.prompt,
+                  ...(target.model ? { model: target.model } : {}),
+                  ...(subEffort ? { effort: subEffort } : {}),
+                  // Reading is always allowed; writing only for an implementer.
+                  ...(planMode || role !== 'implementer' ? { plan: true } : {}),
+                  auto: target.auto && !planMode && role === 'implementer',
+                  workspace
+                },
+                {
+                  home: deps.platform.homeDir,
+                  stateDir: deps.platform.configDir,
+                  ...(request.signal ? { signal: request.signal } : {}),
+                  onText: (chunk) => deps.emit({ type: 'delta', text: chunk, agentId })
+                }
+              )
+              const text = result.text || result.error || 'La CLI non ha prodotto output.'
+              const ok = result.code === 0 && !result.aborted && !result.timedOut
+              deps.emit({
+                type: 'subagent-end',
+                agentId,
+                name,
+                ok,
+                summary: text.slice(0, 200),
+                ms: Date.now() - started
+              })
+              return { ok, text, summary: text.slice(0, 200) }
+            } catch (caught) {
+              const message = caught instanceof Error ? caught.message : String(caught)
+              deps.emit({
+                type: 'subagent-end',
+                agentId,
+                name,
+                ok: false,
+                summary: message,
+                ms: Date.now() - started
+              })
+              return { ok: false, text: `Subagente fallito: ${message}`, summary: message }
+            }
+          }
+
+          const subSystem = `${SUBAGENT_PROMPTS[role] ?? SUBAGENT_PROMPTS.explorer!}\n\nProgetto: ${
+            workspace
+          }${deps.projectContext ? `\n\n${deps.projectContext}` : ''}`
+
+          const runNested = (prompt: string): Promise<AgentResult> =>
+            runAgent(
               {
-                prompt: sub.prompt,
-                ...(target.model ? { model: target.model } : {}),
+                modelKey: target.modelKey,
+                messages: [{ role: 'user', content: prompt }],
                 ...(subEffort ? { effort: subEffort } : {}),
-                // Reading is always allowed; writing only for an implementer.
-                ...(planMode || role !== 'implementer' ? { plan: true } : {}),
-                auto: target.auto && !planMode && role === 'implementer',
-                workspace
+                signal: request.signal,
+                // Plan mode propagates: a subagent can never write either.
+                ...(planMode ? { mode: 'plan' as const } : {})
               },
               {
-                home: deps.platform.homeDir,
-                stateDir: deps.platform.configDir,
-                ...(request.signal ? { signal: request.signal } : {}),
-                onText: (chunk) => deps.emit({ type: 'delta', text: chunk, agentId })
+                ...deps,
+                pool,
+                maxSteps: deps.subagentMaxSteps ?? deps.config.agents.subagentMaxSteps,
+                // The subagent starts from a clean context: that is the whole point.
+                modelMessages: undefined
+              },
+              {
+                depth: depth + 1,
+                agentId,
+                agentName: name,
+                ...(allow ? { allow } : {}),
+                system: subSystem
               }
             )
-            const text = result.text || result.error || 'La CLI non ha prodotto output.'
-            const ok = result.code === 0 && !result.aborted && !result.timedOut
+
+          try {
+            let result = await runNested(sub.prompt)
+            // A subagent that died before doing anything (rate limit, a 5xx,
+            // a timeout on the first call) is worth one retry: otherwise the
+            // delegated work is simply lost. One that already wrote files is
+            // never repeated behind the user's back.
+            if (
+              result.error &&
+              !result.aborted &&
+              result.toolCalls === 0 &&
+              !result.text.trim()
+            ) {
+              result = await runNested(
+                `${sub.prompt}\n\nIl tentativo precedente è fallito prima di fare qualsiasi cosa: ${result.error}\nRiprova, evitando l'errore.`
+              )
+            }
+
             deps.emit({
               type: 'subagent-end',
               agentId,
               name,
-              ok,
-              summary: text.slice(0, 200),
+              ok: !result.error,
+              summary: result.text.slice(0, 400) || result.error || 'nessun output',
               ms: Date.now() - started
             })
-            return { ok, text, summary: text.slice(0, 200) }
+
+            return {
+              ok: !result.error,
+              text: result.text || result.error || 'Il subagente non ha prodotto output.',
+              summary: result.text.slice(0, 200)
+            }
           } catch (caught) {
             const message = caught instanceof Error ? caught.message : String(caught)
             deps.emit({
@@ -430,55 +519,7 @@ export async function runAgent(
             })
             return { ok: false, text: `Subagente fallito: ${message}`, summary: message }
           }
-        }
-
-        try {
-          const result = await runAgent(
-            {
-              modelKey: target.modelKey,
-              messages: [{ role: 'user', content: sub.prompt }],
-              ...(subEffort ? { effort: subEffort } : {}),
-              signal: request.signal,
-              // Plan mode propagates: a subagent can never write either.
-              ...(planMode ? { mode: 'plan' as const } : {})
-            },
-            {
-              ...deps,
-              maxSteps: deps.subagentMaxSteps ?? deps.config.agents.subagentMaxSteps,
-              // The subagent starts from a clean context: that is the whole point.
-              modelMessages: undefined
-            },
-            {
-              depth: depth + 1,
-              agentId,
-              agentName: name,
-              ...(allow ? { allow } : {}),
-              system: `${SUBAGENT_PROMPTS[role] ?? SUBAGENT_PROMPTS.explorer!}\n\nProgetto: ${
-                workspace
-              }${deps.projectContext ? `\n\n${deps.projectContext}` : ''}`
-            }
-          )
-
-          deps.emit({
-            type: 'subagent-end',
-            agentId,
-            name,
-            ok: !result.error,
-            summary: result.text.slice(0, 400) || result.error || 'nessun output',
-            ms: Date.now() - started
-          })
-
-          return {
-            ok: !result.error,
-            text: result.text || result.error || 'Il subagente non ha prodotto output.',
-            summary: result.text.slice(0, 200)
-          }
-        } catch (caught) {
-          const message = caught instanceof Error ? caught.message : String(caught)
-          deps.emit({ type: 'subagent-end', agentId, name, ok: false, summary: message, ms: Date.now() - started })
-          return { ok: false, text: `Subagente fallito: ${message}`, summary: message }
-        }
-      }
+        })
     }
 
     for (let attempt = 0; attempt < 2; attempt++) {

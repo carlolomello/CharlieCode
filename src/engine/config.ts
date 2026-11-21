@@ -99,6 +99,9 @@ export const DEFAULT_CONFIG: CharlieCodeConfig = {
   agents: {
     maxSteps: 24,
     subagentMaxSteps: 12,
+    // Three subagents at once is the point where a free router still answers
+    // and a paid one does not spend a day of quota on one question.
+    maxParallelSubagents: 3,
     autoApprove: ['read', 'ls', 'glob', 'grep'],
     autoApproveCommands: []
   },

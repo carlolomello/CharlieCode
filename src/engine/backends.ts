@@ -7,12 +7,20 @@ import type {
   EffortLevel,
   EngineEvent,
   FileDiff,
-  ModelEntry
+  ModelEntry,
+  PermissionDecision,
+  PermissionRequest
 } from './types'
 import type { CliProfileInfo, WorkspaceChanges } from '../shared/ipc'
 import { changeDiff, listChanges } from './changes'
 import { buildSummary } from './context'
-import { profileEfforts, runExternalAgent, type ExternalRunResult } from './external-agents'
+import {
+  failedFast,
+  profileEfforts,
+  runExternalAgent,
+  type ExternalRunResult
+} from './external-agents'
+import { clearCliSession, hasCliSession, markCliSession } from './cli-sessions'
 import { cliModelKey } from '../shared/cli-key'
 import {
   integrationPrompt,
@@ -125,6 +133,32 @@ export function buildCliBriefing(input: {
     .join('\n\n---\n\n')
 }
 
+/**
+ * The next turn of a conversation the CLI already holds. Sending the whole
+ * briefing again would pay for the history twice; a CLI with a live session
+ * only needs to be told what is new.
+ */
+export function buildCliResumePrompt(input: {
+  prompt: string
+  mode?: AgentMode
+  attachments?: { name: string; path: string }[]
+}): string {
+  return [
+    'Continui la sessione precedente in questo progetto: non ripetere lavoro già fatto e non rileggere tutto da capo.',
+    input.mode === 'plan'
+      ? 'Modalità piano: esplora e proponi, non modificare file.'
+      : 'Modalità build: puoi modificare il progetto.',
+    input.attachments?.length
+      ? `Allegati di questo turno (file su disco):\n${input.attachments
+          .map((item) => `- ${item.name}: ${item.path}`)
+          .join('\n')}`
+      : '',
+    `Richiesta attuale:\n${input.prompt.trim()}`
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+}
+
 export interface CliTurnInput {
   profile: CliProfile
   model?: string
@@ -147,6 +181,12 @@ export interface CliTurnInput {
    * split; a plan with one item runs as a normal turn.
    */
   team?: boolean
+  /**
+   * Asks the user before a team turn spawns its workers. Without it the plan
+   * runs as soon as it is parsed, which is a lot of processes to start on the
+   * user's behalf without showing what they are.
+   */
+  askPermission?: (request: PermissionRequest) => Promise<PermissionDecision>
   emit: (event: EngineEvent) => void
 }
 
@@ -296,6 +336,7 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
       mode: AgentMode
       quiet?: boolean
       agent?: { id: string; name: string }
+      continueSession?: boolean
     }
   ): Promise<ExternalRunResult> => {
     const result = await runExternalAgent(
@@ -304,6 +345,7 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
         prompt,
         ...(input.model ? { model: input.model } : {}),
         ...(input.effort ? { effort: input.effort } : {}),
+        ...(options.continueSession ? { continueSession: true } : {}),
         plan: options.mode === 'plan',
         auto: options.mode === 'build',
         workspace: input.workspace
@@ -313,9 +355,15 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
         ...(input.stateDir ? { stateDir: input.stateDir } : {}),
         ...(input.signal ? { signal: input.signal } : {}),
         onText: (chunk) => {
-          if (options.quiet) return
-          if (firstTextAt === undefined) firstTextAt = Date.now()
-          input.emit({ type: 'delta', text: chunk })
+          // A worker's text belongs to its own card: a quiet turn used to drop
+          // it entirely, so the card sat on "in corso" until the worker ended.
+          if (options.quiet && !options.agent) return
+          if (!options.agent && firstTextAt === undefined) firstTextAt = Date.now()
+          input.emit({
+            type: 'delta',
+            text: chunk,
+            ...(options.agent ? { agentId: options.agent.id } : {})
+          })
         },
         // Reasoning is shown while the turn runs, like every agent CLI does.
         // A planning call and a subagent stay quiet: their reasoning belongs to
@@ -363,22 +411,63 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
     aborted: boolean
   }
 
-  const runSingle = async (): Promise<Outcome> => {
+  const fullPrompt = (): string =>
+    buildCliBriefing({
+      ...(input.system ? { system: input.system } : {}),
+      messages: input.history,
+      prompt: input.prompt,
+      mode: input.mode,
+      ...(input.attachments?.length ? { attachments: input.attachments } : {})
+    })
+
+  const toOutcome = (result: ExternalRunResult): Outcome => ({
+    text: result.text,
+    ...(result.error ? { error: result.error } : {}),
+    aborted: result.aborted || result.timedOut
+  })
+
+  /** A turn that did its job: the CLI's session is now worth continuing. */
+  const rememberSession = async (result: ExternalRunResult): Promise<void> => {
+    if (!input.stateDir) return
+    // A profile without `continueArgs` cannot resume: writing a record would
+    // only add a file nobody reads.
+    if (!input.profile.continueArgs?.length) return
+    if (result.error || result.aborted || result.timedOut) return
+    await markCliSession(input.stateDir, input.profile.id, input.workspace)
+  }
+
+  /**
+   * One turn. With `useSession` the CLI continues its own previous session and
+   * receives only this request: the history already lives inside the CLI, so
+   * the briefing would be paid for twice. A CLI that lost the session (new
+   * install, cleaned cache, update) fails immediately; the turn is then
+   * repeated with the full briefing instead of being reported as broken.
+   */
+  const runSingle = async (useSession: boolean): Promise<Outcome> => {
+    if (!useSession) {
+      const result = await runOnce(fullPrompt(), { mode: input.mode })
+      await rememberSession(result)
+      return toOutcome(result)
+    }
+
     const result = await runOnce(
-      buildCliBriefing({
-        ...(input.system ? { system: input.system } : {}),
-        messages: input.history,
+      buildCliResumePrompt({
         prompt: input.prompt,
         mode: input.mode,
         ...(input.attachments?.length ? { attachments: input.attachments } : {})
       }),
-      { mode: input.mode }
+      { mode: input.mode, continueSession: true }
     )
-    return {
-      text: result.text,
-      ...(result.error ? { error: result.error } : {}),
-      aborted: result.aborted || result.timedOut
+
+    if (failedFast(result)) {
+      if (input.stateDir) await clearCliSession(input.stateDir, input.profile.id)
+      const retried = await runOnce(fullPrompt(), { mode: input.mode })
+      await rememberSession(retried)
+      return toOutcome(retried)
     }
+
+    await rememberSession(result)
+    return toOutcome(result)
   }
 
   /**
@@ -402,7 +491,27 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
     // JSON output format may have emptied.
     const plan = parseCliPlan(planCall.raw || planCall.text)
     if (!plan || plan.items.length < 2) {
-      return runSingle()
+      return runSingle(false)
+    }
+
+    // The plan is the moment the user can still say no. Starting five CLI
+    // processes without showing what they are is a surprise, not a feature.
+    if (input.askPermission) {
+      const decision = await input.askPermission({
+        id: `cli-team-${Date.now()}`,
+        tool: 'cli-team',
+        title: `Dividere il turno in ${plan.items.length} parti in parallelo?`,
+        detail: plan.items
+          .map(
+            (item, index) =>
+              `${index + 1}. ${item.title}${
+                item.files.length > 0 ? ` — ${item.files.join(', ')}` : ''
+              }`
+          )
+          .join('\n'),
+        risk: 'medium'
+      })
+      if (decision === 'deny') return runSingle(false)
     }
 
     input.emit({
@@ -460,12 +569,20 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
       reports.push(...results)
     }
 
-    if (input.signal?.aborted) return { text: '', aborted: true }
+    if (input.signal?.aborted) {
+      // The CLI's last session is a worker, not the conversation: the next turn
+      // must send the briefing again instead of continuing from there.
+      if (input.stateDir) await clearCliSession(input.stateDir, input.profile.id)
+      return { text: '', aborted: true }
+    }
 
     const integration = await runOnce(
       integrationPrompt({ prompt: input.prompt, workers: reports }),
       { mode: 'build' }
     )
+
+    // Same reason as above: the session now belongs to the integration turn.
+    if (input.stateDir) await clearCliSession(input.stateDir, input.profile.id)
 
     const failedAll = reports.length > 0 && reports.every((report) => report.error)
     const fallback = reports
@@ -485,8 +602,17 @@ export async function runCliTurn(input: CliTurnInput): Promise<CliTurnResult> {
     }
   }
 
+  /** A team turn owns several processes, so it never resumes a chat session. */
+  const resumable = async (): Promise<boolean> => {
+    if (input.team === true || !input.stateDir) return false
+    if (!input.profile.continueArgs?.length) return false
+    return hasCliSession(input.stateDir, input.profile.id, input.workspace)
+  }
+
   const outcome =
-    input.team === true && input.mode === 'build' ? await runTeam() : await runSingle()
+    input.team === true && input.mode === 'build'
+      ? await runTeam()
+      : await runSingle(await resumable())
 
   if (before?.git) {
     const after = await listChanges(input.workspace).catch(() => undefined)

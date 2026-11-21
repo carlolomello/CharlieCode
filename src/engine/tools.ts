@@ -62,6 +62,8 @@ export interface SubagentRequest {
   prompt: string
   agent?: string
   model?: string
+  /** Files this job will touch: the pool keeps two workers off the same one. */
+  files?: string[]
 }
 
 export interface SubagentResult {
@@ -221,7 +223,13 @@ async function permission(
         matchesApprovedCommand(options.commandPrefix, runtime.autoApproveCommands)))
   if (auto) return
 
-  const decision = await runtime.askPermission({ ...request, id: `${Date.now()}-${Math.random()}` })
+  const decision = await runtime.askPermission({
+    ...request,
+    id: `${Date.now()}-${Math.random()}`,
+    // With several subagents running, the title alone does not say whose
+    // write this is.
+    ...(runtime.agentName ? { agentName: runtime.agentName } : {})
+  })
   if (decision === 'deny') throw new DeniedError()
 }
 
@@ -841,8 +849,9 @@ export function buildTools(runtime: ToolRuntime) {
           'strumenti ma un contesto separato: usalo per esplorare il codice, revisionare o ' +
           'implementare un pezzo in parallelo. Restituisce il suo riassunto finale. ' +
           'Puoi chiamarlo più volte nello stesso turno per lavorare in parallelo, ma solo su file ' +
-          'disgiunti: due subagenti non devono scrivere lo stesso file, e deploy/publish/push vanno ' +
-          'eseguiti una volta sola da te, dopo che hanno finito.',
+          'disgiunti: dichiara in `files` i file che quel lavoro toccherà, così l’app non fa mai ' +
+          'girare due subagenti sullo stesso file. Deploy/publish/push vanno eseguiti una volta ' +
+          'sola da te, dopo che hanno finito.',
         schema: z.object({
           description: z.string().describe('Titolo breve del lavoro (3-6 parole)'),
           prompt: z.string().describe('Istruzioni complete e autonome per il subagente'),
@@ -850,12 +859,24 @@ export function buildTools(runtime: ToolRuntime) {
             .enum(['explorer', 'reviewer', 'implementer'])
             .optional()
             .describe('explorer = sola lettura, reviewer = analisi, implementer = può scrivere'),
-          model: z.string().optional().describe('modelKey alternativo per questo subagente')
+          model: z.string().optional().describe('modelKey alternativo per questo subagente'),
+          files: z
+            .array(z.string())
+            .optional()
+            .describe(
+              'Percorsi relativi dei file che questo lavoro toccherà. Due lavori non devono elencare lo stesso file.'
+            )
         }),
-        run: async ({ description, prompt, agent, model }) => {
+        run: async ({ description, prompt, agent, model, files }) => {
           // Plan mode keeps subagents read-only no matter what the model asked.
           const role = runtime.readOnly ? 'explorer' : agent
-          const result = await runtime.runSubagent({ description, prompt, agent: role, model })
+          const result = await runtime.runSubagent({
+            description,
+            prompt,
+            agent: role,
+            model,
+            ...(files?.length ? { files } : {})
+          })
           return {
             output: result.text,
             summary: `${description} · ${result.ok ? 'completato' : 'fallito'}`

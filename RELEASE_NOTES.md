@@ -22,11 +22,11 @@ No Apple Developer ID and no code signing certificate, so both platforms warn on
 
 ## Changes in this build
 
-- **Context:** the turn's user message is always part of the saved context, so resuming a session continues instead of dropping the last request.
-- **Tool sandbox:** paths outside the project and symlinks that escape it always ask for permission; `credentials.json` is unreadable by tools; `fetch_url` refuses private/localhost targets and re-checks every redirect.
-- **Sessions:** opening a chat restores its workspace, deleting one removes its attachments, and a slow response can no longer overwrite a newer session.
-- **Config:** `config.json` and `credentials.json` are written atomically; a corrupted file is backed up and reported in the UI instead of crashing the app.
-- **Reliability:** cached model catalog, throttled draft saves, project context passed to subagents, and `remember` shows a diff before writing anything.
+- **Subagents:** the number of parallel `task` agents is now bounded (3 by default, `maxParallelSubagents` in `config.json`), and two of them never work on the same file: a task declares its files and waits for them. A subagent that fails before doing anything is retried once instead of losing the delegated work.
+- **CLI sessions:** a profile with `--continue` keeps the conversation inside the CLI, so the next turn sends only the new request instead of the whole briefing. The record is per profile and workspace; if the CLI lost its session the turn is repeated with the full briefing, so nothing breaks after an update.
+- **Squadra CLI:** the plan is shown and must be approved before any worker process starts, and each worker's text now streams into its own card instead of leaving it on "in corso".
+- **Permissions:** the prompt names the subagent that asked, so three workers writing at once are no longer indistinguishable.
+- **Earlier fixes in this line:** context always keeps the last request, tool sandbox for paths and symlinks, atomic config writes, cached catalog and throttled draft saves.
 
 ## What is in this build
 

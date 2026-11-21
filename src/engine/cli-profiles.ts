@@ -201,6 +201,15 @@ export function validateCliProfile(value: unknown, fallbackId?: string): CliProf
     ...(readStringArray(record, 'autoArgs', 'Gli argomenti di scrittura automatica').length
       ? { autoArgs: readStringArray(record, 'autoArgs', 'Gli argomenti di scrittura automatica') }
       : {}),
+    ...(readStringArray(record, 'continueArgs', 'Gli argomenti per continuare la sessione').length
+      ? {
+          continueArgs: readStringArray(
+            record,
+            'continueArgs',
+            'Gli argomenti per continuare la sessione'
+          )
+        }
+      : {}),
     ...(readStringArray(record, 'modelsArgs', 'Il comando modelli').length
       ? { modelsArgs: readStringArray(record, 'modelsArgs', 'Il comando modelli') }
       : {}),

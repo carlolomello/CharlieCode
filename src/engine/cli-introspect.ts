@@ -423,6 +423,17 @@ export function proposalFromHelp(
     findings.push({ field: 'auto', label: 'scrittura automatica', evidence: autoArgs.join(' ') })
   }
 
+  /* ------------------------------ session ------------------------------ */
+
+  // `--continue` resumes the CLI's own last session. Only a flag that takes no
+  // value qualifies: `--resume <id>` needs an id the app does not have, and
+  // passing it blindly would turn every turn into a failure.
+  const resume = pickFlag(flags, ['--continue', '--continue-session', '--resume'])
+  if (resume && !resume.takesValue) {
+    proposal.continueArgs = [resume.name]
+    findings.push({ field: 'continue', label: 'sessione', evidence: resume.name })
+  }
+
   /* ------------------------------- output ------------------------------ */
 
   const output = pickFlag(flags, ['--output-format', '--output', '--format'])
