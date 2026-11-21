@@ -19,6 +19,27 @@ export interface TurnEmitterOptions {
 
 const DEFAULT_MAX_ACTIVITY = 50
 
+/** Events that describe a turn, not a worker inside it. */
+const TURN_LIFECYCLE: ReadonlySet<EngineEvent['type']> = new Set(['start', 'done', 'error'])
+
+/**
+ * Wraps `emit` for a nested agent.
+ *
+ * A subagent is a card inside the turn: its `start`, `done` and `error` are the
+ * card's business, and `subagent-start`/`subagent-end` already say them. Sent to
+ * the parent stream they ended the main turn in the UI, replaced the model label
+ * above the answer and saved the subagent's model and stats on the parent
+ * message — the turn looked finished while the other workers were still running.
+ */
+export function nestedTurnEmit(
+  emit: (event: EngineEvent) => void
+): (event: EngineEvent) => void {
+  return (event) => {
+    if (TURN_LIFECYCLE.has(event.type)) return
+    emit(event)
+  }
+}
+
 /**
  * Builds the events of a turn in one place.
  *

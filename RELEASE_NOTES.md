@@ -22,6 +22,7 @@ No Apple Developer ID and no code signing certificate, so both platforms warn on
 
 ## Changes in this build
 
+- **A subagent no longer ends the turn:** its completion reached the parent stream, so the transcript stopped saying the answer was still being written, the message was stamped with the worker's model and timings, and a worker error marked the whole turn as failed. A nested turn now reports only through its own card.
 - **One worker at a time:** each subagent card has its own stop button, so a worker that is stuck no longer forces you to kill the whole turn (and the other workers with it). Stopping the turn still stops everything.
 - **What a worker cost:** a card now reports its time and, when its backend says so, the tokens it spent, instead of a bare "ok".
 - **Subagents:** the number of parallel `task` agents is now bounded (3 by default, `maxParallelSubagents` in `config.json`), and two of them never work on the same file: a task declares its files and waits for them. A subagent that fails before doing anything is retried once instead of losing the delegated work.

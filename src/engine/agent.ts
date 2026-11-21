@@ -6,7 +6,7 @@ import { sanitizeMessages } from './context-store'
 import { runExternalAgent } from './external-agents'
 import { SubagentPool } from './subagent-pool'
 import { TurnCancellation } from './turn-cancellation'
-import { TurnEmitter } from './turn-emitter'
+import { nestedTurnEmit, TurnEmitter } from './turn-emitter'
 import { parseCliModelKey } from '../shared/cli-key'
 import { selfKnowledgePrompt } from './self-knowledge'
 import type { AppConfigPatch } from './app-config'
@@ -178,11 +178,14 @@ export async function runAgent(
 ): Promise<AgentResult> {
   const depth = options.depth ?? 0
   const modelKey = options.modelKey ?? request.modelKey
+  // A nested turn reports through its own card. Forwarding its lifecycle closed
+  // the main turn while the other workers were still running.
+  const emitTurn = depth > 0 ? nestedTurnEmit(deps.emit) : deps.emit
   if (!deps.workspace) {
     // Falling back to `process.cwd()` made the agent operate on the Electron
     // app directory (or the CLI's home) without telling anyone.
     const message = 'Nessun progetto aperto: scegli una cartella prima di usare l’agente.'
-    deps.emit({ type: 'error', message })
+    emitTurn({ type: 'error', message })
     return {
       text: '',
       modelKey,
@@ -252,7 +255,7 @@ export async function runAgent(
 
   if (error || candidates.length === 0) {
     const message = error ?? 'Nessun modello disponibile.'
-    deps.emit({ type: 'error', message })
+    emitTurn({ type: 'error', message })
     return { text: '', modelKey, messages: [], newMessages: [], steps: 0, toolCalls: 0, aborted: false, error: message }
   }
 
@@ -303,7 +306,7 @@ export async function runAgent(
         const path = (event.input as { path?: unknown } | undefined)?.path
         if (typeof path === 'string') touched.add(path)
       }
-      deps.emit(event)
+      emitTurn(event)
     }
 
     const runtime: ToolRuntime = {
@@ -577,7 +580,7 @@ export async function runAgent(
               if (!part.text) break
               if (!firstTokenAt) {
                 firstTokenAt = Date.now()
-                deps.emit({
+                emitTurn({
                   type: 'start',
                   modelKey: model.key,
                   label: model.label,
@@ -627,7 +630,7 @@ export async function runAgent(
         )
         const messages: ModelMessage[] = [...inputMessages, ...newMessages]
 
-        deps.emit({
+        emitTurn({
           type: 'done',
           modelKey: model.key,
           ms: Date.now() - startedAt,
@@ -652,7 +655,7 @@ export async function runAgent(
         }
       } catch (caught) {
         if (isAbort(streamError ?? caught)) {
-          deps.emit({
+          emitTurn({
             type: 'done',
             modelKey: model.key,
             ms: Date.now() - startedAt,
@@ -673,7 +676,7 @@ export async function runAgent(
         // behind the user's back.
         if (produced) {
           const message = caught instanceof Error ? caught.message : String(caught)
-          deps.emit({ type: 'error', message, modelKey: model.key })
+          emitTurn({ type: 'error', message, modelKey: model.key })
           return {
             text,
             modelKey: model.key,
@@ -698,7 +701,7 @@ export async function runAgent(
   const message = lastError
     ? `Tutti i modelli hanno fallito. Ultimo errore: ${lastError}`
     : 'Nessun modello ha prodotto una risposta.'
-  deps.emit({ type: 'error', message })
+  emitTurn({ type: 'error', message })
   return { text: '', modelKey, messages: [], newMessages: [], steps: 0, toolCalls: 0, aborted: false, error: message }
 }
 

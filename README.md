@@ -352,7 +352,8 @@ src/
     agent      agent loop, plan/build modes, system prompt, subagents
     subagent-pool  concurrency limit and file leases for parallel subagents
     turn-cancellation  one stop signal per worker, combined with the turn's
-    turn-emitter   the events of a turn (attribution, activity cap, worker cards)
+    turn-emitter   the events of a turn (attribution, activity cap, worker cards;
+                   a nested turn cannot close its parent)
     app-config validated patches to the app's own configuration
     self-knowledge architecture map + exact state for the agent
     backends   CLI as a conversation backend: briefing out, text/tools/diff back in

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { TurnEmitter } from './turn-emitter'
+import { nestedTurnEmit, TurnEmitter } from './turn-emitter'
 import type { EngineEvent } from './types'
 
 function setup(maxActivity?: number): { events: EngineEvent[]; turn: TurnEmitter } {
@@ -105,6 +105,20 @@ describe('TurnEmitter', () => {
     expect(events[0]).not.toHaveProperty('usage')
     expect(events[0]).not.toHaveProperty('steps')
     expect(events[1]).toMatchObject({ usage: { outputTokens: 120 }, steps: 3 })
+  })
+
+  it('un subagente non può chiudere il turno del padre', () => {
+    const events: EngineEvent[] = []
+    const emit = nestedTurnEmit((event) => events.push(event))
+
+    emit({ type: 'delta', text: 'ciao', agentId: 'a' })
+    emit({ type: 'start', modelKey: 'p::m', label: 'M' })
+    emit({ type: 'done', modelKey: 'p::m', ms: 10, ttftMs: 1, steps: 2, toolCalls: 1 })
+    emit({ type: 'error', message: 'rate limit' })
+    emit({ type: 'tool-call', id: 't1', name: 'read', title: 'Leggo', agentId: 'a' })
+    emit({ type: 'subagent-start', agentId: 'b', name: 'B', description: 'd', modelKey: 'm' })
+
+    expect(events.map((event) => event.type)).toEqual(['delta', 'tool-call', 'subagent-start'])
   })
 
   it('marca il turno interrotto solo quando lo è', () => {
