@@ -102,6 +102,17 @@ describe('proposalFromHelp', () => {
     expect(proposal.args).toEqual(['run', '--output-format', 'json'])
   })
 
+  it('propone il flag che mostra il ragionamento', () => {
+    const help =
+      'Options:\n  --thinking   Show thinking blocks\n  --format choice   Output format (choices: default, json)\n'
+
+    const { proposal, findings } = proposalFromHelp(help)
+
+    expect(proposal.thinkingArgs).toEqual(['--thinking'])
+    expect(proposal.outputArgs).toEqual(['--format', 'json'])
+    expect(findings.map((finding) => finding.field)).toContain('thinking')
+  })
+
   it('riconosce il sottocomando models solo nella sezione comandi', () => {
     const help = `Usage: agent [options]
 

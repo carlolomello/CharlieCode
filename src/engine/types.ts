@@ -156,6 +156,12 @@ export interface CliProfile {
    * no tool rows, no commands, no files.
    */
   outputArgs?: string[]
+  /**
+   * Extra argv that makes the CLI print its reasoning (`--thinking`). It fills
+   * the silence before the first tool call; the block is folded away at the end
+   * of the turn, so it never enters the answer or the session.
+   */
+  thinkingArgs?: string[]
   /** Extra argv when a model is selected. */
   modelArgs?: string[]
   /** Extra argv when an effort level is selected; `{effort}` is replaced. */
@@ -204,7 +210,17 @@ export interface CliProfile {
 
 /** One useful flag found in a CLI's own help. */
 export interface CliFinding {
-  field: 'args' | 'model' | 'effort' | 'plan' | 'auto' | 'output' | 'models' | 'prompt' | 'continue'
+  field:
+    | 'args'
+    | 'model'
+    | 'effort'
+    | 'plan'
+    | 'auto'
+    | 'output'
+    | 'thinking'
+    | 'models'
+    | 'prompt'
+    | 'continue'
   /** Short Italian label shown in the panel. */
   label: string
   /** The flag(s) that produced the proposal. */

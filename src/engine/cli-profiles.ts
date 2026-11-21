@@ -210,6 +210,15 @@ export function validateCliProfile(value: unknown, fallbackId?: string): CliProf
           )
         }
       : {}),
+    ...(readStringArray(record, 'thinkingArgs', 'Gli argomenti del ragionamento').length
+      ? {
+          thinkingArgs: readStringArray(
+            record,
+            'thinkingArgs',
+            'Gli argomenti del ragionamento'
+          )
+        }
+      : {}),
     ...(readStringArray(record, 'continueArgs', 'Gli argomenti per continuare la sessione').length
       ? {
           continueArgs: readStringArray(

@@ -492,6 +492,21 @@ export function proposalFromHelp(
     }
   }
 
+  /* ------------------------------ reasoning ---------------------------- */
+
+  // A CLI that can print its reasoning fills the silence before the first tool
+  // call, which is otherwise indistinguishable from a stuck turn.
+  const thinking = pickFlag(flags, [
+    '--thinking',
+    '--show-thinking',
+    '--show-reasoning',
+    '--reasoning'
+  ])
+  if (thinking && !thinking.takesValue && !hasArg(thinking.name)) {
+    proposal.thinkingArgs = [thinking.name]
+    findings.push({ field: 'thinking', label: 'ragionamento', evidence: thinking.name })
+  }
+
   /* ------------------------------- models ------------------------------ */
 
   const modelsFlag = pickFlag(flags, ['--list-models', '--models'])

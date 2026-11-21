@@ -274,6 +274,7 @@ Commands:
 
 FLAGS
   --format choice   Output format (choices: default, json)
+  --thinking        Show thinking blocks
 EOF
     exit 0 ;;
 esac
@@ -293,6 +294,7 @@ exit 0
       const repaired = await ensureCliArgs(platform, saved, dir)
 
       expect(repaired.outputArgs).toEqual(['--format', 'json'])
+      expect(repaired.thinkingArgs).toEqual(['--thinking'])
       expect(repaired.args).toEqual(['run'])
       expect((await readCliProfile(platform, 'agent-one'))?.outputArgs).toEqual([
         '--format',
@@ -312,7 +314,8 @@ exit 0
         label: 'Agent One',
         command: binary,
         args: ['run'],
-        output: 'text'
+        output: 'text',
+        thinkingArgs: ['--thinking']
       }
 
       expect(await ensureCliArgs(platform, saved, dir)).toBe(saved)

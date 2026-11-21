@@ -43,6 +43,19 @@ describe('buildCliArgs', () => {
     expect(argv).toEqual(['run', '--format', 'json', 'ciao'])
   })
 
+  it('aggiunge il formato strutturato e il ragionamento quando ci sono', () => {
+    const argv = buildCliArgs(
+      profile({
+        args: ['run'],
+        outputArgs: ['--format', 'json'],
+        thinkingArgs: ['--thinking']
+      }),
+      { prompt: 'ciao', workspace: '/tmp' }
+    )
+
+    expect(argv).toEqual(['run', '--format', 'json', '--thinking', 'ciao'])
+  })
+
   it('sostituisce i segnaposto', () => {
     const argv = buildCliArgs(
       profile({ args: ['--dir', '{workspace}', '--model', '{model}', '-p', '{prompt}'] }),

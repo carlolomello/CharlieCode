@@ -181,7 +181,14 @@ export function profileEfforts(profile: CliProfile): EffortLevel[] {
 }
 
 /** The optional argv groups a profile adds to a turn. */
-export type FlagGroup = 'model' | 'effort' | 'plan' | 'auto' | 'continue' | 'output'
+export type FlagGroup =
+  | 'model'
+  | 'effort'
+  | 'plan'
+  | 'auto'
+  | 'continue'
+  | 'output'
+  | 'thinking'
 
 /**
  * Where a group sits in the argv. `after` is the default, after the profile's
@@ -266,6 +273,10 @@ export function buildCliArgs(
     place('output', expandAll(profile.outputArgs, options))
   }
 
+  if (profile.thinkingArgs?.length) {
+    place('thinking', expandAll(profile.thinkingArgs, options))
+  }
+
   const argv = [...before, ...base, ...after]
   if (profile.promptMode !== 'stdin' && !hasPrompt) argv.push(options.prompt)
   return argv
@@ -344,7 +355,8 @@ function groupFlags(profile: CliProfile, options: AgentRunOptions): [FlagGroup, 
     ['continue', profile.continueArgs ?? []],
     ['plan', profile.planArgs ?? []],
     ['auto', profile.autoArgs ?? []],
-    ['output', profile.outputArgs ?? []]
+    ['output', profile.outputArgs ?? []],
+    ['thinking', profile.thinkingArgs ?? []]
   ]
 }
 

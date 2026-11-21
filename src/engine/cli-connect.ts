@@ -501,6 +501,9 @@ export async function connectCli(
         ...(proposal.outputArgs && !saved.outputArgs?.length
           ? { outputArgs: proposal.outputArgs, output: proposal.output ?? saved.output }
           : {}),
+        ...(proposal.thinkingArgs && !saved.thinkingArgs?.length
+          ? { thinkingArgs: proposal.thinkingArgs }
+          : {}),
         ...(modelsArgs && !sameModelsArgs ? { modelsArgs } : {}),
         ...(modelsFormat ? { modelsFormat } : {}),
         ...(modelsPath ? { modelsPath } : {}),
@@ -516,6 +519,7 @@ export async function connectCli(
         ...(proposal.promptMode ? { promptMode: proposal.promptMode } : {}),
         ...(proposal.output ? { output: proposal.output } : {}),
         ...(proposal.outputArgs ? { outputArgs: proposal.outputArgs } : {}),
+        ...(proposal.thinkingArgs ? { thinkingArgs: proposal.thinkingArgs } : {}),
         // A CLI that can list models but does not advertise the flag still
         // takes one: store the usual spelling so the panel shows it and the
         // user can correct it, instead of hiding the model picker.
@@ -569,6 +573,12 @@ function wantsStructuredOutput(profile: CliProfile): boolean {
   )
 }
 
+/** True when the profile never asked the CLI to print its reasoning. */
+function wantsReasoning(profile: CliProfile): boolean {
+  if (profile.thinkingArgs?.length) return false
+  return !profile.args.some((arg) => /^--?(thinking|show-thinking|show-reasoning|reasoning)$/i.test(arg))
+}
+
 export async function ensureCliArgs(
   platform: Platform,
   profile: CliProfile,
@@ -576,7 +586,8 @@ export async function ensureCliArgs(
 ): Promise<CliProfile> {
   const needsArgs = !hasPromptMechanism(profile.args)
   const needsOutput = wantsStructuredOutput(profile)
-  if (!needsArgs && !needsOutput) return profile
+  const needsReasoning = wantsReasoning(profile)
+  if (!needsArgs && !needsOutput && !needsReasoning) return profile
 
   const binary =
     findBinary(profile.command, platform.homeDir, workspace) ??
@@ -608,6 +619,11 @@ export async function ensureCliArgs(
   if (needsOutput && introspection?.proposal.outputArgs?.length) {
     repaired.outputArgs = introspection.proposal.outputArgs
     if (introspection.proposal.output) repaired.output = introspection.proposal.output
+    changed = true
+  }
+
+  if (needsReasoning && introspection?.proposal.thinkingArgs?.length) {
+    repaired.thinkingArgs = introspection.proposal.thinkingArgs
     changed = true
   }
 

@@ -34,6 +34,7 @@ interface Draft {
   planArgsText: string
   autoArgsText: string
   outputArgsText: string
+  thinkingArgsText: string
   continueArgsText: string
   modelsArgsText: string
   modelsFormat: 'lines' | 'json'
@@ -58,6 +59,7 @@ const EMPTY_DRAFT: Draft = {
   planArgsText: '',
   autoArgsText: '',
   outputArgsText: '',
+  thinkingArgsText: '',
   continueArgsText: '',
   modelsArgsText: '',
   modelsFormat: 'lines',
@@ -103,6 +105,7 @@ function draftFromProfile(profile: CliProfile): Draft {
     planArgsText: joinLines(profile.planArgs),
     autoArgsText: joinLines(profile.autoArgs),
     outputArgsText: joinLines(profile.outputArgs),
+    thinkingArgsText: joinLines(profile.thinkingArgs),
     continueArgsText: joinLines(profile.continueArgs),
     modelsArgsText: joinLines(profile.modelsArgs),
     modelsFormat: profile.modelsFormat ?? 'lines',
@@ -145,6 +148,9 @@ function profileFromDraft(draft: Draft): Record<string, unknown> {
     ...(splitLines(draft.autoArgsText).length ? { autoArgs: splitLines(draft.autoArgsText) } : {}),
     ...(splitLines(draft.outputArgsText).length
       ? { outputArgs: splitLines(draft.outputArgsText) }
+      : {}),
+    ...(splitLines(draft.thinkingArgsText).length
+      ? { thinkingArgs: splitLines(draft.thinkingArgsText) }
       : {}),
     ...(splitLines(draft.continueArgsText).length
       ? { continueArgs: splitLines(draft.continueArgsText) }
@@ -365,6 +371,9 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
           ...(proposal.planArgs ? { planArgsText: joinLines(proposal.planArgs) } : {}),
           ...(proposal.autoArgs ? { autoArgsText: joinLines(proposal.autoArgs) } : {}),
           ...(proposal.outputArgs ? { outputArgsText: joinLines(proposal.outputArgs) } : {}),
+          ...(proposal.thinkingArgs
+            ? { thinkingArgsText: joinLines(proposal.thinkingArgs) }
+            : {}),
           ...(proposal.continueArgs
             ? { continueArgsText: joinLines(proposal.continueArgs) }
             : {}),
@@ -1126,6 +1135,23 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
                 value={draft.outputArgsText}
                 placeholder={'--format\njson'}
                 onChange={(event) => setDraft({ ...draft, outputArgsText: event.target.value })}
+              />
+            </label>
+
+            <label className="cli-field">
+              <span>
+                Ragionamento{' '}
+                <span className="muted small">
+                  — la CLI racconta cosa sta pensando prima di agire
+                </span>
+              </span>
+              <textarea
+                rows={2}
+                value={draft.thinkingArgsText}
+                placeholder={'--thinking'}
+                onChange={(event) =>
+                  setDraft({ ...draft, thinkingArgsText: event.target.value })
+                }
               />
             </label>
 
