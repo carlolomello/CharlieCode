@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { createWriteStream } from 'node:fs'
-import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { app, BrowserWindow, dialog, net, shell } from 'electron'
@@ -111,6 +111,15 @@ function run(command: string, args: string[]): Promise<string> {
   })
 }
 
+async function exists(path: string): Promise<boolean> {
+  try {
+    await stat(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function download(
   asset: ReleaseAsset,
   target: string,
@@ -194,7 +203,12 @@ async function installMac(dmg: string, markInstalled: () => Promise<void>): Prom
     // flag: without clearing it the next launch is blocked by Gatekeeper.
     await run('xattr', ['-dr', 'com.apple.quarantine', staging]).catch(() => undefined)
 
-    await rm(previous, { recursive: true, force: true })
+    // A backup left by an update that died halfway must be gone before the
+    // swap: `mv` into an existing folder would nest the app inside it.
+    await rm(previous, { recursive: true, force: true }).catch(() => undefined)
+    if (await exists(previous)) {
+      throw new Error(`Non riesco a liberare ${previous}: rimuovilo e riprova.`)
+    }
     await run('mv', [target, previous])
     try {
       await run('mv', [staging, target])
