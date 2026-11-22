@@ -111,6 +111,24 @@ function run(command: string, args: string[]): Promise<string> {
   })
 }
 
+/**
+ * Deletes a tree that lives next to the app bundle.
+ *
+ * Deliberately not `fs.rm`: Electron patches `fs` to treat a `.asar` as a
+ * folder, so removing an app bundle from inside the app stops at
+ * `Contents/Resources/app.asar` and leaves half a backup behind. `/bin/rm`
+ * does not know about asar and deletes the tree it is given.
+ */
+async function removeTree(path: string): Promise<void> {
+  if (process.platform === 'win32') {
+    await rm(path, { recursive: true, force: true, maxRetries: 3, retryDelay: 500 }).catch(
+      () => undefined
+    )
+    return
+  }
+  await run('rm', ['-rf', path]).catch(() => undefined)
+}
+
 async function exists(path: string): Promise<boolean> {
   try {
     await stat(path)
@@ -197,7 +215,7 @@ async function installMac(dmg: string, markInstalled: () => Promise<void>): Prom
 
     const staging = `${target}.update`
     const previous = `${target}.old`
-    await rm(staging, { recursive: true, force: true })
+    await removeTree(staging)
     await run('ditto', [join(mount, bundle), staging])
     // The dmg was downloaded by the app, so the copy carries the quarantine
     // flag: without clearing it the next launch is blocked by Gatekeeper.
@@ -205,7 +223,7 @@ async function installMac(dmg: string, markInstalled: () => Promise<void>): Prom
 
     // A backup left by an update that died halfway must be gone before the
     // swap: `mv` into an existing folder would nest the app inside it.
-    await rm(previous, { recursive: true, force: true }).catch(() => undefined)
+    await removeTree(previous)
     if (await exists(previous)) {
       throw new Error(`Non riesco a liberare ${previous}: rimuovilo e riprova.`)
     }
@@ -222,7 +240,7 @@ async function installMac(dmg: string, markInstalled: () => Promise<void>): Prom
     await markInstalled()
   } finally {
     if (attached) await run('hdiutil', ['detach', mount, '-quiet']).catch(() => undefined)
-    await rm(mount, { recursive: true, force: true }).catch(() => undefined)
+    await removeTree(mount)
   }
 
   app.relaunch()
@@ -413,10 +431,5 @@ export async function cleanupPreviousBundles(): Promise<void> {
   if (process.platform !== 'darwin') return
   const bundle = appBundlePath()
   if (!bundle) return
-  await rm(`${bundle}.old`, {
-    recursive: true,
-    force: true,
-    maxRetries: 3,
-    retryDelay: 500
-  }).catch(() => undefined)
+  await removeTree(`${bundle}.old`)
 }
