@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { once } from 'node:events'
-import { createWriteStream } from 'node:fs'
+import { createReadStream, createWriteStream } from 'node:fs'
 import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
@@ -9,6 +10,8 @@ import type { UpdateCheckResult, UpdateStatus } from '../shared/ipc'
 import {
   decideUpdate,
   parseRelease,
+  sha256FromDigest,
+  summarizeReleaseNotes,
   type ReleaseAsset,
   type ReleaseInfo,
   type UpdateCandidate
@@ -46,6 +49,8 @@ export interface UpdateContext {
   window: BrowserWindow | null
   configPath: (...segments: string[]) => string
   send: (status: UpdateStatus) => void
+  /** Markdown of the release, shown as a short excerpt in the dialog. */
+  releaseNotes?: string
 }
 
 function buildTime(): string {
@@ -183,6 +188,24 @@ async function download(
     throw new Error('Il download si è interrotto prima della fine del file.')
   }
   onProgress(received, total || received)
+  await verifyDigest(target, asset)
+}
+
+/**
+ * Compares the file with the checksum GitHub computed when the asset was
+ * uploaded. Older uploads carry no digest, and then there is nothing to check:
+ * the size check above still catches a truncated download.
+ */
+async function verifyDigest(file: string, asset: ReleaseAsset): Promise<void> {
+  const expected = sha256FromDigest(asset.digest)
+  if (!expected) return
+
+  const hash = createHash('sha256')
+  for await (const chunk of createReadStream(file)) hash.update(chunk as Buffer)
+  if (hash.digest('hex') === expected) return
+
+  await rm(file, { force: true }).catch(() => undefined)
+  throw new Error('Il file scaricato non corrisponde a quello pubblicato (checksum).')
 }
 
 /** `/Applications/CharlieCode.app`, from the running executable. */
@@ -300,11 +323,13 @@ async function askToUpdate(
   // Verification hook, never set in normal use: answers "sì" without a click.
   if (process.env.CHARLIECODE_UPDATE_ACCEPT === '1') return true
 
+  const notes = summarizeReleaseNotes(context.releaseNotes)
   const detail = [
     candidate.sameVersion
       ? `La tua build è del ${formatDate(buildTime())}.`
       : `Hai la versione ${app.getVersion()}.`,
     `La nuova build è del ${formatDate(candidate.releasedAt)}.`,
+    ...(notes ? ['', 'Novità:', notes] : []),
     '',
     process.platform === 'darwin'
       ? 'Scarico il dmg e sostituisco l’app: si riapre da sola.'
@@ -346,6 +371,9 @@ export async function checkForUpdates(
   if (!release) {
     return { state: 'unavailable', message: 'Il repository non ha risposto.' }
   }
+  // Notes belong to the release, not to the candidate: the dialog reads them
+  // from here, so the question says what changed before anything is downloaded.
+  context.releaseNotes = release.body
 
   const state = await readState(context)
   const candidate = decideUpdate({
@@ -402,14 +430,25 @@ export async function checkForUpdates(
     const url = releaseLink(release.url) ?? RELEASE_PAGE
     context.send({ state: 'error', version: candidate.version, message, url })
 
+    // The dmg is still on disk: opening it is the manual way out when the swap
+    // did not work, and dragging the app over the old one is a step the user
+    // already knows.
+    const canOpenDmg =
+      process.platform === 'darwin' && /\.dmg$/i.test(target) && (await exists(target))
     const failure: Electron.MessageBoxOptions = {
       type: 'error',
       title: 'Aggiornamento non riuscito',
       message: 'Non sono riuscito a installare l’aggiornamento.',
-      detail: `${message}\n\nPuoi scaricarlo a mano dalla pagina della release.`,
-      buttons: ['Apri la pagina della release', 'Chiudi'],
+      detail: `${message}\n\n${
+        canOpenDmg
+          ? 'Posso aprire il dmg già scaricato: trascina CharlieCode nella cartella Applicazioni.'
+          : 'Puoi scaricarlo a mano dalla pagina della release.'
+      }`,
+      buttons: canOpenDmg
+        ? ['Apri il dmg', 'Apri la pagina della release', 'Chiudi']
+        : ['Apri la pagina della release', 'Chiudi'],
       defaultId: 0,
-      cancelId: 1,
+      cancelId: canOpenDmg ? 2 : 1,
       noLink: true
     }
     const parent =
@@ -417,7 +456,11 @@ export async function checkForUpdates(
     const choice = parent
       ? await dialog.showMessageBox(parent, failure)
       : await dialog.showMessageBox(failure)
-    if (choice.response === 0) await shell.openExternal(url).catch(() => undefined)
+    if (canOpenDmg && choice.response === 0) {
+      await shell.openPath(target).catch(() => undefined)
+    } else if (choice.response === (canOpenDmg ? 1 : 0)) {
+      await shell.openExternal(url).catch(() => undefined)
+    }
     return { state: 'unavailable', message }
   }
 }

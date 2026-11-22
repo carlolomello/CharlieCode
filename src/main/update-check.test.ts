@@ -5,6 +5,8 @@ import {
   isNewerVersion,
   parseRelease,
   pickAsset,
+  sha256FromDigest,
+  summarizeReleaseNotes,
   type ReleaseInfo
 } from './update-check'
 
@@ -64,6 +66,55 @@ describe('parseRelease', () => {
   it('senza tag non è una release', () => {
     expect(parseRelease({ assets: [] })).toBeUndefined()
     expect(parseRelease('nope')).toBeUndefined()
+  })
+
+  it('legge il digest e le note di rilascio', () => {
+    const parsed = parseRelease({
+      tag_name: 'v0.0.1',
+      body: '  ## Novità\n- **Aggiornamenti** più sicuri  ',
+      assets: [
+        {
+          id: 7,
+          name: 'CharlieCode-0.0.1.dmg',
+          browser_download_url: 'https://example.com/a.dmg',
+          digest: 'sha256:ABC',
+          size: 10
+        }
+      ]
+    })
+
+    expect(parsed?.body).toContain('Novità')
+    expect(parsed?.assets[0]?.digest).toBe('sha256:ABC')
+  })
+})
+
+describe('sha256FromDigest', () => {
+  it('accetta solo un sha256 completo', () => {
+    const hex = 'a'.repeat(64)
+    expect(sha256FromDigest(`sha256:${hex}`)).toBe(hex)
+    expect(sha256FromDigest(`SHA256:${hex.toUpperCase()}`)).toBe(hex)
+    expect(sha256FromDigest('sha256:abc')).toBeUndefined()
+    expect(sha256FromDigest('md5:abc')).toBeUndefined()
+    expect(sha256FromDigest(undefined)).toBeUndefined()
+  })
+})
+
+describe('summarizeReleaseNotes', () => {
+  it('toglie il markdown e tiene un testo leggibile', () => {
+    const text = summarizeReleaseNotes(
+      '# CharlieCode\n\n- **Nuovo:** [la pagina](https://example.com) degli aggiornamenti\n- `sha256` verificato'
+    )
+
+    expect(text).toContain('CharlieCode')
+    expect(text).toContain('· Nuovo: la pagina degli aggiornamenti')
+    expect(text).not.toContain('**')
+    expect(text).not.toContain('https://')
+  })
+
+  it('taglia le note lunghe e ignora quelle vuote', () => {
+    expect(summarizeReleaseNotes('x'.repeat(200), 50)).toHaveLength(51)
+    expect(summarizeReleaseNotes('   \n  ')).toBeUndefined()
+    expect(summarizeReleaseNotes(undefined)).toBeUndefined()
   })
 })
 

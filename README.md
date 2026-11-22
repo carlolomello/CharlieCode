@@ -37,9 +37,11 @@ The packaged app checks this repository when it opens. If the latest release has
 | "Newer" | Version first. Because the `v0.0.1` tag is rolling and its assets are replaced, the same version still counts when the asset was uploaded after this build — the build time is stamped into the app at compile time, with a 15-minute margin so an app never offers to update to itself. |
 | "Più tardi" | Remembered in `~/.charliecode/updates.json` for that asset only; the next release asks again. The build that gets installed is remembered too, so it never offers itself. |
 | On request | **Controlla aggiornamenti** at the bottom of the settings drawer runs the same check on the spot, ignoring a previous "più tardi", and says whether you are up to date. |
+| What changed | The dialog carries a short excerpt of the release notes, so the question says what the new build brings before anything is downloaded. |
+| Integrity | The downloaded file is hashed and compared with the `sha256` digest GitHub keeps for the asset. A mismatch deletes it and stops before the installer runs. Old uploads without a digest only get the size check. |
 | Backup | The replaced bundle stays next to the app as `CharlieCode.app.old` until the next launch has loaded its window. If a build does not start, restore it by hand: `mv /Applications/CharlieCode.app.old /Applications/CharlieCode.app`. |
 | Not in development | `pnpm dev` never checks, downloads or installs. |
-| Failure | Offline or an API error is silent on startup. A failed download or install shows the reason and opens the release page on request. |
+| Failure | Offline or an API error is silent on startup. A failed download or install shows the reason; on macOS it also offers the dmg it already downloaded, and either way the release page opens on request. |
 
 To exercise the whole path without touching the installed app, copy it somewhere harmless and run it with the two verification hooks:
 

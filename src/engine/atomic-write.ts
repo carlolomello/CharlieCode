@@ -1,4 +1,5 @@
-import { chmod, rename, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, rename, rm, writeFile } from 'node:fs/promises'
+import { dirname } from 'node:path'
 
 /**
  * Writes a file through a temporary sibling and a rename.
@@ -11,7 +12,7 @@ import { chmod, rename, rm, writeFile } from 'node:fs/promises'
  * losing atomicity is better than losing the message.
  */
 
-const RETRYABLE = new Set(['EPERM', 'EACCES', 'EBUSY', 'ENOTEMPTY', 'EEXIST'])
+const RETRYABLE = new Set(['EPERM', 'EACCES', 'EBUSY', 'ENOTEMPTY', 'EEXIST', 'ENOENT'])
 
 function isRetryable(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException | undefined)?.code
@@ -26,6 +27,15 @@ async function write(path: string, content: string, mode?: number): Promise<void
   await writeFile(path, content, { encoding: 'utf8', ...(mode !== undefined ? { mode } : {}) })
 }
 
+/**
+ * Creates the folder the file lives in. The callers that matter already do it,
+ * but a first run on a machine whose config folder does not exist yet (a fresh
+ * HOME, a portable install) used to fail on the rename with `ENOENT`.
+ */
+async function ensureParent(path: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true }).catch(() => undefined)
+}
+
 export interface WriteFileOptions {
   /** Permission bits, applied to the final file. */
   mode?: number
@@ -36,6 +46,7 @@ export async function writeFileAtomic(
   content: string,
   options: WriteFileOptions = {}
 ): Promise<void> {
+  await ensureParent(path)
   const temp = `${path}.${process.pid}.${Date.now()}.tmp`
   await write(temp, content, options.mode)
 
@@ -49,8 +60,10 @@ export async function writeFileAtomic(
         await rm(temp, { force: true }).catch(() => undefined)
         throw error
       }
-      // A read-only destination also makes Windows refuse the rename: clear the
-      // attribute and try again.
+      // The folder can be gone (a cleaned home, a folder removed while the app
+      // was writing), and a read-only destination also makes Windows refuse
+      // the rename: recreate it, clear the attribute and try again.
+      await ensureParent(path)
       if (attempt >= 1) {
         await chmod(path, 0o666).catch(() => undefined)
         await rm(path, { force: true }).catch(() => undefined)
@@ -62,6 +75,7 @@ export async function writeFileAtomic(
   // The destination stayed locked (an indexer, a backup tool, a second writer).
   // Writing in place keeps the conversation usable; the temporary file is
   // removed either way.
+  await ensureParent(path)
   try {
     await write(path, content, options.mode)
   } catch (error) {

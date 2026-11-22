@@ -23,6 +23,8 @@ export interface ReleaseAsset {
   /** Last upload of the asset: a rebuilt release keeps the same tag. */
   updatedAt: string
   size: number
+  /** `sha256:<hex>` computed by GitHub at upload; absent on old uploads. */
+  digest?: string
 }
 
 export interface ReleaseInfo {
@@ -31,6 +33,8 @@ export interface ReleaseInfo {
   version: string
   url: string
   publishedAt: string
+  /** Release notes in Markdown, as written on GitHub. */
+  body?: string
   assets: ReleaseAsset[]
 }
 
@@ -79,13 +83,50 @@ function parseAsset(value: unknown): ReleaseAsset | undefined {
   const url = typeof record.browser_download_url === 'string' ? record.browser_download_url : ''
   const id = typeof record.id === 'number' ? record.id : undefined
   if (!name || !url || id === undefined) return undefined
+  const digest = typeof record.digest === 'string' ? record.digest.trim() : ''
   return {
     id,
     name,
     url,
     updatedAt: typeof record.updated_at === 'string' ? record.updated_at : '',
-    size: typeof record.size === 'number' ? record.size : 0
+    size: typeof record.size === 'number' ? record.size : 0,
+    ...(digest ? { digest } : {})
   }
+}
+
+/** The hex half of a `sha256:<hex>` digest, or undefined when it is not one. */
+export function sha256FromDigest(digest: string | undefined): string | undefined {
+  const match = /^sha256:([0-9a-f]{64})$/i.exec((digest ?? '').trim())
+  return match?.[1]?.toLowerCase()
+}
+
+/**
+ * A readable excerpt of the release notes, for the dialog that asks whether to
+ * update.
+ *
+ * GitHub serves Markdown, and a native dialog shows plain text: the markup is
+ * dropped instead of being displayed literally. Long notes are cut — the
+ * dialog has to stay a question, not become a changelog.
+ */
+export function summarizeReleaseNotes(
+  body: string | undefined,
+  maxChars = 600
+): string | undefined {
+  if (!body) return undefined
+  const text = body
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/^\s{0,3}#{1,6}\s*/gm, '')
+    .replace(/^\s*[-*+]\s+/gm, '· ')
+    .replace(/[*_`>]/g, '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .join('\n')
+  if (!text) return undefined
+  return text.length > maxChars ? `${text.slice(0, maxChars).trimEnd()}…` : text
 }
 
 /** Reads the GitHub release payload; anything malformed is "no release". */
@@ -102,6 +143,7 @@ export function parseRelease(payload: unknown): ReleaseInfo | undefined {
     version: tag.replace(/^v/i, ''),
     url: typeof record.html_url === 'string' ? record.html_url : '',
     publishedAt: typeof record.published_at === 'string' ? record.published_at : '',
+    ...(typeof record.body === 'string' && record.body.trim() ? { body: record.body } : {}),
     assets
   }
 }

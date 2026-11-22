@@ -21,6 +21,16 @@ describe('writeFileAtomic', () => {
     expect(await readFile(path, 'utf8')).toBe('uno\n')
   })
 
+  // A fresh HOME has no ~/.charliecode yet: the rename used to fail with
+  // ENOENT before the folder existed.
+  it('crea la cartella di destinazione quando manca', async () => {
+    const path = join(dir, '.charliecode', 'sessions', 'config.json')
+
+    await writeFileAtomic(path, '{}\n')
+
+    expect(await readFile(path, 'utf8')).toBe('{}\n')
+  })
+
   it('sostituisce il contenuto e non lascia file temporanei', async () => {
     const path = join(dir, 'sessione.jsonl')
     await writeFile(path, 'vecchio\n', 'utf8')
