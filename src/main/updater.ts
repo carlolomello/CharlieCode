@@ -413,5 +413,10 @@ export async function cleanupPreviousBundles(): Promise<void> {
   if (process.platform !== 'darwin') return
   const bundle = appBundlePath()
   if (!bundle) return
-  await rm(`${bundle}.old`, { recursive: true, force: true }).catch(() => undefined)
+  await rm(`${bundle}.old`, {
+    recursive: true,
+    force: true,
+    maxRetries: 3,
+    retryDelay: 500
+  }).catch(() => undefined)
 }

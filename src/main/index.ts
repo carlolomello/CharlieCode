@@ -1799,8 +1799,13 @@ if (!gotSingleInstanceLock) {
     const window = createWindow()
 
     // The bundle an update replaced is kept until a launch gets this far, so a
-    // build that does not start still has its backup next to the app.
-    window.webContents.once('did-finish-load', () => void cleanupPreviousBundles())
+    // build that does not start still has its backup next to the app. The
+    // removal waits a little: deleting it the instant the window loaded raced
+    // with the processes of the previous app still shutting down, and left
+    // the backup half deleted.
+    window.webContents.once('did-finish-load', () => {
+      setTimeout(() => void cleanupPreviousBundles(), 10_000)
+    })
 
     // A new release is offered once the window is up: a dialog before the app
     // is visible looks like a crash. Offline is the normal case, and a failed
