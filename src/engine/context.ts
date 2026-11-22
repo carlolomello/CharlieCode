@@ -42,6 +42,10 @@ const DEFAULT_CONTEXT_WINDOW = 32_768
 const BUDGET_RATIO = 0.7
 const MAX_BUDGET = 200_000
 const MIN_BUDGET = 2_048
+/** Never ask a model for less room than a tool call needs to finish. */
+const MIN_OUTPUT_TOKENS = 2_048
+/** Ceiling for one answer: a whole file fits, and a runaway answer is stopped. */
+const MAX_OUTPUT_TOKENS = 16_384
 const DEFAULT_MIN_TURNS = 3
 const DEFAULT_TOOL_CHARS = 4_000
 const HARD_TOOL_CHARS = 800
@@ -71,6 +75,23 @@ export function contextBudget(caps?: Partial<Pick<ModelCaps, 'contextWindow'>>):
   const window =
     caps?.contextWindow && caps.contextWindow > 0 ? caps.contextWindow : DEFAULT_CONTEXT_WINDOW
   return Math.max(MIN_BUDGET, Math.min(MAX_BUDGET, Math.floor(window * BUDGET_RATIO)))
+}
+
+/**
+ * Room for one answer, tool call included.
+ *
+ * A coding turn often writes a whole file in a single `write` call. At 4096
+ * tokens the JSON was cut mid-way, the call failed, and the same model looked
+ * unable to write code while it wrote the file fine in a CLI. The cap follows
+ * the model's window instead of being a constant: big models get room, small
+ * ones keep a cap that still fits their context.
+ */
+export function outputTokenBudget(
+  caps?: Partial<Pick<ModelCaps, 'contextWindow'>>
+): number {
+  const window =
+    caps?.contextWindow && caps.contextWindow > 0 ? caps.contextWindow : DEFAULT_CONTEXT_WINDOW
+  return Math.max(MIN_OUTPUT_TOKENS, Math.min(MAX_OUTPUT_TOKENS, Math.floor(window / 4)))
 }
 
 /* ------------------------------- sanitize ------------------------------- */

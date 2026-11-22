@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveCandidates } from './client'
+import { reasoningOptions, resolveCandidates } from './client'
 import type { CharlieCodeConfig, ModelEntry } from './types'
 
 const provider = {
@@ -62,5 +62,42 @@ describe('resolveCandidates', () => {
     const orphan = { ...model('orphan'), providerId: 'ghost' }
     const { candidates } = resolveCandidates(request, { ...deps, models: [...models, orphan] })
     expect(candidates.some((candidate) => candidate.model.providerId === 'ghost')).toBe(false)
+  })
+})
+
+describe('reasoningOptions', () => {
+  const openrouter = {
+    id: 'openrouter',
+    label: 'OpenRouter',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    kind: 'direct' as const,
+    enabled: true
+  }
+
+  it('su OpenRouter usa il campo unificato reasoning', () => {
+    expect(reasoningOptions(openrouter, model('deepseek'), 'high')).toEqual({
+      openrouter: { reasoning: { effort: 'high' } }
+    })
+  })
+
+  it('sugli endpoint OpenAI-compatible usa reasoning_effort', () => {
+    expect(reasoningOptions(provider, model('deepseek'), 'low')).toEqual({
+      freellmapi: { reasoningEffort: 'low' }
+    })
+  })
+
+  it('traduce max in un livello che il provider accetta', () => {
+    const deepseek: ModelEntry = { ...model('deepseek'), efforts: ['none', 'low', 'high', 'max'] }
+    const output = reasoningOptions(provider, deepseek, 'max')
+    expect(output).toEqual({ freellmapi: { reasoningEffort: 'high' } })
+  })
+
+  it('non manda nulla quando l’effort è spento', () => {
+    expect(reasoningOptions(provider, model('deepseek'), 'none')).toBeUndefined()
+  })
+
+  it('non manda un livello che il modello non dichiara', () => {
+    const chat = { ...model('plain'), efforts: ['none' as const] }
+    expect(reasoningOptions(provider, chat, 'high')).toBeUndefined()
   })
 })

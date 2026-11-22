@@ -1,6 +1,7 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { APICallError, streamText, type ModelMessage } from 'ai'
 import { findModel, resetCatalogCache } from './catalog'
+import { outputTokenBudget } from './context'
 import { resolveApiKey } from './config'
 import { getDetectedBaseUrl } from './discovery'
 import type { Platform } from './platform'
@@ -178,6 +179,36 @@ function resolveEffort(request: StreamRequest, model: ModelEntry, config: Charli
 }
 
 /**
+ * Reasoning settings for one request, in the dialect of its provider.
+ *
+ * Two things used to make reasoning silently useless or harmful:
+ *  - `reasoning_effort` was sent with our own level names, and `max` is not a
+ *    value an OpenAI-compatible endpoint accepts: the request came back 400;
+ *  - every provider got the OpenAI field, but a router like OpenRouter reads
+ *    the unified `reasoning: { effort }` object, so the setting did nothing
+ *    there and the model answered at its default reasoning level.
+ *
+ * A level the model does not advertise is never sent: a global default of
+ * `high` must not turn a plain chat model into a 400.
+ */
+export function reasoningOptions(
+  provider: ProviderConfig,
+  model: ModelEntry,
+  effort: EffortLevel
+): Record<string, Record<string, string | { effort: string }>> | undefined {
+  if (effort === 'none') return undefined
+  if (model.efforts.length > 0 && !model.efforts.includes(effort)) return undefined
+
+  const level = effort === 'max' ? 'high' : effort
+  const openrouter =
+    provider.id === 'openrouter' || /openrouter\.ai/i.test(provider.baseUrl)
+
+  return openrouter
+    ? { [provider.id]: { reasoning: { effort: level } } }
+    : { [provider.id]: { reasoningEffort: level } }
+}
+
+/**
  * Streams a completion, walking the configured fallback chain when an attempt
  * fails before producing any text (429, 5xx, dead router, ...).
  *
@@ -214,14 +245,13 @@ export async function* streamChat(
       let streamError: unknown
       try {
         const compat = await providerFor(deps.platform, provider)
-        const providerOptions =
-          effort !== 'none' ? { [provider.id]: { reasoningEffort: effort } } : undefined
+        const providerOptions = reasoningOptions(provider, model, effort)
 
         const result = streamText({
           model: compat.chatModel(model.id),
           system: request.system,
           messages: toModelMessages(request.messages),
-          maxOutputTokens: request.maxOutputTokens ?? 2048,
+          maxOutputTokens: request.maxOutputTokens ?? outputTokenBudget(model.caps),
           temperature: request.temperature,
           abortSignal: request.signal,
           maxRetries: 0,

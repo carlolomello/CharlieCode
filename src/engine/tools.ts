@@ -50,6 +50,8 @@ const IGNORED = new Set([
 ])
 
 const MAX_READ_BYTES = 400_000
+/** A file read through an explicit window may be much larger than a whole read. */
+const MAX_WINDOW_READ_BYTES = 20_000_000
 const MAX_READ_LINES = 2000
 const MAX_OUTPUT = 40_000
 const MAX_WALK_FILES = 20_000
@@ -471,7 +473,18 @@ export function buildTools(runtime: ToolRuntime) {
       await ensureInsideProject(runtime, target)
       const info = await stat(target.abs).catch(() => undefined)
       if (!info?.isFile()) throw new Error(`File non trovato: ${target.rel}`)
-      if (info.size > MAX_READ_BYTES) throw new Error(`File troppo grande (${describeSize(info.size)}).`)
+      // A window is how a big file is read: refusing the whole call left the
+      // model unable to see a 500 KB file at all, while the same model with a
+      // CLI read the slice it asked for.
+      const windowed = offset !== undefined || limit !== undefined
+      if (!windowed && info.size > MAX_READ_BYTES) {
+        throw new Error(
+          `File troppo grande (${describeSize(info.size)}): leggilo a pezzi con offset/limit.`
+        )
+      }
+      if (info.size > MAX_WINDOW_READ_BYTES) {
+        throw new Error(`File troppo grande (${describeSize(info.size)}).`)
+      }
 
       const raw = await readFile(target.abs, 'utf8')
       const all = raw.replace(/\r\n/g, '\n').split('\n')

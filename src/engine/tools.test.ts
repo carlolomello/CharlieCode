@@ -88,6 +88,18 @@ describe('file tools', () => {
     expect(output).toContain('riga due')
   })
 
+  it('legge a finestra un file più grande del limite di lettura intera', async () => {
+    const lines = Array.from({ length: 600 }, (_, index) => `riga ${index + 1} ${'x'.repeat(800)}`)
+    await writeFile(join(workspace, 'big.txt'), `${lines.join('\n')}\n`)
+
+    expect(await run('read', { path: 'big.txt' })).toContain('offset/limit')
+
+    const output = await run('read', { path: 'big.txt', offset: 500, limit: 3 })
+    expect(output).toContain('riga 500')
+    expect(output).toContain('riga 502')
+    expect(output).not.toContain('riga 503')
+  })
+
   it('preserva i fine riga CRLF quando riscrive un file esistente', async () => {
     await writeFile(join(workspace, 'win.txt'), 'a\r\nb\r\n')
     await run('write', { path: 'win.txt', content: 'a\nb\nc\n' })

@@ -1,6 +1,7 @@
 import { streamText, stepCountIs, type ModelMessage, type ToolSet } from 'ai'
 import { findModel } from './catalog'
-import { providerFor, resolveCandidates } from './client'
+import { providerFor, reasoningOptions, resolveCandidates } from './client'
+import { outputTokenBudget } from './context'
 import { buildTools, toolTitle, type ToolRuntime } from './tools'
 import { sanitizeMessages } from './context-store'
 import { runExternalAgent } from './external-agents'
@@ -583,8 +584,7 @@ export async function runAgent(
       try {
         const compat = await providerFor(deps.platform, provider)
         const effort = request.effort ?? model.effort ?? deps.config.effort
-        const providerOptions =
-          effort !== 'none' ? { [provider.id]: { reasoningEffort: effort } } : undefined
+        const providerOptions = reasoningOptions(provider, model, effort)
 
         const result = streamText({
           model: compat.chatModel(model.id),
@@ -592,7 +592,9 @@ export async function runAgent(
           messages: inputMessages,
           tools: toolset(runtime, allow),
           stopWhen: stepCountIs(deps.maxSteps ?? deps.config.agents.maxSteps),
-          maxOutputTokens: request.maxOutputTokens ?? 4096,
+          // A file written in one `write` call must fit: 4096 tokens cut it
+          // mid-way and the model looked unable to code.
+          maxOutputTokens: request.maxOutputTokens ?? outputTokenBudget(model.caps),
           abortSignal: request.signal,
           maxRetries: 0,
           onError: ({ error: caught }) => {

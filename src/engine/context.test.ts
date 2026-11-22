@@ -8,9 +8,27 @@ import {
   contextStats,
   estimateMessagesTokens,
   estimateTokens,
+  outputTokenBudget,
   stripImages,
   trimToolOutputs
 } from './context'
+
+describe('outputTokenBudget', () => {
+  it('dà più spazio a un modello con una finestra grande', () => {
+    expect(outputTokenBudget({ contextWindow: 128_000 })).toBe(16_384)
+    expect(outputTokenBudget({ contextWindow: 32_768 })).toBe(8_192)
+  })
+
+  it('non chiede più di quanto stia nella finestra di un modello piccolo', () => {
+    expect(outputTokenBudget({ contextWindow: 8_192 })).toBe(2_048)
+    expect(outputTokenBudget({ contextWindow: 1_000 })).toBe(2_048)
+  })
+
+  it('usa la finestra predefinita quando il modello non la dichiara', () => {
+    expect(outputTokenBudget()).toBe(8_192)
+    expect(outputTokenBudget({})).toBe(8_192)
+  })
+})
 
 /** One user request, one tool call and its result: the atomic unit. */
 function turn(index: number, size = 300): ModelMessage[] {
