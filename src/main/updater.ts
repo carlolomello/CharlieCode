@@ -73,9 +73,12 @@ async function readState(context: UpdateContext): Promise<UpdateState> {
 }
 
 async function writeState(context: UpdateContext, state: UpdateState): Promise<void> {
-  await writeFile(context.configPath(STATE_FILE), JSON.stringify(state, null, 2), 'utf8').catch(
-    () => undefined
-  )
+  const file = context.configPath(STATE_FILE)
+  // On a first run the config folder may not exist yet. Losing this file would
+  // mean forgetting "più tardi" and the asset just installed, which is what
+  // keeps the app from offering itself in a loop.
+  await mkdir(dirname(file), { recursive: true }).catch(() => undefined)
+  await writeFile(file, JSON.stringify(state, null, 2), 'utf8').catch(() => undefined)
 }
 
 async function fetchRelease(): Promise<ReleaseInfo | undefined> {
