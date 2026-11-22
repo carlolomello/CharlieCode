@@ -23,6 +23,7 @@ import type {
   PermissionEnvelope,
   PluginStatus,
   ProviderStatus,
+  UpdateStatus,
   RoutersStatus,
   RoutingStatus,
   SkillInfo,
@@ -135,6 +136,16 @@ const api: CharlieCodeApi = {
     ipcRenderer.on('charliecode:config:changed', listener)
     return () => {
       ipcRenderer.removeListener('charliecode:config:changed', listener)
+    }
+  },
+
+  onUpdateStatus: (callback: (status: UpdateStatus) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, status: UpdateStatus): void => {
+      callback(status)
+    }
+    ipcRenderer.on('charliecode:update:status', listener)
+    return () => {
+      ipcRenderer.removeListener('charliecode:update:status', listener)
     }
   },
 

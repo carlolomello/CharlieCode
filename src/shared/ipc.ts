@@ -132,6 +132,16 @@ export interface PermissionEnvelope {
   request: PermissionRequest
 }
 
+/**
+ * A self-update the user accepted at startup. The question itself is asked in
+ * the main process; the renderer only shows the progress of the download and
+ * the outcome, so a slow connection is visible instead of silent.
+ */
+export type UpdateStatus =
+  | { state: 'downloading'; version: string; received: number; total: number }
+  | { state: 'installing'; version: string }
+  | { state: 'error'; version?: string; message: string; url?: string }
+
 export interface CharlieCodeApi {
   info(): Promise<AppInfo>
   models(): Promise<ModelsResponse>
@@ -182,6 +192,8 @@ export interface CharlieCodeApi {
   onModelsChanged(callback: () => void): () => void
   /** The agent changed the app configuration: refresh providers, plugins and routing. */
   onConfigChanged(callback: () => void): () => void
+  /** Progress of a self-update accepted at startup. */
+  onUpdateStatus(callback: (status: UpdateStatus) => void): () => void
   respondPermission(permissionId: string, decision: PermissionDecision): Promise<void>
 
   openConfigDir(): Promise<void>

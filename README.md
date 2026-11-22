@@ -27,6 +27,18 @@ xattr -dr com.apple.quarantine /Applications/CharlieCode.app
 
 On Windows, SmartScreen may warn about an unsigned binary: *More info* → *Run anyway*.
 
+### Updates
+
+The packaged app checks this repository when it opens. If the latest release has something newer than the build you are running, a dialog says which build is on the release page and offers **Aggiorna ora** / **Più tardi**. Yes downloads the installer for this machine and installs it: on macOS the dmg is mounted and the bundle swapped in place, on Windows the NSIS installer runs silently into the folder the app already uses. Either way the app relaunches itself; the download progress is a banner at the top of the window, and a failure there explains itself and links to the release page.
+
+| Detail | Behaviour |
+| --- | --- |
+| Asset | `-arm64.dmg` on Apple Silicon (Intel dmg as fallback), `.dmg` on Intel, `Setup.exe` on Windows. Nothing is offered elsewhere. |
+| "Newer" | Version first. Because the `v0.0.1` tag is rolling and its assets are replaced, the same version still counts when the asset was uploaded after this build — the build time is stamped into the app at compile time, with a 15-minute margin so an app never offers to update to itself. |
+| "Più tardi" | Remembered in `~/.charliecode/updates.json` for that asset only; the next release asks again. |
+| Not in development | `pnpm dev` never checks, downloads or installs. |
+| Failure | Offline or an API error is silent on startup. A failed download or install shows the reason and opens the release page on request. |
+
 ### From source
 
 ```bash

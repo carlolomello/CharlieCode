@@ -12,6 +12,11 @@ const nodeExternals = ['electron', ...builtinModules, ...builtinModules.map((m) 
 // add it to `nodeExternals` and make sure it ships in `files` of electron-builder.
 export default defineConfig({
   main: {
+    // The build stamp is what the update check compares with the release: the
+    // tag is rolling, so the assets' upload time is the only "newer" signal.
+    define: {
+      __BUILD_TIME__: JSON.stringify(process.env.BUILD_TIME ?? new Date().toISOString())
+    },
     build: {
       outDir: 'out/main',
       // electron-vite 6 externalizes every dependency by default. `ai` and

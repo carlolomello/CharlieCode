@@ -62,6 +62,7 @@ import {
 } from '../engine/cli-profiles'
 import { dockerAvailable, hasBinary, probeEndpoint, scanLocalEndpoints } from '../engine/local'
 import { createPlatform } from '../engine/platform'
+import { checkForUpdates } from './updater'
 import { ensureProjectMemory, resolvePlugins } from '../engine/plugins'
 import { suggestSetup } from '../engine/advisor'
 import { changeDiff, initRepository, listChanges, revertChange, workspacePath } from '../engine/changes'
@@ -124,11 +125,20 @@ import type {
   WorkspaceChanges,
   RoutersStatus,
   RoutingStatus,
+  UpdateStatus,
   WorkspaceDirListing,
   WorkspaceFile
 } from '../shared/ipc'
 
 const platform = createPlatform()
+
+/** Progress of a self-update, to every window that is open. */
+function sendUpdateStatus(status: UpdateStatus): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) window.webContents.send('charliecode:update:status', status)
+  }
+}
+
 const inFlight = new Map<string, AbortController>()
 /** One registry per running turn, so a card can stop a single worker. */
 const cancellations = new Map<string, TurnCancellation>()
@@ -1771,7 +1781,18 @@ if (!gotSingleInstanceLock) {
 
   app.whenReady().then(() => {
     registerIpc()
-    createWindow()
+    const window = createWindow()
+
+    // A new release is offered once the window is up: a dialog before the app
+    // is visible looks like a crash. Offline is the normal case, and a failed
+    // check stays silent.
+    setTimeout(() => {
+      void checkForUpdates({
+        window,
+        configPath: (...segments) => platform.configPath(...segments),
+        send: sendUpdateStatus
+      })
+    }, 2_500)
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()

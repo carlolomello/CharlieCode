@@ -13,7 +13,8 @@ import type {
   ProviderStatus,
   SkillInfo,
   RoutersStatus,
-  RoutingStatus
+  RoutingStatus,
+  UpdateStatus
 } from '../../shared/ipc'
 import { Mascot, MascotDesk, MascotTeam, type MascotMood } from './components/Mascot'
 import { Sidebar } from './components/Sidebar'
@@ -26,6 +27,7 @@ import { ProjectWizard } from './components/ProjectWizard'
 import { ChangesPanel } from './components/ChangesPanel'
 import { WorkbenchPanel } from './components/WorkbenchPanel'
 import { ToolActivity } from './components/ToolActivity'
+import { UpdateBanner } from './components/UpdateBanner'
 import { ThinkingBlock } from './components/ThinkingBlock'
 import { ModelPicker } from './components/ModelPicker'
 
@@ -110,6 +112,8 @@ export default function App() {
   const [mode, setMode] = useState<'plan' | 'build'>('build')
   const [workspace, setWorkspace] = useState<string | undefined>(undefined)
   const [fatal, setFatal] = useState<string | null>(null)
+  /** Download of an update the user accepted at startup, when there is one. */
+  const [update, setUpdate] = useState<UpdateStatus | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   /** Which drawer section is on screen; the drawer is tabbed, not scrolled. */
   const [drawerTab, setDrawerTab] = useState<DrawerSection>('models')
@@ -364,6 +368,10 @@ export default function App() {
       }),
     [refreshProviders, refreshModels, refreshPlugins, refreshRouting, refreshAutoApprove]
   )
+
+  // A self-update is decided in the main process; here only its progress is
+  // shown, so a slow download is visible instead of silent.
+  useEffect(() => window.charliecode.onUpdateStatus(setUpdate), [])
 
   // Only follow the stream when the user is already at the bottom; otherwise
   // reading scrollback would be yanked away on every token.
@@ -1000,6 +1008,8 @@ export default function App() {
             ))}
           </div>
         )}
+
+        {update && <UpdateBanner status={update} onDismiss={() => setUpdate(null)} />}
 
         {fatal && (
           <div className="banner error">

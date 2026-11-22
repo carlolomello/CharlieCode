@@ -559,6 +559,42 @@ button.ghost.small {
   color: var(--danger);
 }
 
+.banner.update {
+  background: #14202a;
+  color: var(--accent, #7fc4ff);
+}
+
+.banner.update.error {
+  background: #2a1618;
+  color: var(--danger);
+}
+
+.update-bar {
+  display: block;
+  height: 3px;
+  margin-top: 6px;
+  border-radius: 2px;
+  background: #ffffff1a;
+  overflow: hidden;
+}
+
+.update-bar > span {
+  display: block;
+  height: 100%;
+  background: currentColor;
+  transition: width 200ms linear;
+}
+
+.banner .link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: inherit;
+}
+
 /* ---------- content ---------- */
 
 .scroll {
