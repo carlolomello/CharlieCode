@@ -5,12 +5,13 @@ import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { app, BrowserWindow, dialog, net, shell } from 'electron'
-import type { UpdateStatus } from '../shared/ipc'
+import type { UpdateCheckResult, UpdateStatus } from '../shared/ipc'
 import {
   decideUpdate,
   parseRelease,
   type ReleaseAsset,
-  type ReleaseInfo
+  type ReleaseInfo,
+  type UpdateCandidate
 } from './update-check'
 
 /**
@@ -36,6 +37,8 @@ declare const __BUILD_TIME__: string
 interface UpdateState {
   /** An asset the user said "later" to. A newer build asks again. */
   dismissedAssetId?: number
+  /** The asset this copy was installed from, once an update has run. */
+  installedAssetId?: number
   checkedAt?: string
 }
 
@@ -165,7 +168,7 @@ function appBundlePath(): string | undefined {
  * to the old one and moved into place, so a failure can put the old one back
  * instead of leaving the machine without an app.
  */
-async function installMac(dmg: string): Promise<void> {
+async function installMac(dmg: string, markInstalled: () => Promise<void>): Promise<void> {
   const target = appBundlePath()
   if (!target) throw new Error('Non riesco a capire dove è installata l’app.')
 
@@ -196,7 +199,10 @@ async function installMac(dmg: string): Promise<void> {
       await run('mv', [previous, target]).catch(() => undefined)
       throw error
     }
-    await rm(previous, { recursive: true, force: true }).catch(() => undefined)
+    // `previous` is kept on purpose: if this build does not start, the backup
+    // is still next to the app. `cleanupPreviousBundles` removes it only once
+    // a launch gets far enough to load its window.
+    await markInstalled()
   } finally {
     if (attached) await run('hdiutil', ['detach', mount, '-quiet']).catch(() => undefined)
     await rm(mount, { recursive: true, force: true }).catch(() => undefined)
@@ -207,8 +213,14 @@ async function installMac(dmg: string): Promise<void> {
 }
 
 /** Runs the NSIS installer silently, into the folder the app already uses. */
-async function installWindows(installer: string): Promise<void> {
+async function installWindows(
+  installer: string,
+  markInstalled: () => Promise<void>
+): Promise<void> {
   const directory = dirname(app.getPath('exe'))
+  // The installer is already on disk and silent; recording it here keeps the
+  // app that reopens from offering the same file again.
+  await markInstalled()
   const child = spawn(installer, ['/S', `/D=${directory}`], {
     detached: true,
     stdio: 'ignore'
@@ -219,13 +231,17 @@ async function installWindows(installer: string): Promise<void> {
   app.quit()
 }
 
-async function install(downloaded: string, asset: ReleaseAsset): Promise<void> {
+async function install(
+  downloaded: string,
+  asset: ReleaseAsset,
+  markInstalled: () => Promise<void>
+): Promise<void> {
   if (process.platform === 'darwin' && /\.dmg$/i.test(asset.name)) {
-    await installMac(downloaded)
+    await installMac(downloaded, markInstalled)
     return
   }
   if (process.platform === 'win32' && /\.exe$/i.test(asset.name)) {
-    await installWindows(downloaded)
+    await installWindows(downloaded, markInstalled)
     return
   }
   throw new Error(`Nessun programma di installazione per ${asset.name}.`)
@@ -236,28 +252,18 @@ function releaseLink(url: string | undefined): string | undefined {
   return url.startsWith('https://github.com/carlolomello/CharlieCode/') ? url : undefined
 }
 
-/**
- * Checks once and, when there is something newer, asks before doing anything.
- * Every failure is reported to the renderer and — when the download or the
- * install failed — offered as a link to the release page.
- */
-export async function checkForUpdates(context: UpdateContext): Promise<void> {
-  if (!app.isPackaged) return
+/** Asked from the drawer: "più tardi" does not apply, the user wants to know. */
+export interface CheckOptions {
+  manual?: boolean
+}
 
-  const release = await fetchRelease().catch(() => undefined)
-  if (!release) return
-
-  const state = await readState(context)
-  const candidate = decideUpdate({
-    release,
-    currentVersion: app.getVersion(),
-    buildTime: buildTime(),
-    platform: process.platform,
-    arch: process.arch,
-    ...(state.dismissedAssetId !== undefined ? { dismissedAssetId: state.dismissedAssetId } : {})
-  })
-  await writeState(context, { ...state, checkedAt: new Date().toISOString() })
-  if (!candidate) return
+/** The dialog that asks the question, and the hook that skips it. */
+async function askToUpdate(
+  context: UpdateContext,
+  candidate: UpdateCandidate
+): Promise<boolean> {
+  // Verification hook, never set in normal use: answers "sì" without a click.
+  if (process.env.CHARLIECODE_UPDATE_ACCEPT === '1') return true
 
   const detail = [
     candidate.sameVersion
@@ -281,17 +287,54 @@ export async function checkForUpdates(context: UpdateContext): Promise<void> {
     noLink: true
   }
   const window = context.window && !context.window.isDestroyed() ? context.window : undefined
-  const answer = window
-    ? await dialog.showMessageBox(window, options)
-    : await dialog.showMessageBox(options)
+  return window
+    ? (await dialog.showMessageBox(window, options)).response === 0
+    : (await dialog.showMessageBox(options)).response === 0
+}
 
-  if (answer.response !== 0) {
+/**
+ * Checks once and, when there is something newer, asks before doing anything.
+ * Returns what happened so the drawer can say "sei aggiornato"; the startup
+ * call ignores the answer. Every failure is reported to the renderer and —
+ * when the download or the install failed — offered as a link to the release
+ * page.
+ */
+export async function checkForUpdates(
+  context: UpdateContext,
+  request: CheckOptions = {}
+): Promise<UpdateCheckResult> {
+  if (!app.isPackaged) {
+    return { state: 'unavailable', message: 'Il controllo gira solo nell’app installata.' }
+  }
+
+  const release = await fetchRelease().catch(() => undefined)
+  if (!release) {
+    return { state: 'unavailable', message: 'Il repository non ha risposto.' }
+  }
+
+  const state = await readState(context)
+  const candidate = decideUpdate({
+    release,
+    currentVersion: app.getVersion(),
+    buildTime: buildTime(),
+    platform: process.platform,
+    arch: process.arch,
+    ...(request.manual ? {} : { dismissedAssetId: state.dismissedAssetId }),
+    ...(state.installedAssetId !== undefined ? { installedAssetId: state.installedAssetId } : {}),
+    // Verification hook: a copy of the app in a scratch folder has to be able
+    // to exercise the install path against the build it already runs.
+    force: process.env.CHARLIECODE_UPDATE_FORCE === '1'
+  })
+  await writeState(context, { ...state, checkedAt: new Date().toISOString() })
+  if (!candidate) return { state: 'up-to-date' }
+
+  if (!(await askToUpdate(context, candidate))) {
     await writeState(context, {
       ...state,
       checkedAt: new Date().toISOString(),
       dismissedAssetId: candidate.asset.id
     })
-    return
+    return { state: 'declined', version: candidate.version }
   }
 
   const target = join(tmpdir(), `charliecode-${Date.now()}-${basename(candidate.asset.name)}`)
@@ -307,7 +350,18 @@ export async function checkForUpdates(context: UpdateContext): Promise<void> {
       context.send({ state: 'downloading', version: candidate.version, received, total })
     })
     context.send({ state: 'installing', version: candidate.version })
-    await install(target, candidate.asset)
+    // Recorded before the relaunch, so the build that starts does not offer
+    // the installer it was just made from.
+    const markInstalled = async (): Promise<void> => {
+      await writeState(context, {
+        ...state,
+        checkedAt: new Date().toISOString(),
+        installedAssetId: candidate.asset.id
+      })
+    }
+    await install(target, candidate.asset, markInstalled)
+    // Unreachable in practice: both installers end the app. The type needs it.
+    return { state: 'offered', version: candidate.version }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     const url = releaseLink(release.url) ?? RELEASE_PAGE
@@ -323,9 +377,24 @@ export async function checkForUpdates(context: UpdateContext): Promise<void> {
       cancelId: 1,
       noLink: true
     }
-    const choice = window
-      ? await dialog.showMessageBox(window, failure)
+    const parent =
+      context.window && !context.window.isDestroyed() ? context.window : undefined
+    const choice = parent
+      ? await dialog.showMessageBox(parent, failure)
       : await dialog.showMessageBox(failure)
     if (choice.response === 0) await shell.openExternal(url).catch(() => undefined)
+    return { state: 'unavailable', message }
   }
+}
+
+/**
+ * Removes the backup an update leaves next to the app. Called once a launch
+ * has loaded its window: until then, `.old` is what a build that does not
+ * start can fall back to by hand.
+ */
+export async function cleanupPreviousBundles(): Promise<void> {
+  if (process.platform !== 'darwin') return
+  const bundle = appBundlePath()
+  if (!bundle) return
+  await rm(`${bundle}.old`, { recursive: true, force: true }).catch(() => undefined)
 }

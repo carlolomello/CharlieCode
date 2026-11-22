@@ -133,6 +133,10 @@ export interface DecideInput {
   arch: string
   /** An asset the user already said "later" to. */
   dismissedAssetId?: number
+  /** An asset that was already installed: it is not an update any more. */
+  installedAssetId?: number
+  /** Verification only: ignore the build margin. */
+  force?: boolean
   marginMs?: number
 }
 
@@ -140,13 +144,14 @@ export function decideUpdate(input: DecideInput): UpdateCandidate | undefined {
   const asset = pickAsset(input.release.assets, input.platform, input.arch)
   if (!asset) return undefined
   if (input.dismissedAssetId === asset.id) return undefined
+  if (input.installedAssetId === asset.id) return undefined
 
   const newer = isNewerVersion(input.release.version, input.currentVersion)
   const same = !newer && !isNewerVersion(input.currentVersion, input.release.version)
   // A release older than the app is not an update.
   if (!newer && !same) return undefined
 
-  if (same) {
+  if (same && !input.force) {
     const uploaded = Date.parse(asset.updatedAt)
     const built = Date.parse(input.buildTime)
     if (!Number.isFinite(uploaded) || !Number.isFinite(built)) return undefined

@@ -142,6 +142,13 @@ export type UpdateStatus =
   | { state: 'installing'; version: string }
   | { state: 'error'; version?: string; message: string; url?: string }
 
+/** Outcome of a check the user asked for from the drawer. */
+export interface UpdateCheckResult {
+  state: 'up-to-date' | 'offered' | 'declined' | 'unavailable'
+  version?: string
+  message?: string
+}
+
 export interface CharlieCodeApi {
   info(): Promise<AppInfo>
   models(): Promise<ModelsResponse>
@@ -194,6 +201,8 @@ export interface CharlieCodeApi {
   onConfigChanged(callback: () => void): () => void
   /** Progress of a self-update accepted at startup. */
   onUpdateStatus(callback: (status: UpdateStatus) => void): () => void
+  /** Asks the repository again; the dialog and the banner belong to main. */
+  checkForUpdates(): Promise<UpdateCheckResult>
   respondPermission(permissionId: string, decision: PermissionDecision): Promise<void>
 
   openConfigDir(): Promise<void>

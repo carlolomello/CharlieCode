@@ -35,9 +35,20 @@ The packaged app checks this repository when it opens. If the latest release has
 | --- | --- |
 | Asset | `-arm64.dmg` on Apple Silicon (Intel dmg as fallback), `.dmg` on Intel, `Setup.exe` on Windows. Nothing is offered elsewhere. |
 | "Newer" | Version first. Because the `v0.0.1` tag is rolling and its assets are replaced, the same version still counts when the asset was uploaded after this build — the build time is stamped into the app at compile time, with a 15-minute margin so an app never offers to update to itself. |
-| "Più tardi" | Remembered in `~/.charliecode/updates.json` for that asset only; the next release asks again. |
+| "Più tardi" | Remembered in `~/.charliecode/updates.json` for that asset only; the next release asks again. The build that gets installed is remembered too, so it never offers itself. |
+| On request | **Controlla aggiornamenti** at the bottom of the settings drawer runs the same check on the spot, ignoring a previous "più tardi", and says whether you are up to date. |
+| Backup | The replaced bundle stays next to the app as `CharlieCode.app.old` until the next launch has loaded its window. If a build does not start, restore it by hand: `mv /Applications/CharlieCode.app.old /Applications/CharlieCode.app`. |
 | Not in development | `pnpm dev` never checks, downloads or installs. |
 | Failure | Offline or an API error is silent on startup. A failed download or install shows the reason and opens the release page on request. |
+
+To exercise the whole path without touching the installed app, copy it somewhere harmless and run it with the two verification hooks:
+
+```bash
+cp -R /Applications/CharlieCode.app /tmp/cc-test/CharlieCode.app
+CHARLIECODE_UPDATE_FORCE=1 CHARLIECODE_UPDATE_ACCEPT=1 /tmp/cc-test/CharlieCode.app/Contents/MacOS/CharlieCode
+```
+
+`CHARLIECODE_UPDATE_FORCE` skips the build margin (so the build already running counts as an update) and `CHARLIECODE_UPDATE_ACCEPT` answers "sì" without a click. Both are read only by a packaged app, and both are for that copy: run normally, the app never sees them.
 
 ### From source
 

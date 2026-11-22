@@ -114,6 +114,10 @@ export default function App() {
   const [fatal, setFatal] = useState<string | null>(null)
   /** Download of an update the user accepted at startup, when there is one. */
   const [update, setUpdate] = useState<UpdateStatus | null>(null)
+  /** Outcome of the drawer's own check; the dialog and the banner are main's. */
+  const [updateCheck, setUpdateCheck] = useState<'idle' | 'checking' | 'current' | 'unknown'>(
+    'idle'
+  )
   const [settingsOpen, setSettingsOpen] = useState(false)
   /** Which drawer section is on screen; the drawer is tabbed, not scrolled. */
   const [drawerTab, setDrawerTab] = useState<DrawerSection>('models')
@@ -368,6 +372,19 @@ export default function App() {
       }),
     [refreshProviders, refreshModels, refreshPlugins, refreshRouting, refreshAutoApprove]
   )
+
+  /** Asks the repository again, on the user's terms. */
+  const checkUpdates = useCallback(async () => {
+    setUpdateCheck('checking')
+    const result = await window.charliecode.checkForUpdates()
+    setUpdateCheck(
+      result.state === 'up-to-date'
+        ? 'current'
+        : result.state === 'unavailable'
+          ? 'unknown'
+          : 'idle'
+    )
+  }, [])
 
   // A self-update is decided in the main process; here only its progress is
   // shown, so a slow download is visible instead of silent.
@@ -1940,6 +1957,21 @@ export default function App() {
             </div>
               </>
             )}
+
+            <div className="drawer-foot">
+              <span className="muted small">CharlieCode v{info?.version ?? '—'}</span>
+              <button
+                className="ghost"
+                disabled={updateCheck === 'checking'}
+                onClick={() => void checkUpdates()}
+              >
+                {updateCheck === 'checking' ? 'Controllo…' : 'Controlla aggiornamenti'}
+              </button>
+              {updateCheck === 'current' && <span className="muted small">Sei aggiornato.</span>}
+              {updateCheck === 'unknown' && (
+                <span className="muted small">Controllo non riuscito: riprova più tardi.</span>
+              )}
+            </div>
           </div>
         </div>
       )}

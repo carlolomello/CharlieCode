@@ -62,7 +62,7 @@ import {
 } from '../engine/cli-profiles'
 import { dockerAvailable, hasBinary, probeEndpoint, scanLocalEndpoints } from '../engine/local'
 import { createPlatform } from '../engine/platform'
-import { checkForUpdates } from './updater'
+import { checkForUpdates, cleanupPreviousBundles } from './updater'
 import { ensureProjectMemory, resolvePlugins } from '../engine/plugins'
 import { suggestSetup } from '../engine/advisor'
 import { changeDiff, initRepository, listChanges, revertChange, workspacePath } from '../engine/changes'
@@ -125,6 +125,7 @@ import type {
   WorkspaceChanges,
   RoutersStatus,
   RoutingStatus,
+  UpdateCheckResult,
   UpdateStatus,
   WorkspaceDirListing,
   WorkspaceFile
@@ -446,6 +447,20 @@ function launchRuntime(id: 'freellmapi' | 'ollama'): boolean {
 }
 
 function registerIpc(): void {
+  // The drawer's own "Controlla aggiornamenti": the same check, but the user
+  // is asking, so a previous "più tardi" does not silence it.
+  ipcMain.handle('charliecode:updates:check', async (): Promise<UpdateCheckResult> => {
+    const [window] = BrowserWindow.getAllWindows()
+    return checkForUpdates(
+      {
+        window: window ?? null,
+        configPath: (...segments) => platform.configPath(...segments),
+        send: sendUpdateStatus
+      },
+      { manual: true }
+    )
+  })
+
   ipcMain.handle('charliecode:info', async (): Promise<AppInfo> => {
     const { config, recovered } = await loadConfig(platform)
     return {
@@ -1782,6 +1797,10 @@ if (!gotSingleInstanceLock) {
   app.whenReady().then(() => {
     registerIpc()
     const window = createWindow()
+
+    // The bundle an update replaced is kept until a launch gets this far, so a
+    // build that does not start still has its backup next to the app.
+    window.webContents.once('did-finish-load', () => void cleanupPreviousBundles())
 
     // A new release is offered once the window is up: a dialog before the app
     // is visible looks like a crash. Offline is the normal case, and a failed

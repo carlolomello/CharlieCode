@@ -139,6 +139,8 @@ const api: CharlieCodeApi = {
     }
   },
 
+  checkForUpdates: () => ipcRenderer.invoke('charliecode:updates:check'),
+
   onUpdateStatus: (callback: (status: UpdateStatus) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, status: UpdateStatus): void => {
       callback(status)

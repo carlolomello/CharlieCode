@@ -154,6 +154,32 @@ describe('decideUpdate', () => {
     expect(candidate?.asset.name).toBe('CharlieCode-Setup-0.0.1.exe')
   })
 
+  it('non ripropone un asset già installato', () => {
+    expect(
+      decideUpdate({
+        release,
+        currentVersion: '0.0.1',
+        buildTime: built,
+        platform: 'darwin',
+        arch: 'arm64',
+        installedAssetId: 1
+      })
+    ).toBeUndefined()
+  })
+
+  it('con force la build appena installata viene offerta lo stesso', () => {
+    const candidate = decideUpdate({
+      release,
+      currentVersion: '0.0.1',
+      buildTime: '2026-11-21T23:57:55Z',
+      platform: 'darwin',
+      arch: 'arm64',
+      force: true
+    })
+
+    expect(candidate?.asset.id).toBe(1)
+  })
+
   it('non ripropone un asset già rimandato', () => {
     expect(
       decideUpdate({
