@@ -255,6 +255,12 @@ export interface ModelEntry {
   effort: EffortLevel
   /** Levels the picker offers for this model. */
   efforts: EffortLevel[]
+  /**
+   * CLI entries only: the models that CLI reported last time. Carried on the
+   * entry so its picker is filled from the first render — before the probe
+   * answers — and still offers a list when the probe fails or is slow.
+   */
+  cliModels?: string[]
 }
 
 export interface CatalogError {

@@ -62,6 +62,26 @@ describe('cliModelEntries', () => {
     expect(entries[0]?.providerLabel).toBe('CLI esterne')
   })
 
+  it('porta nel selettore i modelli che la CLI ha elencato', () => {
+    const entries = cliModelEntries([
+      info({
+        profile: {
+          ...profile,
+          modelsCache: {
+            args: ['models'],
+            at: '2026-11-01T00:00:00.000Z',
+            models: ['acme/uno', 'acme/due']
+          }
+        }
+      })
+    ])
+
+    expect(entries[0]?.cliModels).toEqual(['acme/uno', 'acme/due'])
+    // Un profilo che non ha mai elencato nulla resta senza lista, non con una
+    // lista vuota che il selettore leggerebbe come «nessun modello».
+    expect(cliModelEntries([info()])[0]).not.toHaveProperty('cliModels')
+  })
+
   it('offre i livelli di effort quando la CLI li porta nel modello', () => {
     const entries = cliModelEntries([
       info({

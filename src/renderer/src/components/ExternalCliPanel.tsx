@@ -531,8 +531,12 @@ export function ExternalCliPanel({ onClose }: { onClose: () => void }): React.JS
 
   const worker = status?.worker
   const profiles = status?.profiles ?? []
-  const workerLabel = profiles.find((entry) => entry.profile.id === worker?.id)?.profile.label
-  const workerChoices = models[worker?.id ?? ''] ?? []
+  const workerEntry = profiles.find((entry) => entry.profile.id === worker?.id)
+  const workerLabel = workerEntry?.profile.label
+  // The models the CLI listed last time are on its profile: the selector has
+  // something to show immediately, and still does when the probe is slow.
+  const workerChoices =
+    models[worker?.id ?? ''] ?? workerEntry?.profile.modelsCache?.models ?? []
 
   return (
     <div className="cli-panel">

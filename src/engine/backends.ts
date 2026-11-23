@@ -60,7 +60,10 @@ export function cliModelEntries(profiles: CliProfileInfo[]): ModelEntry[] {
       effort: 'none' as const,
       // The effort can live in the model string (`provider/model#variant`)
       // instead of a flag of its own: the picker offers the levels either way.
-      efforts: profileEfforts(profile)
+      efforts: profileEfforts(profile),
+      // The list the CLI printed last time: the picker is a real selector from
+      // the first render instead of a free-text field waiting for a probe.
+      ...(profile.modelsCache?.models.length ? { cliModels: profile.modelsCache.models } : {})
     }))
     .sort((a, b) => a.label.localeCompare(b.label))
 }

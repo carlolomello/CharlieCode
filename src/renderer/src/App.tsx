@@ -30,6 +30,13 @@ import { ToolActivity } from './components/ToolActivity'
 import { UpdateBanner } from './components/UpdateBanner'
 import { ThinkingBlock } from './components/ThinkingBlock'
 import { ModelPicker } from './components/ModelPicker'
+import {
+  readSelection,
+  withCliModel,
+  withModelKey,
+  writeSelection,
+  type StoredSelection
+} from './selection'
 
 const EFFORT_LABEL: Record<EffortLevel, string> = {
   none: 'predefinito',
@@ -99,6 +106,9 @@ export default function App() {
   const [skillBusy, setSkillBusy] = useState(false)
   const [skillError, setSkillError] = useState<string | null>(null)
   const [modelKey, setModelKey] = useState<string>('')
+  /** What was chosen before the last start; read once, kept up to date below. */
+  const [initialSelection] = useState<StoredSelection>(readSelection)
+  const selection = useRef<StoredSelection>(initialSelection)
   /** Model passed to the selected CLI, when the backend is a CLI profile. */
   const [cliModel, setCliModel] = useState<string>('')
   const [cliModels, setCliModels] = useState<string[]>([])
@@ -184,6 +194,16 @@ export default function App() {
     selectedModel?.providerId === 'cli' && cliModel
       ? cliModelKey(selectedModel.id, cliModel)
       : modelKey
+
+  /**
+   * What the CLI model selector offers. The list the profile cached rides on
+   * the catalog entry, so the control is a selector from the first render; a
+   * model already chosen stays selectable even when it left the list.
+   */
+  const cliChoices = useMemo(() => {
+    const list = cliModels.length > 0 ? cliModels : selectedModel?.cliModels ?? []
+    return cliModel && !list.includes(cliModel) ? [cliModel, ...list] : list
+  }, [cliModels, cliModel, selectedModel])
 
   const {
     sessions,
@@ -310,8 +330,13 @@ export default function App() {
       const response = await window.charliecode.models()
       setModels(response.models)
       setErrors(response.errors)
+      const known = (key: string | undefined): key is string =>
+        Boolean(key) && response.models.some((model) => model.key === key)
+      const remembered = selection.current.modelKey
       setModelKey((current) => {
-        if (current && response.models.some((model) => model.key === current)) return current
+        if (known(current)) return current
+        // The model picked last time wins over the catalog default.
+        if (known(remembered)) return remembered
         const preferred =
           response.models.find((model) => model.key === response.defaultModel) ??
           response.models.find((model) => model.caps.tools) ??
@@ -545,6 +570,8 @@ export default function App() {
     }
 
     let cancelled = false
+    // The model this CLI was used with last time comes back with it.
+    setCliModel((current) => current || selection.current.cliModels?.[profileId] || '')
     const force = cliModelsForce.current
     cliModelsForce.current = false
     setCliModelsBusy(true)
@@ -564,6 +591,27 @@ export default function App() {
       cancelled = true
     }
   }, [selectedModel?.providerId, selectedModel?.id, cliModelsNonce])
+
+  // Remembering the backend is what makes the next start open where this one
+  // left off. It is written once per change, not polled.
+  useEffect(() => {
+    if (!modelKey) return
+    const next = withModelKey(selection.current, modelKey)
+    selection.current = next
+    writeSelection(next)
+  }, [modelKey])
+
+  const chooseCliModel = useCallback(
+    (model: string): void => {
+      setCliModel(model)
+      const profileId = selectedModel?.providerId === 'cli' ? selectedModel.id : undefined
+      if (!profileId) return
+      const next = withCliModel(selection.current, profileId, model)
+      selection.current = next
+      writeSelection(next)
+    },
+    [selectedModel]
+  )
 
   // The picker only offers levels the model actually accepts.
   const effortOptions = useMemo<EffortLevel[]>(
@@ -868,17 +916,17 @@ export default function App() {
 
             {selectedModel?.providerId === 'cli' && (
               <div className="cli-model-field">
-                {cliModels.length > 0 ? (
+                {cliChoices.length > 0 ? (
                   <select
                     className="select cli-model-select"
                     value={cliModel}
-                    onChange={(event) => setCliModel(event.target.value)}
+                    onChange={(event) => chooseCliModel(event.target.value)}
                     disabled={cliModelsBusy}
                     title="Modello passato alla CLI scelta"
                     aria-label="Modello della CLI"
                   >
                     <option value="">modello della CLI (predefinito)</option>
-                    {cliModels.map((model) => (
+                    {cliChoices.map((model) => (
                       <option key={model} value={model}>
                         {model}
                       </option>
@@ -890,10 +938,11 @@ export default function App() {
                   <input
                     className="select cli-model-input"
                     value={cliModel}
-                    onChange={(event) => setCliModel(event.target.value)}
+                    onChange={(event) => chooseCliModel(event.target.value)}
                     placeholder={cliModelsBusy ? 'carico modelli…' : 'modello (vuoto = predefinito)'}
                     title="Modello passato alla CLI: scrivilo se la CLI non elenca i suoi modelli"
                     aria-label="Modello della CLI"
+                    readOnly={cliModelsBusy}
                   />
                 )}
                 <button
