@@ -34,6 +34,7 @@ import {
   readSelection,
   withCliModel,
   withModelKey,
+  withToggledFavorite,
   writeSelection,
   type StoredSelection
 } from './selection'
@@ -75,8 +76,9 @@ const DRAWER_SECTIONS: { id: DrawerSection; label: string }[] = [
 ]
 
 function modelLabel(model: ModelEntry): string {
+  // "gratis", not a star: the star now belongs to the favorites toggle.
   const free = /free/i.test(model.id)
-  return `${free ? '★ ' : ''}${model.label === model.id ? shortKey(model.id) : model.label}`
+  return `${free ? 'gratis · ' : ''}${model.label === model.id ? shortKey(model.id) : model.label}`
 }
 
 /**
@@ -109,6 +111,8 @@ export default function App() {
   /** What was chosen before the last start; read once, kept up to date below. */
   const [initialSelection] = useState<StoredSelection>(readSelection)
   const selection = useRef<StoredSelection>(initialSelection)
+  /** Starred models, shown in their own group at the top of the picker. */
+  const [favorites, setFavorites] = useState<string[]>(initialSelection.favorites ?? [])
   /** Model passed to the selected CLI, when the backend is a CLI profile. */
   const [cliModel, setCliModel] = useState<string>('')
   const [cliModels, setCliModels] = useState<string[]>([])
@@ -601,6 +605,13 @@ export default function App() {
     writeSelection(next)
   }, [modelKey])
 
+  const starModel = useCallback((key: string): void => {
+    const next = withToggledFavorite(selection.current, key)
+    selection.current = next
+    setFavorites(next.favorites ?? [])
+    writeSelection(next)
+  }, [])
+
   const chooseCliModel = useCallback(
     (model: string): void => {
       setCliModel(model)
@@ -906,6 +917,8 @@ export default function App() {
             <ModelPicker
               options={modelOptions}
               value={modelKey}
+              favorites={favorites}
+              onToggleFavorite={starModel}
               onChange={(key) => {
                 setModelKey(key)
                 setCliModel('')

@@ -471,9 +471,22 @@ button.ghost.wide {
   color: var(--muted);
 }
 
+/* A row is the option plus its star: starring must not choose the model. */
+.model-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 6px;
+}
+
+.model-picker-row.active {
+  background: var(--panel-2);
+}
+
 .model-picker-option {
+  flex: 1;
+  min-width: 0;
   display: block;
-  width: 100%;
   padding: 6px 8px;
   border: none;
   border-radius: 6px;
@@ -487,8 +500,34 @@ button.ghost.wide {
   text-overflow: ellipsis;
 }
 
-.model-picker-option.active {
+.model-picker-star {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.45;
+}
+
+.model-picker-row:hover .model-picker-star,
+.model-picker-star:focus-visible {
+  opacity: 1;
+}
+
+.model-picker-star.on {
+  opacity: 1;
+  color: var(--accent);
+}
+
+.model-picker-star:hover {
   background: var(--panel-2);
+  color: var(--accent);
 }
 
 .model-picker-option.selected {
